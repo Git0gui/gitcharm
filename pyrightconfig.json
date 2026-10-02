@@ -1,0 +1,14 @@
+{
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        "**/.git",
+        "**/out",
+        "**/*.vsix",
+        ".qoder/**",
+        ".vscode/**"
+    ],
+    "reportMissingImports": false,
+    "reportMissingTypeStubs": false,
+    "typeCheckingMode": "off"
+}

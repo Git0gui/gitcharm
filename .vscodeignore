@@ -1,0 +1,9 @@
+.vscode/**
+.qoder/**
+src/**
+.gitignore
+tsconfig.json
+pyrightconfig.json
+**/*.map
+**/*.ts
+node_modules/**

@@ -1,0 +1,129 @@
+import { GraphCommit, CommitDetail, FileStat } from '../services/gitService';
+
+/**
+ * Message protocol between the extension host and the graph webview.
+ * Both sides must only send messages from these unions; the webview side
+ * (media/webview.js) mirrors these shapes by convention — keep them in sync.
+ */
+
+export type OperationKind = 'rebase' | 'merge' | 'cherry-pick';
+
+export interface DivergenceEntry {
+    ahead: number;
+    behind: number;
+    upstream?: string;
+}
+
+/** Panel view state persisted across webview recreations (workspaceState). */
+export interface PersistedViewState {
+    branch?: string;
+    selectedHash?: string;
+    scrollTop?: number;
+    detailVisible?: boolean;
+    collapsed?: Record<string, boolean>;
+    collapsedSec?: Record<string, boolean>;
+    expandedFolder?: Record<string, boolean>;
+}
+
+export interface PushDialogCommit {
+    hash: string;
+    shortHash: string;
+    message: string;
+    author: string;
+    date: string;
+}
+
+/** Messages sent from the extension host to the webview. */
+export type ExtToWebviewMessage =
+    | {
+        command: 'setData';
+        commits: GraphCommit[];
+        local: string[];
+        remote: string[];
+        currentBranch: string;
+        selectedBranch: string;
+        repoName: string;
+        hasMore: boolean;
+        headHash: string;
+        inProgress?: OperationKind;
+        searchContext?: { query?: string; resultCount?: number };
+    }
+    | { command: 'setBranches'; local: string[]; remote: string[]; currentBranch?: string }
+    | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
+    | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
+    | { command: 'setHeadHash'; headHash: string }
+    | { command: 'setInProgress'; inProgress: OperationKind | null }
+    | { command: 'setDivergence'; divergence: Record<string, DivergenceEntry> }
+    | { command: 'setCurrentBranch'; branch: string }
+    | { command: 'setDetail'; commit: CommitDetail; files: FileStat[] }
+    | { command: 'multiCommitsResponse'; commits: CommitDetail[]; files: FileStat[] }
+    | { command: 'revealCommit'; hash: string }
+    | { command: 'restoreViewState'; state: PersistedViewState }
+    | { command: 'loading'; area: 'rows' | 'detail' | 'branches' | 'search' | 'multiCommits'; on: boolean }
+    | { command: 'showDialog'; message: string; actions: string[]; type?: string }
+    | { command: 'showSquashMessageDialog'; prompt: string; initialValue: string; placeholder: string }
+    | {
+        command: 'showPushDialog';
+        branchName: string;
+        commits: PushDialogCommit[];
+        remoteExists: boolean;
+        isFirstPush: boolean;
+    }
+    | { command: 'pushFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
+    | {
+        command: 'showCompareDialog';
+        branchName: string;
+        currentBranch: string;
+        commits: PushDialogCommit[];
+    }
+    | { command: 'compareFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
+    | { command: 'addBranchOptimistic'; branch: string; isCurrent: boolean }
+    | { command: 'removeBranchOptimistic'; branch: string }
+    | { command: 'renameBranchOptimistic'; oldName: string; newName: string }
+    | { 
+        command: 'showCherryPickResume'; 
+        remainingHashes: string[]; 
+        conflictHash: string; 
+    };
+
+/** Actions the webview can request via { command: 'action', action: ... }. */
+export type WebviewAction =
+    | 'continueOperation' | 'abortOperation'
+    | 'checkout' | 'push' | 'pull' | 'fetch' | 'merge' | 'rebase' | 'update'
+    | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
+    | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
+    | 'fileDiff' | 'resumeCherryPick';
+
+/** Messages sent from the webview to the extension host. */
+export type WebviewToExtMessage =
+    | { command: 'ready' }
+    | { command: 'selectBranch'; branch: string }
+    | { command: 'refresh' }
+    | { command: 'refreshBranches' }
+    | { command: 'refreshFiles'; hash: string }
+    | { command: 'showNotification'; message: string; type?: string }
+    | { command: 'showStatusBarMessage'; message: string; timeout?: number }
+    | { command: 'setFilters'; text?: string; author?: string; from?: string; to?: string }
+    | { command: 'loadMore' }
+    | { command: 'selectCommit'; hash: string; force?: boolean }
+    | { command: 'selectCommits'; hashes: string[] }
+    | {
+        command: 'action';
+        action: WebviewAction;
+        branch?: string;
+        hash?: string;
+        hashes?: string[];
+        path?: string;
+        remainingHashes?: string[];
+    }
+    | { command: 'dialogAction'; action: string }
+    | { command: 'squashMessageResponse'; message?: string }
+    | { command: 'saveViewState'; state: PersistedViewState }
+    | { command: 'pushDialogAction'; action: string; force?: boolean }
+    | { command: 'pushDialogFileDiff'; hash: string; path: string }
+    | { command: 'getCommitFilesForPush'; hash: string }
+    | { command: 'getPushAllFiles' }
+    | { command: 'getCompareFiles'; hash: string }
+    | { command: 'getCompareAllFiles' }
+    | { command: 'compareFileDiff'; hash: string; path: string }
+    | { command: 'compareDialogClosed' };

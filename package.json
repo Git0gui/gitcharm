@@ -1,0 +1,289 @@
+{
+  "name": "git-charm",
+  "displayName": "GitCharm",
+  "description": "%ext.description%",
+  "version": "0.1.15",
+  "publisher": "liugui",
+  "icon": "resources/icon.png",
+  "license": "MIT",
+  "keywords": [
+    "git",
+    "charm",
+    "log",
+    "graph",
+    "blame",
+    "rebase",
+    "cherry-pick"
+  ],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "categories": [
+    "SCM Providers",
+    "Visualization"
+  ],
+  "activationEvents": [
+    "workspaceContains:.git"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "idea-git.openFileDiff",
+        "title": "%cmd.openFileDiff%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.compareFileWithBranch",
+        "title": "%cmd.compareFileWithBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.createBranch",
+        "title": "%cmd.createBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.checkoutBranch",
+        "title": "%cmd.checkoutBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.showCommitDiff",
+        "title": "%cmd.showCommitDiff%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.deleteBranch",
+        "title": "%cmd.deleteBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.renameBranch",
+        "title": "%cmd.renameBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.mergeBranch",
+        "title": "%cmd.mergeBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.rebaseOnto",
+        "title": "%cmd.rebaseOnto%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.pushBranch",
+        "title": "%cmd.pushBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.pullBranch",
+        "title": "%cmd.pullBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.fetch",
+        "title": "%cmd.fetch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.compareBranch",
+        "title": "%cmd.compareBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.newBranchFrom",
+        "title": "%cmd.newBranchFrom%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.cherryPick",
+        "title": "%cmd.cherryPick%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.interactiveRebase",
+        "title": "%cmd.interactiveRebase%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.dropCommit",
+        "title": "%cmd.dropCommit%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.editCommitMessage",
+        "title": "%cmd.editCommitMessage%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.squashCommits",
+        "title": "%cmd.squashCommits%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.resetToCommit",
+        "title": "%cmd.resetToCommit%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.toggleBlame",
+        "title": "%cmd.toggleBlame%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.revealCommit",
+        "title": "%cmd.revealCommit%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.updateBranch",
+        "title": "%cmd.updateBranch%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.commitBranch",
+        "title": "%cmd.commitBranch%",
+        "category": "GitCharm"
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "idea-git-explorer",
+          "title": "GitCharm",
+          "icon": "resources/git-icon.svg",
+          "when": "idea-git.hasGitRepo"
+        }
+      ]
+    },
+    "views": {
+      "idea-git-explorer": [
+        {
+          "id": "idea-git.mainView",
+          "name": "Git Log",
+          "type": "webview",
+          "icon": "resources/git-icon.svg",
+          "when": "idea-git.hasGitRepo"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "idea-git.compareFileWithBranch",
+          "when": "resourceScheme == file",
+          "group": "navigation@100"
+        },
+        {
+          "command": "idea-git.toggleBlame",
+          "when": "resourceScheme == file",
+          "group": "navigation@50"
+        }
+      ],
+      "editor/lineNumber/context": [
+        {
+          "command": "idea-git.toggleBlame",
+          "when": "resourceScheme == file",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "idea-git.revealCommit",
+          "when": "false"
+        },
+        {
+          "command": "idea-git.updateBranch",
+          "when": "false"
+        },
+        {
+          "command": "idea-git.commitBranch",
+          "when": "false"
+        },
+        {
+          "command": "idea-git.dropCommit",
+          "when": "false"
+        },
+        {
+          "command": "idea-git.editCommitMessage",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "idea-git.compareFileWithBranch",
+          "when": "resourceScheme == file",
+          "group": "navigation@100"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitCharm",
+      "properties": {
+        "idea-git.cache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.cacheEnabled%"
+        },
+        "idea-git.pullStrategy": {
+          "type": "string",
+          "default": "merge",
+          "enum": [
+            "merge",
+            "rebase"
+          ],
+          "enumDescriptions": [
+            "%config.pullStrategy.merge%",
+            "%config.pullStrategy.rebase%"
+          ],
+          "description": "%config.pullStrategy%"
+        },
+        "idea-git.language": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "zh-cn",
+            "en"
+          ],
+          "enumDescriptions": [
+            "%config.language.auto%",
+            "%config.language.zh-cn%",
+            "%config.language.en%"
+          ],
+          "description": "%config.language%"
+        },
+        "idea-git.debug": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.debug%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run lint && npm test",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "watch:fast": "tsc -watch -p ./ --preserveWatchOutput",
+    "pretest": "npm run compile",
+    "lint": "eslint src --ext ts",
+    "test": "node --test \"out/test/*.test.js\"",
+    "package": "vsce package --no-yarn --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vscode/vsce": "^4.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}
