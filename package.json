@@ -1,6 +1,6 @@
 {
   "name": "git-charm",
-  "displayName": "GitCharm",
+  "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
   "version": "0.1.15",
   "publisher": "liugui",
