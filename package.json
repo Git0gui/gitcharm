@@ -6,6 +6,10 @@
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Git0gui/gitcharm.git"
+  },
   "keywords": [
     "git",
     "charm",
