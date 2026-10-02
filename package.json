@@ -279,7 +279,7 @@
     "pretest": "npm run compile",
     "lint": "eslint src --ext ts",
     "test": "node --test \"out/test/*.test.js\"",
-    "package": "vsce package --no-yarn --allow-missing-repository"
+    "package": "vsce package --no-yarn"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
