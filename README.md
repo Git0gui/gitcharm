@@ -1,10 +1,122 @@
 # GitCharm
 
+**English** | [简体中文](#简体中文)
+
+> Bring the IntelliJ IDEA Git UI and workflow to VSCode / Qoder.
+
+![GitCharm three-panel git log UI](resources/screenshots/git-log-view.png)
+
+GitCharm provides a three-panel Git log view:
+
+- **Left · Branch tree** — hierarchical tree grouped by `HEAD / Local / Remote`, with ahead/behind arrows (▲▼) and commit-count badges
+- **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / date-range filters
+- **Right · Commit details** — full commit info, changed file list (added/deleted line counts) and diff entry
+
+## Features
+
+### Git Operations
+
+- **Branches**: create, checkout, rename, delete, merge into current, rebase onto, push, pull, fetch, update (safe fast-forward for non-current branches)
+- **Commits**: show diff, cherry-pick (multi-select batch + conflict-resumable), interactive rebase, squash, drop commit, amend message, reset to commit
+- **Files**: compare file with another branch, view diff introduced by a single commit
+- **Blame**: inline annotation of last author & date per line, full commit info on hover, click to jump to the commit
+
+### Performance
+
+- **Instant open**: three-phase progressive loading (skeleton → branches → commits), startup < 10ms
+- **Filesystem refs**: parses `.git/refs` (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
+- **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; invalidated on Git operations
+- **Canvas graph**: pixel-precise commit graph rendered on Canvas with high-DPI support, several times faster than SVG/DOM
+
+### Experience & Reliability
+
+- **Bilingual UI**: fully localized interface, follows editor language or set manually
+- **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges
+- **Pre-rebase check**: detects uncommitted changes before rebasing to avoid failures
+- **Unified conflict handling**: merge / rebase / cherry-pick conflicts detected in one place, top status bar with Continue / Abort, conflicts delegated to the native SCM view
+- **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
+
+## Requirements
+
+- **VSCode** ≥ 1.95.0, or **Qoder** latest
+- **Git** ≥ 2.0.0
+- Built-in **vscode.git** extension enabled (default)
+
+## Installation
+
+### From the Marketplace (recommended)
+
+Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Log & Graph*, publisher `liugui`) and install.
+
+### From a VSIX file
+
+1. Download `git-charm-<version>.vsix`
+2. Run **Extensions: Install from VSIX…** from the command palette
+3. Pick the file and reload the window
+
+## Usage
+
+1. Open a workspace containing a Git repository
+2. Click the **GitCharm** tab in the bottom panel to reveal the three-panel log view
+3. Tree nodes: single-click folders to expand, **double-click a branch to switch**; right-click a node or commit row for context actions
+
+### Common Actions
+
+| Action | Entry |
+|--------|-------|
+| Switch branch | Double-click branch in tree, or right-click → Checkout |
+| View commit details | Click a commit row |
+| Show commit diff | Right-click commit → Show Diff |
+| Merge / Rebase | Right-click branch → Merge into Current / Rebase onto |
+| Push / Pull | Right-click branch → Push / Pull |
+| Cherry-pick | Multi-select commits → right-click → Cherry-Pick |
+| Squash / Interactive rebase | Multi-select commits → right-click |
+| Drop / Amend commit | Right-click commit row (only near HEAD) |
+| Compare file with branch | Editor / Explorer right-click → Compare with Branch |
+| Toggle blame | Editor right-click → Toggle Blame, or click the line-number area |
+
+## Settings
+
+Search `idea-git` in settings:
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `idea-git.cache.enabled` | Cache branch info for faster startup (persisted; refreshed on repo changes or Git operations) | `true` |
+| `idea-git.pullStrategy` | Update strategy when pulling: `merge` or `rebase` | `merge` |
+| `idea-git.language` | UI language: `auto` / `zh-cn` / `en` | `auto` |
+| `idea-git.debug` | Enable debug logging to the extension host console | `false` |
+
+## Development
+
+```bash
+npm install        # install dependencies (includes @vscode/vsce)
+npm run compile    # compile TypeScript to out/
+npm run lint       # ESLint
+npm test           # node:test unit tests
+npm run package    # build VSIX
+```
+
+Press **F5** in VSCode / Qoder to launch the Extension Development Host (config in `.vscode/launch.json`).
+
+> Note: after changing `out/` or `media/`, fully restart the development host — it runs the previously loaded code.
+
+## Tech Stack
+
+TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
+
+## License
+
+[MIT](LICENSE) · Full history in [CHANGELOG.md](CHANGELOG.md)
+
+---
+
+# 简体中文
+
 > 在 VSCode / Qoder 中复刻 IntelliJ IDEA 的 Git UI 与工作流。
 
 ![GitCharm 三栏式提交图谱界面](resources/screenshots/git-log-view.png)
 
-如上图所示，GitCharm 提供一个三栏式的 Git 日志面板：
+GitCharm 提供一个三栏式的 Git 日志面板：
 
 - **左栏 · 分支树**：按 `HEAD / 本地 / 远程` 分组的层级树，带超前/落后箭头（▲▼）与提交数徽标
 - **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 日期区间筛选
@@ -55,7 +167,7 @@
 ## 使用方法
 
 1. 打开一个 Git 仓库工作区
-2. 在底部面板点击 **GitCharm** 标签（面板标题栏），即可看到三栏日志视图
+2. 在底部面板点击 **GitCharm** 标签，即可看到三栏日志视图
 3. 树节点：文件夹单击展开、分支**双击切换**；右键节点或提交行呼出对应操作菜单
 
 ### 常用操作
@@ -68,7 +180,7 @@
 | 合并 / 变基 | 分支右键 → 合并到当前分支 / 变基到… |
 | 推送 / 拉取 | 分支右键 → 推送 / 拉取 |
 | 精选提交 | 多选提交 → 右键 → 精选提交 |
-| 压缩 / 交互式变基 | 多选提交 → 右键 → 压缩提交 / 交互式变基 |
+| 压缩 / 交互式变基 | 多选提交 → 右键 |
 | 删除 / 改提交信息 | 提交行右键（仅 HEAD 附近可用） |
 | 对比文件 | 编辑器 / 资源管理器右键 → 与其他分支对比此文件 |
 | 显示 Blame | 编辑器右键 → 显示提交信息，或点击行号区域 |
