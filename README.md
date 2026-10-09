@@ -14,9 +14,13 @@ GitCharm provides a three-panel Git log view:
 
 ## Screenshots
 
-**Commit context menu** — right-click a commit row for Show Diff / Cherry-Pick / Reset / New Branch, plus Amend message & Drop on HEAD
+**Commit context menu (single)** — right-click a commit row for Show Diff / Cherry-Pick / Reset / New Branch, plus Amend message & Drop on HEAD
 
 ![Commit context menu](resources/screenshots/commit-context-menu.png)
+
+**Commit context menu (multi-select)** — select several commits then right-click for batch Cherry-Pick / Drop / Squash
+
+![Commit context menu multi-select](resources/screenshots/commit-context-menu-multi.png)
 
 **Branch context menu** — right-click a branch node for Checkout / Rename / Delete / Merge / Rebase / Push / Pull
 
@@ -150,9 +154,13 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ## 界面截图
 
-**提交右键菜单**：提交行右键呼出 显示差异 / 精选提交 / 重置 / 新建分支，HEAD 附近另有 编辑提交信息 与 删除提交
+**提交右键菜单（单选）**：提交行右键呼出 显示差异 / 精选提交 / 重置 / 新建分支，HEAD 附近另有 编辑提交信息 与 删除提交
 
 ![提交右键菜单](resources/screenshots/commit-context-menu.png)
+
+**提交右键菜单（多选）**：多选提交后右键，批量 精选提交 / 删除提交 / 合并提交
+
+![提交右键菜单多选](resources/screenshots/commit-context-menu-multi.png)
 
 **分支右键菜单**：分支节点右键呼出 检出 / 重命名 / 删除 / 合并 / 变基 / 推送 / 拉取
 
