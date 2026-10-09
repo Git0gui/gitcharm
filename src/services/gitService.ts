@@ -678,31 +678,26 @@ export class GitService {
         await this.executeGitArgs(['checkout', commitHash, '--', filePath]);
     }
 
-    /** Get full history of a file across all branches */
-    async getFileHistory(filePath: string): Promise<Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }>> {
+    /** Get full history of a file across all branches (single spawn, newest first). */
+    async getFileHistory(filePath: string): Promise<Array<{ hash: string; shortHash: string; author: string; date: string; message: string }>> {
         const repo = this._resolveRoot();
         if (!repo) {return [];}
-        // Use log --all to get commits touching this file across all branches
         const output = (await this.executeGitArgs([
-            'log', '--all', '--format=%H|%h|%an|%ai|%s', '--', filePath
+            'log', '--all', '--max-count=1000', '--format=%H|%h|%an|%ai|%s', '--', filePath
         ])).trim();
         if (!output) {return [];}
 
-        const entries: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }> = [];
+        const entries: Array<{ hash: string; shortHash: string; author: string; date: string; message: string }> = [];
         for (const line of output.split('\n')) {
             if (!line.trim()) {continue;}
             const parts = line.split('|');
             if (parts.length < 5) {continue;}
-            // Find which branch this commit belongs to
-            const branches = (await this.executeGitArgs(['branch', '--contains', parts[0]])).trim()
-                .split('\n').map(b => b.replace(/^[*\s]+/, '').trim()).filter(Boolean);
             entries.push({
                 hash: parts[0],
                 shortHash: parts[1],
                 author: parts[2],
                 date: parts[3],
-                message: parts.slice(4).join('|'),
-                branch: branches[0] || ''
+                message: parts.slice(4).join('|')
             });
         }
         return entries;

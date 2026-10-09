@@ -309,7 +309,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Show file history dialog */
-    async showFileHistory(filePath: string, history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }>): Promise<void> {
+    async showFileHistory(filePath: string, history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string }>): Promise<void> {
         if (!this._view) {return;}
         this._post({ command: 'showFileHistory', filePath, history });
     }

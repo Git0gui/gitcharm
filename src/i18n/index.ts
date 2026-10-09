@@ -137,6 +137,8 @@ const zh: Record<string, string> = {
     'cherryPick.fileFailed': '挑选文件失败: {error}',
 
     // file diff / history
+    'fileHistory.title': '文件历史',
+    'fileHistory.dblclickHint': '双击提交查看该文件在此提交的改动',
     'fileHistory.empty': '该文件没有历史记录',
     'fileHistory.failed': '获取文件历史失败: {error}',
     'common.noFileSelected': '未选择文件',
@@ -490,6 +492,8 @@ const en: Record<string, string> = {
     'cherryPick.fileFailed': 'Cherry-pick file failed: {error}',
 
     // file diff / history
+    'fileHistory.title': 'File History',
+    'fileHistory.dblclickHint': 'Double-click a commit to view its changes to this file',
     'fileHistory.empty': 'No history for this file',
     'fileHistory.failed': 'Failed to get file history: {error}',
     'common.noFileSelected': 'No file selected',

@@ -73,7 +73,7 @@ export type ExtToWebviewMessage =
     | {
         command: 'showFileHistory';
         filePath: string;
-        history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }>;
+        history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string }>;
     }
     | {
         command: 'showCompareDialog';
