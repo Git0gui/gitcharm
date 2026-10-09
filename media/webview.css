@@ -758,6 +758,7 @@ canvas.graph-canvas {
     z-index: 1;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 6px;
     padding: 6px 10px;
     font-size: 11px;
@@ -765,6 +766,28 @@ canvas.graph-canvas {
     background: var(--vscode-sideBar-background, #252526);
     border-bottom: 1px solid var(--vscode-panel-border, #333);
 }
+/* Flat / directory-tree switch, shown at the right of a file list header */
+.fmode-btn {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground, #888);
+    cursor: pointer;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.fmode-btn:hover {
+    color: var(--vscode-foreground, #cccccc);
+    background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,.25));
+    border-color: var(--vscode-widget-border, #454545);
+}
+.fmode-btn:active { transform: scale(0.94); }
 .frow {
     display: flex;
     align-items: center;
@@ -1312,6 +1335,35 @@ canvas.graph-canvas {
     flex-direction: column;
     min-height: 0;
 }
+/* Dialog right side mirrors the third panel: changed files on top, commit info below */
+.push-files-section {
+    flex: 1 1 55%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+.push-files-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    background: var(--vscode-editorWidget-background, #252526);
+    border-bottom: 1px solid var(--vscode-panel-border, #2a2a2a);
+}
+.push-detail-section {
+    flex: 0 1 45%;
+    min-height: 96px;
+    overflow: auto;
+}
+.push-detail-section .ccard { padding: 10px 12px; }
+.push-detail-section .crow:first-child .hashchip { margin-right: 0; }
+.push-full-hash { font-family: monospace; user-select: text; }
+.push-file-row.dir { color: var(--vscode-foreground, #cccccc); }
 .push-files-scroll {
     flex: 1;
     overflow: auto;
