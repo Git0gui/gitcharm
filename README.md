@@ -4,13 +4,39 @@
 
 > Bring the IntelliJ IDEA Git UI and workflow to VSCode / Qoder.
 
-![GitCharm three-panel git log UI](resources/screenshots/git-log-view.png)
+![GitCharm three-panel git log UI](resources/screenshots/main-view.png)
 
 GitCharm provides a three-panel Git log view:
 
 - **Left · Branch tree** — hierarchical tree grouped by `HEAD / Local / Remote`, with ahead/behind arrows (▲▼) and commit-count badges
 - **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / date-range filters
 - **Right · Commit details** — full commit info, changed file list (added/deleted line counts) and diff entry
+
+## Screenshots
+
+**Commit context menu** — right-click a commit row for Show Diff / Cherry-Pick / Reset / New Branch, plus Amend message & Drop on HEAD
+
+![Commit context menu](resources/screenshots/commit-context-menu.png)
+
+**Branch context menu** — right-click a branch node for Checkout / Rename / Delete / Merge / Rebase / Push / Pull
+
+![Branch context menu](resources/screenshots/branch-context-menu.png)
+
+**Push dialog** — review outgoing commits and their changed files before pushing (force-push available when behind)
+
+![Push dialog](resources/screenshots/push-dialog.png)
+
+**Editor context menu** — GitCharm actions available from the code editor right-click
+
+![Editor context menu](resources/screenshots/editor-context-menu.png)
+
+**Blame gutter** — click a line number to reveal the last commit that touched it, with a jump-to-commit link
+
+![Blame gutter](resources/screenshots/editor-blame-commit-message.png)
+
+**Conflict handling** — merge / rebase / cherry-pick conflicts surface in a persistent status bar with Continue / Abort
+
+![Conflict handling](resources/screenshots/conflict-resolution.png)
 
 ## Features
 
@@ -114,13 +140,39 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 > 在 VSCode / Qoder 中复刻 IntelliJ IDEA 的 Git UI 与工作流。
 
-![GitCharm 三栏式提交图谱界面](resources/screenshots/git-log-view.png)
+![GitCharm 三栏式提交图谱界面](resources/screenshots/main-view.png)
 
 GitCharm 提供一个三栏式的 Git 日志面板：
 
 - **左栏 · 分支树**：按 `HEAD / 本地 / 远程` 分组的层级树，带超前/落后箭头（▲▼）与提交数徽标
 - **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 日期区间筛选
 - **右栏 · 提交详情**：选中提交的完整信息、变更文件列表（增删行数）与差异入口
+
+## 界面截图
+
+**提交右键菜单**：提交行右键呼出 显示差异 / 精选提交 / 重置 / 新建分支，HEAD 附近另有 编辑提交信息 与 删除提交
+
+![提交右键菜单](resources/screenshots/commit-context-menu.png)
+
+**分支右键菜单**：分支节点右键呼出 检出 / 重命名 / 删除 / 合并 / 变基 / 推送 / 拉取
+
+![分支右键菜单](resources/screenshots/branch-context-menu.png)
+
+**推送对话框**：推送前查看待推送提交及其变更文件（落后远程时可强制推送）
+
+![推送对话框](resources/screenshots/push-dialog.png)
+
+**编辑器右键菜单**：代码编辑器右键可用的 GitCharm 操作
+
+![编辑器右键菜单](resources/screenshots/editor-context-menu.png)
+
+**行号 Blame**：点击行号查看该行的最后一次提交，并提供跳转到提交的链接
+
+![行号 Blame](resources/screenshots/editor-blame-commit-message.png)
+
+**冲突处理**：合并 / 变基 / 精选冲突统一在顶部持久状态栏提示，提供 继续 / 终止
+
+![冲突处理](resources/screenshots/conflict-resolution.png)
 
 ## 特性一览
 

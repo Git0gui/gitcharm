@@ -2,6 +2,14 @@
 
 所有重要更改都将记录在此文件中。
 
+## [Unreleased]
+
+### 文档
+
+- **README 新增中英「界面截图 / Screenshots」图集**：提交右键菜单、分支右键菜单、推送对话框、编辑器右键菜单、行号 Blame、冲突处理共 6 张，逐图配说明
+- **截图压缩与重命名**：源图（`D:\刘归\Pictures\gitcharm`）经 sharp 调色板量化 + 限宽 1000px，7 张合计 660KB → 219KB（约 33%）且保持清晰；统一 ASCII 文件名放入 `resources/screenshots/`，顶部 hero 由 `main-view.png` 取代旧的 `git-log-view.png`
+- **截图随包发布**：撤销 0.0.2 对 `resources/screenshots/**` 的 `.vscodeignore` 排除，修复 Marketplace 上 README 图片 404 丢失
+
 ## [0.0.2] - 2026-10-03
 
 ### 文档
