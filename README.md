@@ -26,7 +26,7 @@ GitCharm provides a three-panel Git log view:
 
 ![Branch context menu](resources/screenshots/branch-context-menu.png)
 
-**Push dialog** — review outgoing commits and their changed files before pushing (force-push available when behind)
+**Push dialog** — review outgoing commits and their changed files before pushing: files on top, commit info below, both scrollable; switch flat / tree view in the header (force-push available when behind)
 
 ![Push dialog](resources/screenshots/push-dialog.png)
 
@@ -63,6 +63,7 @@ GitCharm provides a three-panel Git log view:
 - **Bilingual UI**: fully localized interface, follows editor language or set manually
 - **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
+- **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs
 - **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges
 - **Pre-rebase check**: detects uncommitted changes before rebasing to avoid failures
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts detected in one place, top status bar with Continue / Abort, conflicts delegated to the native SCM view
@@ -171,7 +172,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ![分支右键菜单](resources/screenshots/branch-context-menu.png)
 
-**推送对话框**：推送前查看待推送提交及其变更文件（落后远程时可强制推送）
+**推送对话框**：推送前查看待推送提交及其变更文件——上为文件列表、下为提交信息，两块均可上下左右滚动，表头可切换平铺/目录结构（落后远程时可强制推送）
 
 ![推送对话框](resources/screenshots/push-dialog.png)
 
@@ -208,6 +209,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **中英双语**：界面全量本地化，跟随编辑器语言或手动指定
 - **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口）
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
+- **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换
 - **IDEA 风格视觉**：圆角 6–12px、平滑过渡、悬停微动效、tag 黄色徽章
 - **变基前检查**：自动检测未提交更改，避免变基失败
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部状态栏提供"继续 / 终止"，冲突自动交原生 SCM 视图解决

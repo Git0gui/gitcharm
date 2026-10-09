@@ -200,6 +200,7 @@ var state = {
     collapsed: {},
     collapsedSec: {},
     expandedFolder: {},
+    fileViewMode: 'tree',
     _pendingScrollTop: null,
     _pendingRestore: null
 };
@@ -218,7 +219,8 @@ function saveViewState() {
                 detailVisible: state.detailVisible !== false,
                 collapsed: state.collapsed,
                 collapsedSec: state.collapsedSec,
-                expandedFolder: state.expandedFolder
+                expandedFolder: state.expandedFolder,
+                fileViewMode: state.fileViewMode || 'tree'
             }
         });
     }, 400);
@@ -251,6 +253,7 @@ function applyRestoreNow() {
     if (pr.collapsed) { state.collapsed = pr.collapsed; }
     if (pr.collapsedSec) { state.collapsedSec = pr.collapsedSec; }
     if (pr.expandedFolder) { state.expandedFolder = pr.expandedFolder; }
+    if (pr.fileViewMode === 'tree' || pr.fileViewMode === 'flat') { state.fileViewMode = pr.fileViewMode; }
     if (pr.detailVisible === true) { state.detailVisible = true; }
     var commitsLoaded = (state.commits || []).length > 0;
     var target = pr.selectedHash;
@@ -436,6 +439,9 @@ var I_FILE = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke
 // VSCode-explorer-style chevrons (theme-aware via currentColor)
 var I_CARET_R = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
 var I_CARET_D = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>';
+// File list mode switch icons: indented tree vs. flat rows (theme-aware via currentColor)
+var I_TREE_MODE = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 3h4"/><path d="M6 6.5h4"/><path d="M6 12.5h4"/><path d="M2 9.5h4"/><path d="M4 3v9.5"/></svg>';
+var I_FLAT_MODE = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 3.5h12"/><path d="M2 8h12"/><path d="M2 12.5h12"/></svg>';
 
 /* ---------- left branch tree ---------- */
 function renderTree() {
@@ -752,43 +758,10 @@ function renderMultiCommitDetail(info, filesBox) {
     }
     
     // Build file tree
-    var root = { children: {} };
-    mergedFiles.forEach(function (f) {
-        var parts = f.path.split('/');
-        var node = root;
-        for (var i = 0; i < parts.length; i++) {
-            var name = parts[i];
-            if (!node.children[name]) { node.children[name] = { children: {}, isDir: i < parts.length - 1, file: null }; }
-            if (i === parts.length - 1) { node.children[name].isDir = false; node.children[name].file = f; }
-            node = node.children[name];
-        }
-    });
-    
-    var fh = '<div class="fhead">' + T('w.filesCount', { n: mergedFiles.length }) + '</div>';
-    function walk(node, depth, prefix) {
-        var keys = Object.keys(node.children).sort(function (a, b) {
-            var na = node.children[a], nb = node.children[b];
-            if (na.isDir !== nb.isDir) return na.isDir ? -1 : 1;
-            return a.localeCompare(b);
-        });
-        keys.forEach(function (k) {
-            var ch = node.children[k];
-            var p = prefix ? prefix + '/' + k : k;
-            var pad = 'padding-left:' + (8 + depth * 14) + 'px';
-            if (ch.isDir) {
-                var closed = !!state.collapsed[p];
-                var fileCaret = closed ? I_CARET_R : I_CARET_D;
-                fh += '<div class="frow dir" data-path="' + esc(p) + '" style="' + pad + '"><span class="caret">' + fileCaret + '</span>' + I_FOLDER + '<span class="fname" data-title="' + esc(p) + '">' + esc(k) + '</span><span class="fcount">' + countFiles(ch) + '</span></div>';
-                if (!closed) walk(ch, depth + 1, p);
-            } else {
-                var f = ch.file;
-                fh += '<div class="frow file" data-path="' + esc(f.path) + '" style="' + pad + '"><span class="caret"></span><span class="st-' + esc(f.status) + '">' + I_FILE + '</span><span class="fname" data-title="' + esc(f.path) + '">' + esc(k) + '</span>' +
-                     '<span class="fstat"><span class="add">+' + f.added + '</span> <span class="del">-' + f.deleted + '</span> <span class="st-' + esc(f.status) + '">' + esc(f.status) + '</span></span></div>';
-            }
-        });
-    }
-    walk(root, 0, '');
-    
+    var mode = state.fileViewMode || FILE_MODE_TREE;
+    var fh = '<div class="fhead"><span>' + T('w.filesCount', { n: mergedFiles.length }) + '</span>' + fileModeBtnHtml(mode) + '</div>';
+    fh += buildFileRows(mergedFiles, mode, state.collapsed, detailFileRowHtml);
+
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
 }
 
@@ -916,6 +889,70 @@ function countFiles(node) {
     return n;
 }
 
+/* ---------- file list: flat vs directory tree (shared by detail panel and dialogs) ---------- */
+var FILE_MODE_TREE = 'tree';
+var FILE_MODE_FLAT = 'flat';
+
+/** Build a dir/file tree from repo-relative paths. */
+function buildFileTree(files) {
+    var root = { children: {} };
+    files.forEach(function (f) {
+        var parts = f.path.split('/');
+        var node = root;
+        for (var i = 0; i < parts.length; i++) {
+            var name = parts[i];
+            if (!node.children[name]) { node.children[name] = { children: {}, isDir: i < parts.length - 1, file: null }; }
+            if (i === parts.length - 1) { node.children[name].isDir = false; node.children[name].file = f; }
+            node = node.children[name];
+        }
+    });
+    return root;
+}
+
+/**
+ * Render file rows in the given mode. rowFn(ctx) returns the row markup for
+ * { kind: 'dir'|'file', name, path, depth, closed, count, file }.
+ * Flat mode lists every file with its full path, in the source order.
+ */
+function buildFileRows(files, mode, collapsed, rowFn) {
+    if (mode !== FILE_MODE_TREE) {
+        return files.map(function (f) {
+            return rowFn({ kind: 'file', name: f.path, path: f.path, depth: 0, count: 0, file: f });
+        }).join('');
+    }
+    var out = [];
+    (function walk(node, depth, prefix) {
+        var keys = Object.keys(node.children).sort(function (a, b) {
+            var na = node.children[a], nb = node.children[b];
+            if (na.isDir !== nb.isDir) {return na.isDir ? -1 : 1;}
+            return a.localeCompare(b);
+        });
+        keys.forEach(function (k) {
+            var ch = node.children[k];
+            var p = prefix ? prefix + '/' + k : k;
+            if (ch.isDir) {
+                var closed = !!collapsed[p];
+                out.push(rowFn({ kind: 'dir', name: k, path: p, depth: depth, closed: closed, count: countFiles(ch) }));
+                if (!closed) {walk(ch, depth + 1, p);}
+            } else {
+                out.push(rowFn({ kind: 'file', name: k, path: ch.file.path, depth: depth, count: 0, file: ch.file }));
+            }
+        });
+    })(buildFileTree(files), 0, '');
+    return out.join('');
+}
+
+/** Icon button offering the opposite of the current file list mode. */
+function fileModeBtnHtml(mode) {
+    var toTree = mode !== FILE_MODE_TREE;
+    var label = T(toTree ? 'fileMode.showTree' : 'fileMode.showFlat');
+    return '<button class="fmode-btn" data-fmode="' + (toTree ? FILE_MODE_TREE : FILE_MODE_FLAT) + '" data-title="' + esc(label) + '">' + (toTree ? I_TREE_MODE : I_FLAT_MODE) + '</button>';
+}
+
+function fileRowPad(depth) {
+    return 'padding-left:' + (8 + depth * 14) + 'px';
+}
+
 function applyDetailVisibility() {
     document.getElementById('main').classList.toggle('no-detail', !state.detailVisible);
     var tg = document.getElementById('tg-files');
@@ -973,44 +1010,22 @@ function renderDetail() {
     mh += '</div>';
     info.innerHTML = mh;
 
-    var root = { children: {} };
-    files.forEach(function (f) {
-        var parts = f.path.split('/');
-        var node = root;
-        for (var i = 0; i < parts.length; i++) {
-            var name = parts[i];
-            if (!node.children[name]) { node.children[name] = { children: {}, isDir: i < parts.length - 1, file: null }; }
-            if (i === parts.length - 1) { node.children[name].isDir = false; node.children[name].file = f; }
-            node = node.children[name];
-        }
-    });
-
-    var fh = '<div class="fhead">' + T('w.filesCount', { n: files.length }) + '</div>';
-    function walk(node, depth, prefix) {
-        var keys = Object.keys(node.children).sort(function (a, b) {
-            var na = node.children[a], nb = node.children[b];
-            if (na.isDir !== nb.isDir) return na.isDir ? -1 : 1;
-            return a.localeCompare(b);
-        });
-        keys.forEach(function (k) {
-            var ch = node.children[k];
-            var p = prefix ? prefix + '/' + k : k;
-            var pad = 'padding-left:' + (8 + depth * 14) + 'px';
-            if (ch.isDir) {
-                var closed = !!state.collapsed[p];
-                var fileCaret = closed ? I_CARET_R : I_CARET_D;
-                fh += '<div class="frow dir" data-path="' + esc(p) + '" style="' + pad + '"><span class="caret">' + fileCaret + '</span>' + I_FOLDER + '<span class="fname" data-title="' + esc(p) + '">' + esc(k) + '</span><span class="fcount">' + countFiles(ch) + '</span></div>';
-                if (!closed) walk(ch, depth + 1, p);
-            } else {
-                var f = ch.file;
-                fh += '<div class="frow file" data-path="' + esc(f.path) + '" style="' + pad + '"><span class="caret"></span><span class="st-' + esc(f.status) + '">' + I_FILE + '</span><span class="fname" data-title="' + esc(f.path) + '">' + esc(k) + '</span>' +
-                     '<span class="fstat"><span class="add">+' + f.added + '</span> <span class="del">-' + f.deleted + '</span> <span class="st-' + esc(f.status) + '">' + esc(f.status) + '</span></span></div>';
-            }
-        });
-    }
-    walk(root, 0, '');
+    var mode = state.fileViewMode || FILE_MODE_TREE;
+    var fh = '<div class="fhead"><span>' + T('w.filesCount', { n: files.length }) + '</span>' + fileModeBtnHtml(mode) + '</div>';
+    fh += buildFileRows(files, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
+}
+
+/** One row of the detail panel's file list, in either display mode. */
+function detailFileRowHtml(r) {
+    var pad = fileRowPad(r.depth);
+    if (r.kind === 'dir') {
+        return '<div class="frow dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + I_FOLDER + '<span class="fname" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
+    }
+    var f = r.file;
+    return '<div class="frow file" data-path="' + esc(f.path) + '" style="' + pad + '"><span class="caret"></span><span class="st-' + esc(f.status) + '">' + I_FILE + '</span><span class="fname" data-title="' + esc(f.path) + '">' + esc(r.name) + '</span>' +
+         '<span class="fstat"><span class="add">+' + (f.added || 0) + '</span> <span class="del">-' + (f.deleted || 0) + '</span> <span class="st-' + esc(f.status) + '">' + esc(f.status) + '</span></span></div>';
 }
 
 /* ---------- context menus ---------- */
@@ -1508,6 +1523,13 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
 });
 
 document.getElementById('d-files').addEventListener('click', function (e) {
+    var btn = e.target.closest('.fmode-btn');
+    if (btn) {
+        state.fileViewMode = btn.getAttribute('data-fmode');
+        renderDetail();
+        saveViewState();
+        return;
+    }
     var dir = e.target.closest('.frow.dir');
     if (dir) {
         var p = dir.getAttribute('data-path');
@@ -1834,11 +1856,91 @@ function showSquashMessageDialog(prompt, initialValue, placeholder) {
 }
 
 /* ---- push confirmation dialog ---- */
-var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', remoteExists: true, visibleCount: 20 };
+/* ---------- shared: push / compare dialog body ---------- */
+
+/** Commit row: no hash column — the full details live in the hover tooltip and the info pane. */
+function dialogCommitRowHtml(c, selected) {
+    var cleanMessage = c.message.replace(/^`{1,3}\s*/, '');
+    var tip = cleanMessage + '\n' + c.author + ' · ' + fmtDate(c.date) + ' (' + fmtRelativeTime(c.date) + ')\n' + c.hash;
+    return '<div class="push-commit-row' + (selected ? ' sel' : '') + '" data-hash="' + esc(c.hash) + '" data-title="' + esc(tip) + '">' +
+        '<span class="push-commit-msg">' + esc(cleanMessage) + '</span>' +
+        '<span class="push-commit-author">' + esc(c.author) + '</span>' +
+        '<span class="push-commit-date" data-title="' + esc(fmtDate(c.date)) + '">' + esc(fmtRelativeTime(c.date)) + '</span>' +
+        '</div>';
+}
+
+/** Right-hand side: changed files on top, commit info below; each scrolls on both axes. */
+function dialogSidePanelHtml(ids) {
+    return '<div class="push-files-panel">' +
+        '<div class="push-files-section">' +
+        '<div class="push-files-head" id="' + ids.head + '"></div>' +
+        '<div class="push-files-scroll"><div class="push-files-list" id="' + ids.list + '"></div></div>' +
+        '</div>' +
+        '<div class="push-detail-section" id="' + ids.detail + '"></div>' +
+        '</div>';
+}
+
+function dialogFileRowHtml(r) {
+    var pad = fileRowPad(r.depth);
+    if (r.kind === 'dir') {
+        return '<div class="push-file-row dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + I_FOLDER + '<span class="push-file-name" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
+    }
+    var f = r.file;
+    return '<div class="push-file-row file" data-path="' + esc(f.path) + '" style="' + pad + '">' +
+        '<span class="push-file-status ' + esc(f.status || '') + '">' + esc(f.status || '?') + '</span>' +
+        '<span class="push-file-name" data-title="' + esc(f.path) + '">' + esc(r.name) + '</span></div>';
+}
+
+function renderDialogFiles(headEl, listEl, files, st) {
+    if (!listEl) {return;}
+    var mode = st.fileViewMode || FILE_MODE_TREE;
+    var btn = fileModeBtnHtml(mode);
+    if (!files || files.length === 0) {
+        if (headEl) {headEl.innerHTML = '<span>' + T('common.noFileChanges') + '</span>' + btn;}
+        listEl.innerHTML = '';
+        return;
+    }
+    if (headEl) {headEl.innerHTML = '<span>' + T('w.filesCount', { n: files.length }) + '</span>' + btn;}
+    listEl.innerHTML = buildFileRows(files, mode, st.collapsedDirs || {}, dialogFileRowHtml);
+}
+
+/** Info pane: a single commit, or the aggregate summary for the '__all__' row. */
+function renderDialogDetail(el, commit, commits) {
+    if (!el) {return;}
+    if (commit) {
+        var clean = commit.message.replace(/^`{1,3}\s*/, '');
+        var initial = esc((commit.author || '?').charAt(0).toUpperCase());
+        el.innerHTML = '<div class="ccard">' +
+            '<div class="crow"><span class="hashchip">' + esc(commit.shortHash) + '</span></div>' +
+            '<div class="crow"><span class="cmsg">' + esc(clean) + '</span></div>' +
+            '<div class="crow"><span class="avatar" style="background:' + avatarColor(commit.author || '?') + '">' + initial + '</span>' +
+            '<span class="cmeta">' + esc(commit.author) + ' · ' + esc(fmtDate(commit.date)) + ' (' + esc(fmtRelativeTime(commit.date)) + ')</span></div>' +
+            '<div class="crow"><span class="cmeta push-full-hash">' + esc(commit.hash) + '</span></div>' +
+            '</div>';
+        return;
+    }
+    var list = commits || [];
+    if (list.length === 0) {
+        el.innerHTML = '<div class="push-files-empty">' + T('common.noCommitSelected') + '</div>';
+        return;
+    }
+    var authors = [];
+    list.forEach(function (c) {
+        if (authors.indexOf(c.author) === -1) {authors.push(c.author);}
+    });
+    el.innerHTML = '<div class="ccard">' +
+        '<div class="crow"><span class="cmsg">' + T('pushDlg.allCommits') + '</span></div>' +
+        '<div class="crow"><span class="cmeta">' + T('common.commitCount', { n: list.length }) + '</span></div>' +
+        '<div class="crow"><span class="cmeta">' + T('w.authorPrefix') + esc(authors.join(', ')) + '</span></div>' +
+        '<div class="crow"><span class="cmeta">' + esc(fmtDate(list[list.length - 1].date)) + ' → ' + esc(fmtDate(list[0].date)) + '</span></div>' +
+        '</div>';
+}
+
+var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', remoteExists: true, visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
 function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
     // '__all__' is the synthetic aggregate row ("全部提交") diffing base ref vs local tip
-    pushState = { commits: commits, selectedHash: commits.length > 0 ? '__all__' : null, filesCache: {}, branchName: branchName, remoteExists: remoteExists !== false, visibleCount: 20 };
+    pushState = { commits: commits, selectedHash: commits.length > 0 ? '__all__' : null, filesCache: {}, branchName: branchName, remoteExists: remoteExists !== false, visibleCount: 20, fileViewMode: state.fileViewMode || 'tree', collapsedDirs: {} };
     var overlay = document.createElement('div');
     overlay.className = 'push-dialog-overlay';
     overlay.id = 'push-dialog';
@@ -1854,17 +1956,8 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
 
     // Render initial batch of commits (first 20)
     function renderCommitBatch(startIdx, endIdx) {
-        var batchCommits = commits.slice(startIdx, endIdx);
-        return batchCommits.map(function (c) {
-            var sel = c.hash === pushState.selectedHash ? ' sel' : '';
-            var cleanMessage = c.message.replace(/^`{1,3}\s*/, '');
-            var fullInfo = c.shortHash + ' ' + cleanMessage + '\n' + c.author + ' ' + fmtDate(c.date) + ' (' + fmtRelativeTime(c.date) + ')';
-            return '<div class="push-commit-row' + sel + '" data-hash="' + esc(c.hash) + '" data-title="' + esc(fullInfo) + '">' +
-                '<span class="push-commit-hash">' + esc(c.shortHash) + '</span>' +
-                '<span class="push-commit-msg">' + esc(cleanMessage) + '</span>' +
-                '<span class="push-commit-author">' + esc(c.author) + '</span>' +
-                '<span class="push-commit-date" data-title="' + esc(fmtDate(c.date)) + '">' + esc(fmtRelativeTime(c.date)) + '</span>' +
-                '</div>';
+        return commits.slice(startIdx, endIdx).map(function (c) {
+            return dialogCommitRowHtml(c, c.hash === pushState.selectedHash);
         }).join('');
     }
 
@@ -1895,7 +1988,7 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
         '<div class="push-dialog-header">' + headerText + '</div>' +
         '<div class="push-dialog-body">' +
         '<div class="push-commits-list"><div class="push-commits-scroll" id="push-commits-scroll">' + allRowHtml + commitRows + emptyStateHtml + loadMoreHtml + '</div></div>' +
-        '<div class="push-files-panel" id="push-files"></div>' +
+        dialogSidePanelHtml({ head: 'push-files-head', list: 'push-files-list', detail: 'push-commit-detail' }) +
         '</div>' +
         '<div class="push-dialog-actions">' +
         '<button class="dialog-btn secondary" data-action="cancel">' + T('common.cancel') + '</button>' +
@@ -1967,20 +2060,63 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
         });
     });
 
+    // File pane: mode switch, folder collapse, double-click diff (delegated once)
+    attachFilePaneHandlers(overlay, pushState, refreshPushFiles, function (path) {
+        vscode.postMessage({ command: 'pushDialogFileDiff', hash: pushState.selectedHash || '__all__', path: path });
+    });
+
     // Load files for the aggregate row by default
     if (commits.length > 0) {
         loadPushFiles('__all__');
+    } else {
+        // First push with nothing staged yet: still show the pane chrome + mode switch
+        renderPushDetail('__all__');
+        renderDialogFiles(document.getElementById('push-files-head'), document.getElementById('push-files-list'), [], pushState);
     }
 }
 
+/** Mode toggle + folder collapse + double-click diff for a dialog's file pane. */
+function attachFilePaneHandlers(overlay, st, refresh, onDblClick) {
+    var panel = overlay.querySelector('.push-files-panel');
+    if (!panel) {return;}
+    panel.addEventListener('click', function (e) {
+        var btn = e.target.closest('.fmode-btn');
+        if (btn) {
+            st.fileViewMode = btn.getAttribute('data-fmode');
+            refresh();
+            return;
+        }
+        var dir = e.target.closest('.push-file-row.dir');
+        if (dir) {
+            var p = dir.getAttribute('data-path');
+            if (st.collapsedDirs[p]) {delete st.collapsedDirs[p];} else {st.collapsedDirs[p] = true;}
+            refresh();
+        }
+    });
+    panel.addEventListener('dblclick', function (e) {
+        var row = e.target.closest('.push-file-row.file');
+        if (!row) {return;}
+        onDblClick(row.getAttribute('data-path'));
+    });
+}
+
+function refreshPushFiles() {
+    var files = pushState.filesCache[pushState.selectedHash];
+    if (!files) {return;} // still loading: keep the spinner
+    renderDialogFiles(document.getElementById('push-files-head'), document.getElementById('push-files-list'), files, pushState);
+}
+
 function loadPushFiles(hash) {
-    var panel = document.getElementById('push-files');
-    if (!panel) return;
+    renderPushDetail(hash);
+    var head = document.getElementById('push-files-head');
+    var list = document.getElementById('push-files-list');
+    if (!list) {return;}
     if (pushState.filesCache[hash]) {
-        renderPushFiles(panel, pushState.filesCache[hash]);
+        renderDialogFiles(head, list, pushState.filesCache[hash], pushState);
         return;
     }
-    panel.innerHTML = '<div class="push-files-scroll"><div class="push-files-loading"><span class="spin"></span> ' + T('common.loadingFiles') + '</div></div>';
+    if (head) {head.innerHTML = '<span>' + T('common.loadingFiles') + '</span>' + fileModeBtnHtml(pushState.fileViewMode);}
+    list.innerHTML = '<div class="push-files-loading"><span class="spin"></span> ' + T('common.loadingFiles') + '</div>';
     if (hash === '__all__') {
         vscode.postMessage({ command: 'getPushAllFiles' });
     } else {
@@ -1988,43 +2124,28 @@ function loadPushFiles(hash) {
     }
 }
 
-function renderPushFiles(panel, files) {
-    if (!files || files.length === 0) {
-        panel.innerHTML = '<div class="push-files-scroll"><div class="push-files-empty">' + T('common.noFileChanges') + '</div></div>';
-        return;
-    }
-    var rows = files.map(function (f) {
-        return '<div class="push-file-row" data-path="' + esc(f.path) + '" data-hash="' + esc(pushState.selectedHash || '') + '">' +
-            '<span class="push-file-status ' + esc(f.status || '') + '">' + esc(f.status || '?') + '</span>' +
-            '<span class="push-file-name">' + esc(f.path) + '</span>' +
-            '</div>';
-    }).join('');
-    panel.innerHTML = '<div class="push-files-scroll"><div class="push-files-list">' + rows + '</div></div>';
-
-    // File double-click to open diff
-    panel.querySelectorAll('.push-file-row').forEach(function (row) {
-        row.addEventListener('dblclick', function () {
-            var path = row.getAttribute('data-path');
-            var hash = row.getAttribute('data-hash');
-            vscode.postMessage({ command: 'pushDialogFileDiff', hash: hash, path: path });
-        });
-    });
+function renderPushDetail(hash) {
+    var el = document.getElementById('push-commit-detail');
+    if (!el) {return;}
+    var commit = hash && hash !== '__all__'
+        ? pushState.commits.filter(function (c) { return c.hash === hash; })[0]
+        : null;
+    renderDialogDetail(el, commit, pushState.commits);
 }
 
 // Handle commit files response from extension
 window._handlePushFiles = function (hash, files) {
     pushState.filesCache[hash] = files;
     if (pushState.selectedHash === hash) {
-        var panel = document.getElementById('push-files');
-        if (panel) renderPushFiles(panel, files);
+        refreshPushFiles();
     }
 };
 
 /* ---- branch compare dialog (read-only) ---- */
-var compareState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', currentBranch: '', visibleCount: 20 };
+var compareState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', currentBranch: '', visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
 function showCompareDialog(branchName, currentBranch, commits) {
-    compareState = { commits: commits, selectedHash: '__all__', filesCache: {}, branchName: branchName, currentBranch: currentBranch, visibleCount: 20 };
+    compareState = { commits: commits, selectedHash: '__all__', filesCache: {}, branchName: branchName, currentBranch: currentBranch, visibleCount: 20, fileViewMode: state.fileViewMode || 'tree', collapsedDirs: {} };
     var overlay = document.createElement('div');
     overlay.className = 'push-dialog-overlay';
     overlay.id = 'compare-dialog';
@@ -2036,14 +2157,7 @@ function showCompareDialog(branchName, currentBranch, commits) {
 
     function renderCommitBatch(startIdx, endIdx) {
         return commits.slice(startIdx, endIdx).map(function (c) {
-            var cleanMessage = c.message.replace(/^`{1,3}\s*/, '');
-            var fullInfo = c.shortHash + ' ' + cleanMessage + '\n' + c.author + ' ' + fmtDate(c.date) + ' (' + fmtRelativeTime(c.date) + ')';
-            return '<div class="push-commit-row" data-hash="' + esc(c.hash) + '" data-title="' + esc(fullInfo) + '">' +
-                '<span class="push-commit-hash">' + esc(c.shortHash) + '</span>' +
-                '<span class="push-commit-msg">' + esc(cleanMessage) + '</span>' +
-                '<span class="push-commit-author">' + esc(c.author) + '</span>' +
-                '<span class="push-commit-date" data-title="' + esc(fmtDate(c.date)) + '">' + esc(fmtRelativeTime(c.date)) + '</span>' +
-                '</div>';
+            return dialogCommitRowHtml(c, c.hash === compareState.selectedHash);
         }).join('');
     }
 
@@ -2063,7 +2177,7 @@ function showCompareDialog(branchName, currentBranch, commits) {
         '<div class="push-dialog-header">' + headerText + '</div>' +
         '<div class="push-dialog-body">' +
         '<div class="push-commits-list"><div class="push-commits-scroll" id="compare-commits-scroll">' + allRowHtml + commitRows + loadMoreHtml + '</div></div>' +
-        '<div class="push-files-panel" id="compare-files"></div>' +
+        dialogSidePanelHtml({ head: 'compare-files-head', list: 'compare-files-list', detail: 'compare-commit-detail' }) +
         '</div>' +
         '<div class="push-dialog-actions">' +
         '<button class="dialog-btn secondary" data-action="close">' + T('common.close') + '</button>' +
@@ -2114,17 +2228,35 @@ function showCompareDialog(branchName, currentBranch, commits) {
         });
     });
 
+    attachFilePaneHandlers(overlay, compareState, refreshCompareFiles, function (path) {
+        vscode.postMessage({ command: 'compareFileDiff', hash: compareState.selectedHash || '__all__', path: path });
+    });
+
     loadCompareFiles('__all__');
 }
 
+function refreshCompareFiles() {
+    var files = compareState.filesCache[compareState.selectedHash];
+    if (!files) {return;} // still loading: keep the spinner
+    renderDialogFiles(document.getElementById('compare-files-head'), document.getElementById('compare-files-list'), files, compareState);
+}
+
 function loadCompareFiles(hash) {
-    var panel = document.getElementById('compare-files');
-    if (!panel) return;
+    var el = document.getElementById('compare-commit-detail');
+    var commit = hash && hash !== '__all__'
+        ? compareState.commits.filter(function (c) { return c.hash === hash; })[0]
+        : null;
+    if (el) {renderDialogDetail(el, commit, compareState.commits);}
+
+    var head = document.getElementById('compare-files-head');
+    var list = document.getElementById('compare-files-list');
+    if (!list) {return;}
     if (compareState.filesCache[hash]) {
-        renderCompareFiles(panel, compareState.filesCache[hash]);
+        renderDialogFiles(head, list, compareState.filesCache[hash], compareState);
         return;
     }
-    panel.innerHTML = '<div class="push-files-scroll"><div class="push-files-loading"><span class="spin"></span> ' + T('common.loadingFiles') + '</div></div>';
+    if (head) {head.innerHTML = '<span>' + T('common.loadingFiles') + '</span>' + fileModeBtnHtml(compareState.fileViewMode);}
+    list.innerHTML = '<div class="push-files-loading"><span class="spin"></span> ' + T('common.loadingFiles') + '</div>';
     if (hash === '__all__') {
         vscode.postMessage({ command: 'getCompareAllFiles' });
     } else {
@@ -2132,31 +2264,10 @@ function loadCompareFiles(hash) {
     }
 }
 
-function renderCompareFiles(panel, files) {
-    if (!files || files.length === 0) {
-        panel.innerHTML = '<div class="push-files-scroll"><div class="push-files-empty">' + T('common.noFileChanges') + '</div></div>';
-        return;
-    }
-    var rows = files.map(function (f) {
-        return '<div class="push-file-row" data-path="' + esc(f.path) + '">' +
-            '<span class="push-file-status ' + esc(f.status || '') + '">' + esc(f.status || '?') + '</span>' +
-            '<span class="push-file-name">' + esc(f.path) + '</span>' +
-            '</div>';
-    }).join('');
-    panel.innerHTML = '<div class="push-files-scroll"><div class="push-files-list">' + rows + '</div></div>';
-
-    panel.querySelectorAll('.push-file-row').forEach(function (row) {
-        row.addEventListener('dblclick', function () {
-            vscode.postMessage({ command: 'compareFileDiff', hash: compareState.selectedHash || '__all__', path: row.getAttribute('data-path') });
-        });
-    });
-}
-
 window._handleCompareFiles = function (hash, files) {
     compareState.filesCache[hash] = files;
     if (compareState.selectedHash === hash) {
-        var panel = document.getElementById('compare-files');
-        if (panel) renderCompareFiles(panel, files);
+        refreshCompareFiles();
     }
 };
 
