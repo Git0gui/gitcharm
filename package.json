@@ -10,6 +10,9 @@
     "type": "git",
     "url": "https://github.com/Git0gui/gitcharm.git"
   },
+  "bugs": {
+    "url": "https://github.com/Git0gui/gitcharm/issues"
+  },
   "keywords": [
     "git",
     "charm",
