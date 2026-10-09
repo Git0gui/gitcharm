@@ -1490,7 +1490,6 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
             items.push(['dropCommit', T('menu.dropCommit')]);
         }
         items.push(['newBranchFrom', T('menu.newBranchFrom')]);
-        items.push(['interactiveRebase', T('menu.interactiveRebase')]);
     }
     items.push(['copy', T('menu.copyHash')]);
     
