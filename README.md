@@ -46,9 +46,9 @@ GitCharm provides a three-panel Git log view:
 
 ### Git Operations
 
-- **Branches**: create, checkout, rename, delete, merge into current, rebase onto, push, pull, fetch, update (safe fast-forward for non-current branches)
-- **Commits**: show diff, cherry-pick (multi-select batch + conflict-resumable), interactive rebase, squash, drop commit, amend message, reset to commit
-- **Files**: compare file with another branch, view diff introduced by a single commit
+- **Branches**: create, checkout, rename, delete, merge into current, rebase onto, push (force push offered when behind the remote), pull, fetch, update (safe fast-forward for non-current branches)
+- **Commits**: show diff, cherry-pick (multi-select batch + conflict-resumable), squash, drop commit, amend message, reset to commit
+- **Files**: compare file with another branch, compare with the local working copy, pick a single file from a commit, view every commit that touched a file (cross-branch), view diff introduced by a single commit
 - **Blame**: inline annotation of last author & date per line, full commit info on hover, click to jump to the commit
 
 ### Performance
@@ -61,6 +61,8 @@ GitCharm provides a three-panel Git log view:
 ### Experience & Reliability
 
 - **Bilingual UI**: fully localized interface, follows editor language or set manually
+- **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list
+- **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
 - **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges
 - **Pre-rebase check**: detects uncommitted changes before rebasing to avoid failures
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts detected in one place, top status bar with Continue / Abort, conflicts delegated to the native SCM view
@@ -100,9 +102,12 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | Merge / Rebase | Right-click branch → Merge into Current / Rebase onto |
 | Push / Pull | Right-click branch → Push / Pull |
 | Cherry-pick | Multi-select commits → right-click → Cherry-Pick |
-| Squash / Interactive rebase | Multi-select commits → right-click |
+| Squash | Multi-select commits → right-click → Squash |
 | Drop / Amend commit | Right-click commit row (only near HEAD) |
-| Compare file with branch | Editor / Explorer right-click → Compare with Branch |
+| Compare file with branch | Editor / Explorer right-click → GitCharm → Compare with Branch |
+| Compare file with local copy | Commit detail (third panel) → double-click a file, or right-click → Compare with Local File |
+| Pick a file from a commit | Commit detail (third panel) → right-click a file → Cherry-Pick File |
+| View file history | Editor / Explorer right-click → GitCharm → View File History |
 | Toggle blame | Editor right-click → Toggle Blame, or click the line-number area |
 
 ## Settings
@@ -186,9 +191,9 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ### Git 操作
 
-- **分支**：新建、检出、重命名、删除、合并到当前分支、变基到…、推送、拉取、获取、更新（非当前分支可快进时安全更新）
-- **提交**：显示差异、精选提交（Cherry-Pick，支持多选批量 + 冲突持久化恢复）、交互式变基、压缩提交、删除提交、编辑提交信息、重置到此提交
-- **文件**：与其他分支对比此文件、查看单次提交引入的差异
+- **分支**：新建、检出、重命名、删除、合并到当前分支、变基到…、推送（落后远程时提供强制推送）、拉取、获取、更新（非当前分支可快进时安全更新）
+- **提交**：显示差异、精选提交（Cherry-Pick，支持多选批量 + 冲突持久化恢复）、压缩提交、删除提交、编辑提交信息、重置到此提交
+- **文件**：与其他分支对比此文件、与当前本地文件对比、从提交中挑选单个文件、跨分支查看该文件的全部历史提交、查看单次提交引入的差异
 - **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击跳转到对应提交
 
 ### 性能
@@ -201,6 +206,8 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 ### 体验与可靠性
 
 - **中英双语**：界面全量本地化，跟随编辑器语言或手动指定
+- **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口）
+- **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
 - **IDEA 风格视觉**：圆角 6–12px、平滑过渡、悬停微动效、tag 黄色徽章
 - **变基前检查**：自动检测未提交更改，避免变基失败
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部状态栏提供"继续 / 终止"，冲突自动交原生 SCM 视图解决
@@ -240,9 +247,12 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 合并 / 变基 | 分支右键 → 合并到当前分支 / 变基到… |
 | 推送 / 拉取 | 分支右键 → 推送 / 拉取 |
 | 精选提交 | 多选提交 → 右键 → 精选提交 |
-| 压缩 / 交互式变基 | 多选提交 → 右键 |
+| 压缩提交 | 多选提交 → 右键 → 压缩提交 |
 | 删除 / 改提交信息 | 提交行右键（仅 HEAD 附近可用） |
-| 对比文件 | 编辑器 / 资源管理器右键 → 与其他分支对比此文件 |
+| 与其他分支对比文件 | 编辑器 / 资源管理器右键 → GitCharm → 与其他分支对比此文件 |
+| 与本地文件对比 | 第三栏变更文件双击，或右键 → 与当前本地文件对比 |
+| 挑选提交中的单个文件 | 第三栏变更文件右键 → 挑选文件 |
+| 查看文件所有历史提交 | 编辑器 / 资源管理器右键 → GitCharm → 查看文件所有历史提交 |
 | 显示 Blame | 编辑器右键 → 显示提交信息，或点击行号区域 |
 
 ## 设置项
