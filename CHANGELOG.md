@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **未配置 upstream 的分支不再丢失超前/落后箭头**：此前箭头只读 `%(upstream:track)`，push 时没带 `-u`（无 upstream）但远程存在同名分支的本地分支永远不显示 ▲▼。现在这类分支回退用 `git rev-list --left-right --count` 对同名远程跟踪分支实算 ahead/behind，并只对「远程有同名分支且首提交不同」的分支发起子进程（上限 50，其余走免子进程的 refs 比对）；不伪造 upstream，推送/建立跟踪行为不变
+
 ### 文档
 
 - **README 新增中英「界面截图 / Screenshots」图集**：提交右键菜单（单选 + 多选）、分支右键菜单、推送对话框、编辑器右键菜单、行号 Blame、冲突处理共 8 张，逐图配说明

@@ -553,6 +553,9 @@ export class GitService {
     invalidateVolatile(): void {
         this._graphCache.clear();
         this._trackInfoCache = undefined;
+        // Head hashes must be re-read: divergence checks compare them against
+        // remote-tracking refs, and a stale cache hides the arrows.
+        this._refsReader.invalidate();
         // Don't clear branch cache - it's now persistent
         // Only clear persisted cache file if needed (but we're keeping it persistent now)
         // this._persistedCache.clear();
@@ -1346,18 +1349,78 @@ export class GitService {
 
         try {
             const trackMap = await this._getBranchTrackInfo();
+            const untracked: string[] = [];
             for (const [branchName, t] of trackMap) {
-                // Only include branches with divergence or that have upstream
-                if ((t.ahead > 0 || t.behind > 0) || t.upstream) {
-                    result[branchName] = { ahead: t.ahead, behind: t.behind, upstream: t.upstream };
+                if (t.upstream) {
+                    if (t.ahead > 0 || t.behind > 0) {
+                        result[branchName] = { ahead: t.ahead, behind: t.behind, upstream: t.upstream };
+                    }
+                } else {
+                    untracked.push(branchName);
                 }
             }
+            // Branches without a configured upstream (e.g. pushed without -u) still
+            // get ahead/behind when a same-named remote-tracking branch exists.
+            await this._applyUntrackedDivergence(untracked, result);
             logger.debug('[GitCharm] getDivergenceInfo complete, total branches:', Object.keys(result).length);
         } catch (error) {
             logger.debug('[GitCharm] Failed to get divergence info:', error);
         }
 
         return result;
+    }
+
+    /**
+     * For local branches with no upstream, compute divergence against a same-named
+     * remote-tracking branch so the tree arrows are not limited to tracked branches.
+     * Spawns are bounded and run only for branches that actually have a remote twin.
+     */
+    private async _applyUntrackedDivergence(
+        branches: string[],
+        result: Record<string, { ahead: number; behind: number; upstream?: string }>
+    ): Promise<void> {
+        if (branches.length === 0) {return;}
+        const { remote } = this._refsReader.readBranchNames();
+        if (remote.length === 0) {return;}
+
+        const remoteSet = new Set(remote);
+        // Remote names are the first path segment of each remote-tracking ref;
+        // prefer "origin" so multi-remote repos resolve the conventional twin.
+        const remotes = Array.from(new Set(remote.map(r => r.split('/')[0])))
+            .sort((a, b) => (a === 'origin' ? -1 : b === 'origin' ? 1 : a.localeCompare(b)));
+
+        // Cheap, spawn-free pre-filter: identical head hashes mean zero divergence,
+        // so only branches that actually differ from their remote twin are counted.
+        const branchRefs = this._refsReader.readBranchRefs();
+
+        const MAX_FALLBACK = 50;
+        const matched: Array<{ name: string; ref: string }> = [];
+        for (const name of branches) {
+            if (matched.length >= MAX_FALLBACK) {break;}
+            const ref = remotes.map(r => `${r}/${name}`).find(candidate => remoteSet.has(candidate));
+            if (!ref) {continue;}
+            const localHash = branchRefs.get(name);
+            const remoteHash = branchRefs.get(ref);
+            if (!localHash || !remoteHash || localHash === remoteHash) {continue;}
+            matched.push({ name, ref });
+        }
+
+        await Promise.all(matched.map(async ({ name, ref }) => {
+            try {
+                // Fully-qualified refs avoid ambiguity when branch names contain '/'.
+                const out = await this.executeGitArgs([
+                    'rev-list', '--left-right', '--count', `refs/remotes/${ref}...refs/heads/${name}`
+                ]);
+                const [behindStr, aheadStr] = out.trim().split(/\s+/);
+                const behind = parseInt(behindStr, 10) || 0;
+                const ahead = parseInt(aheadStr, 10) || 0;
+                if (ahead > 0 || behind > 0) {
+                    result[name] = { ahead, behind };
+                }
+            } catch (error) {
+                logger.debug('[GitCharm] Untracked divergence fallback failed for', name, error);
+            }
+        }));
     }
 
     private async _loadBranchDetails(): Promise<BranchDetails> {
