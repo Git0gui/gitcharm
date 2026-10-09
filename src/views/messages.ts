@@ -23,6 +23,8 @@ export interface PersistedViewState {
     collapsed?: Record<string, boolean>;
     collapsedSec?: Record<string, boolean>;
     expandedFolder?: Record<string, boolean>;
+    /** Epoch ms stamped by the host when the snapshot is flushed; drives the session-restore TTL window. */
+    savedAt?: number;
 }
 
 export interface PushDialogCommit {

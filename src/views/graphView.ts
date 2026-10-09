@@ -26,6 +26,8 @@ const ALL_COMMITS_ROW = '__all__';
 export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly PAGE_FIRST = 20;
     private static readonly PAGE_MORE = 10;
+    /** Session-restore window: reopen within this period restores the last view; later opens start fresh. */
+    private static readonly SESSION_RESTORE_TTL_MS = 2 * 60 * 60 * 1000;
 
     private _view: vscode.WebviewView | undefined;
     private _gitService: GitService;
@@ -520,8 +522,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         this._post({ command: 'setInProgress', inProgress: this._initialInProgress });
                     }
                     {
-                        // Restore persisted view state (selection, scroll, folds)
-                        const saved = this._memento.get<PersistedViewState>('idea-git.viewState');
+                        // Restore persisted view state (selection, scroll, folds) within the session TTL
+                        const saved = this._restorableState();
                         if (saved) {
                             this._post({ command: 'restoreViewState', state: saved });
                         }
@@ -615,8 +617,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // Step 2 & 3: Load branches AND commits in parallel for maximum speed
         // Both operations run concurrently, each updates the UI when ready.
         // Restore the previously viewed branch first so the initial commit
-        // load targets it directly (Git Graph-style state restoration).
-        const savedView = this._memento.get<PersistedViewState>('idea-git.viewState');
+        // load targets it directly (Git Graph-style state restoration),
+        // but only when the snapshot is within the session TTL window.
+        const savedView = this._restorableState();
         if (savedView?.branch) {
             this._branch = savedView.branch;
         }
@@ -653,9 +656,25 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._viewStateTimer = undefined;
         }
         if (this._pendingViewState) {
+            this._pendingViewState.savedAt = Date.now();
             void this._memento.update('idea-git.viewState', this._pendingViewState);
             this._pendingViewState = undefined;
         }
+    }
+
+    /**
+     * Read the persisted view state, but only honour it when it was saved within
+     * the session TTL window. Expired snapshots are dropped so a reopen after a long
+     * absence starts from a clean state instead of a stale branch/selection.
+     */
+    private _restorableState(): PersistedViewState | undefined {
+        const saved = this._memento.get<PersistedViewState>('idea-git.viewState');
+        if (!saved) {return undefined;}
+        if (typeof saved.savedAt !== 'number' || Date.now() - saved.savedAt > GraphViewProvider.SESSION_RESTORE_TTL_MS) {
+            void this._memento.update('idea-git.viewState', undefined);
+            return undefined;
+        }
+        return saved;
     }
 
     /**

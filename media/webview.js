@@ -200,7 +200,8 @@ var state = {
     collapsed: {},
     collapsedSec: {},
     expandedFolder: {},
-    _pendingScrollTop: null
+    _pendingScrollTop: null,
+    _pendingRestore: null
 };
 
 /* ---------- view state persistence (Git Graph-style, via workspaceState) ---------- */
@@ -228,6 +229,49 @@ function applyPendingScroll() {
     if (state._pendingScrollTop === null) return;
     document.getElementById('scroll').scrollTop = state._pendingScrollTop;
     state._pendingScrollTop = null;
+}
+
+/* ---------- session restore (survives the setData re-render on panel re-show) ---------- */
+function loadDetailForRestore(hash) {
+    var info = document.getElementById('d-info');
+    var filesBox = document.getElementById('d-files');
+    if (info) { info.innerHTML = '<div class="empty">' + T('ui.loading') + '</div>'; }
+    if (filesBox) { filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>'; }
+    state.detailVisible = true;
+    applyDetailVisibility();
+    // Reuse the click path so the third panel shows the message + associated file list
+    vscode.postMessage({ command: 'selectCommits', hashes: [hash] });
+}
+
+// Apply a pending restore snapshot once its data is available. Works whether
+// restoreViewState arrives before or after the commits message.
+function applyRestoreNow() {
+    var pr = state._pendingRestore;
+    if (!pr) { return; }
+    if (pr.collapsed) { state.collapsed = pr.collapsed; }
+    if (pr.collapsedSec) { state.collapsedSec = pr.collapsedSec; }
+    if (pr.expandedFolder) { state.expandedFolder = pr.expandedFolder; }
+    if (pr.detailVisible === true) { state.detailVisible = true; }
+    var commitsLoaded = (state.commits || []).length > 0;
+    var target = pr.selectedHash;
+    var found = !!target && (state.commits || []).some(function (c) { return c.hash === target; });
+    if (found) {
+        state.selectedHash = target;
+        state.selectedHashes = [target];
+        state.lastClickedIndex = -1;
+        applyRowSelection();
+        applyDetailVisibility();
+        document.getElementById('scroll').scrollTop = pr.scrollTop || 0;
+        loadDetailForRestore(target);
+        state._pendingRestore = null;
+    } else if (commitsLoaded) {
+        // Target commit isn't in the loaded page: keep folds/scroll but drop the
+        // snapshot so later refreshes behave normally instead of sticking.
+        if (pr.scrollTop) { document.getElementById('scroll').scrollTop = pr.scrollTop; }
+        applyDetailVisibility();
+        state._pendingRestore = null;
+    }
+    // else: commits not loaded yet — keep _pendingRestore for the next data render
 }
 
 /* ---------- resizable panels ---------- */
@@ -1557,6 +1601,9 @@ window.addEventListener('message', function (ev) {
         renderTree();
         renderRows();
         renderDetail();
+        // Re-apply any pending session restore that arrived before (or during) this
+        // full re-render — setData cleared selection/folds/scroll above.
+        applyRestoreNow();
     } else if (m.command === 'appendCommits') {
         state.commits = state.commits.concat(m.commits || []);
         state.hasMore = !!m.hasMore;
@@ -1663,17 +1710,14 @@ window.addEventListener('message', function (ev) {
         setLoader(false);
         renderRows();
         applyPendingScroll();
+        applyRestoreNow();
     } else if (m.command === 'restoreViewState') {
-        // Git Graph-style restoration: selection, scroll, folds, detail pane
+        // Git Graph-style restoration, deferred through a pending snapshot so it
+        // survives the setData re-render that fires on every panel re-show.
         var vs = m.state || {};
-        if (vs.branch) state.selectedBranch = vs.branch;
-        if (vs.selectedHash) state.selectedHash = vs.selectedHash;
-        if (vs.collapsed) state.collapsed = vs.collapsed;
-        if (vs.collapsedSec) state.collapsedSec = vs.collapsedSec;
-        if (vs.expandedFolder) state.expandedFolder = vs.expandedFolder;
-        if (vs.detailVisible === true) state.detailVisible = true;
-        state._pendingScrollTop = typeof vs.scrollTop === 'number' ? vs.scrollTop : 0;
-        applyDetailVisibility();
+        if (vs.branch) { state.selectedBranch = vs.branch; renderTree(); }
+        state._pendingRestore = vs;
+        applyRestoreNow();
     } else if (m.command === 'loading') {
         setBusy(m.area, !!m.on);
     } else if (m.command === 'showDialog') {
