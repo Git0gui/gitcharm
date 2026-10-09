@@ -47,6 +47,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _memento: vscode.Memento;
     private _pendingViewState: PersistedViewState | undefined;
     private _viewStateTimer: NodeJS.Timeout | undefined;
+    private _selectedCommits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> | undefined;
 
     constructor(gitService: GitService, extensionUri: vscode.Uri, memento: vscode.Memento) {
         this._gitService = gitService;
@@ -308,6 +309,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    /** Get currently selected commits in the webview */
+    getSelectedCommits(): Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> | undefined {
+        return this._selectedCommits;
+    }
+
+    /** Show file history dialog */
+    async showFileHistory(filePath: string, history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }>): Promise<void> {
+        if (!this._view) {return;}
+        this._post({ command: 'showFileHistory', filePath, history });
+    }
+
     /**
      * Show a read-only branch compare dialog: commits the selected branch has
      * that the current branch lacks, per-commit files, and an aggregate
@@ -504,6 +516,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     } finally {
                         this._postLoading('multiCommits', false);
                     }
+                    break;
+                case 'selectedCommitsUpdated':
+                    // Track selected commits for cherry-pick file operations
+                    this._selectedCommits = message.commits;
                     break;
                 case 'refreshBranches':
                     await this._refreshBranchesOnly();

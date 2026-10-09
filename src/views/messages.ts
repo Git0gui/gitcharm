@@ -71,6 +71,11 @@ export type ExtToWebviewMessage =
     }
     | { command: 'pushFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
     | {
+        command: 'showFileHistory';
+        filePath: string;
+        history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }>;
+    }
+    | {
         command: 'showCompareDialog';
         branchName: string;
         currentBranch: string;
@@ -126,4 +131,5 @@ export type WebviewToExtMessage =
     | { command: 'getCompareFiles'; hash: string }
     | { command: 'getCompareAllFiles' }
     | { command: 'compareFileDiff'; hash: string; path: string }
-    | { command: 'compareDialogClosed' };
+    | { command: 'compareDialogClosed' }
+    | { command: 'selectedCommitsUpdated'; commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> };

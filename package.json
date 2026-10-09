@@ -154,6 +154,21 @@
         "command": "idea-git.commitBranch",
         "title": "%cmd.commitBranch%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.compareStagedWithWorkingTree",
+        "title": "%cmd.compareStagedWithWorkingTree%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.cherryPickFile",
+        "title": "%cmd.cherryPickFile%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.viewFileHistory",
+        "title": "%cmd.viewFileHistory%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {
@@ -177,12 +192,18 @@
         }
       ]
     },
+    "submenus": [
+      {
+        "id": "idea-git.editorSubmenu",
+        "label": "%submenu.gitcharm%"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
-          "command": "idea-git.compareFileWithBranch",
+          "submenu": "idea-git.editorSubmenu",
           "when": "resourceScheme == file",
-          "group": "navigation@100"
+          "group": "navigation@90"
         },
         {
           "command": "idea-git.toggleBlame",
@@ -195,6 +216,28 @@
           "command": "idea-git.toggleBlame",
           "when": "resourceScheme == file",
           "group": "navigation@1"
+        }
+      ],
+      "idea-git.editorSubmenu": [
+        {
+          "command": "idea-git.compareFileWithBranch",
+          "when": "resourceScheme == file",
+          "group": "1_compare@1"
+        },
+        {
+          "command": "idea-git.compareStagedWithWorkingTree",
+          "when": "resourceScheme == file && scmProvider == git && scmResourceGroup == staged",
+          "group": "1_compare@2"
+        },
+        {
+          "command": "idea-git.cherryPickFile",
+          "when": "resourceScheme == file",
+          "group": "2_cherrypick@1"
+        },
+        {
+          "command": "idea-git.viewFileHistory",
+          "when": "resourceScheme == file",
+          "group": "3_history@1"
         }
       ],
       "commandPalette": [
@@ -224,6 +267,11 @@
           "command": "idea-git.compareFileWithBranch",
           "when": "resourceScheme == file",
           "group": "navigation@100"
+        },
+        {
+          "command": "idea-git.viewFileHistory",
+          "when": "resourceScheme == file",
+          "group": "navigation@101"
         }
       ]
     },

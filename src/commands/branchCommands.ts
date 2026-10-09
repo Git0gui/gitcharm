@@ -429,10 +429,15 @@ export function registerBranchCommands(
                         }
                     }
 
-                    // Only show "up to date" message if we have upstream AND no ahead commits
-                    if (hasUpstream && aheadCount === 0 && commits.length === 0) {
+                    // Only show "up to date" message if we have upstream AND no ahead commits AND no behind commits
+                    const behindCount = localBranch?.behind || 0;
+                    if (hasUpstream && aheadCount === 0 && behindCount === 0) {
                         vscode.window.showInformationMessage(t('push.upToDate', { name: branchName }));
                         return;
+                    }
+                    // If behind remote, still show dialog with force-push option
+                    if (behindCount > 0 && aheadCount === 0) {
+                        logger.debug(`[GitCharm] Branch ${branchName} is behind remote by ${behindCount} commits; showing push dialog with force option`);
                     }
                 }
                 // For new branches or branches without upstream, commits array may be empty but we still show the dialog
@@ -458,7 +463,23 @@ export function registerBranchCommands(
                     graphView.refreshBranchesOnly();
                 }
             } catch (error) {
-                vscode.window.showErrorMessage(t('push.failed', { error: String(error) }));
+                const errMsg = String(error);
+                // Parse common git push errors into user-friendly messages
+                let friendlyMsg: string;
+                if (errMsg.includes('non-fast-forward') || errMsg.includes('[rejected]')) {
+                    friendlyMsg = t('push.rejectedNonFastForward', { name: branchName });
+                } else if (errMsg.includes('remote contains work that you do not have locally')) {
+                    friendlyMsg = t('push.remoteAhead', { name: branchName });
+                } else if (errMsg.includes('permission denied') || errMsg.includes('403')) {
+                    friendlyMsg = t('push.permissionDenied');
+                } else if (errMsg.includes('authentication failed') || errMsg.includes('401')) {
+                    friendlyMsg = t('push.authFailed');
+                } else {
+                    // Fallback: show first line of error only
+                    const firstLine = errMsg.split('\n')[0].trim();
+                    friendlyMsg = t('push.failed', { error: firstLine });
+                }
+                vscode.window.showErrorMessage(friendlyMsg);
             }
         }),
 

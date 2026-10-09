@@ -672,6 +672,70 @@ export class GitService {
         return (await this.executeGitArgs(['show', '--stat', hash])).trim();
     }
 
+    /** Get staged file content (index version) */
+    async getStagedFileContent(filePath: string): Promise<Buffer> {
+        const repo = this._resolveRoot();
+        if (!repo) {throw new Error('No repository');}
+        // :0:filepath gets the index (staged) version
+        const output = await this.executeGitArgs(['show', `:${filePath}`]);
+        return Buffer.from(output, 'utf8');
+    }
+
+    /** Diff two arbitrary contents by path */
+    async diffTwoContents(oldContent: string, newContent: string, filePath: string): Promise<string> {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const tmpDir = os.tmpdir();
+        const oldFile = path.join(tmpDir, `gitcharm-old-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+        const newFile = path.join(tmpDir, `gitcharm-new-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+        try {
+            fs.writeFileSync(oldFile, oldContent, 'utf8');
+            fs.writeFileSync(newFile, newContent, 'utf8');
+            const diff = await this.executeGitArgs(['diff', '--no-index', oldFile, newFile]);
+            return diff;
+        } finally {
+            try { fs.unlinkSync(oldFile); } catch {}
+            try { fs.unlinkSync(newFile); } catch {}
+        }
+    }
+
+    /** Checkout a single file from a specific commit into working tree */
+    async checkoutFileFromCommit(commitHash: string, filePath: string): Promise<void> {
+        assertHash(commitHash);
+        await this.executeGitArgs(['checkout', commitHash, '--', filePath]);
+    }
+
+    /** Get full history of a file across all branches */
+    async getFileHistory(filePath: string): Promise<Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }>> {
+        const repo = this._resolveRoot();
+        if (!repo) {return [];}
+        // Use log --all to get commits touching this file across all branches
+        const output = (await this.executeGitArgs([
+            'log', '--all', '--format=%H|%h|%an|%ai|%s', '--', filePath
+        ])).trim();
+        if (!output) {return [];}
+
+        const entries: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }> = [];
+        for (const line of output.split('\n')) {
+            if (!line.trim()) {continue;}
+            const parts = line.split('|');
+            if (parts.length < 5) {continue;}
+            // Find which branch this commit belongs to
+            const branches = (await this.executeGitArgs(['branch', '--contains', parts[0]])).trim()
+                .split('\n').map(b => b.replace(/^[*\s]+/, '').trim()).filter(Boolean);
+            entries.push({
+                hash: parts[0],
+                shortHash: parts[1],
+                author: parts[2],
+                date: parts[3],
+                message: parts.slice(4).join('|'),
+                branch: branches[0] || ''
+            });
+        }
+        return entries;
+    }
+
     /**
      * Get the current branch name
      */
