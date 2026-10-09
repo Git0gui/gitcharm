@@ -1162,6 +1162,12 @@ canvas.graph-canvas {
     flex-direction: column;
     min-height: 0;
 }
+/* Single-column variant used by the file history dialog (no side file panel) */
+.push-commits-list.full {
+    width: auto;
+    flex: 1;
+    border-right: none;
+}
 .push-commits-scroll {
     flex: 1;
     overflow-y: auto;
@@ -1359,6 +1365,12 @@ canvas.graph-canvas {
     padding: 12px 20px;
     border-top: 1px solid var(--vscode-panel-border, #333);
     flex: none;
+}
+.file-history-hint {
+    flex: 1;
+    align-self: center;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999);
 }
 .dialog-btn.danger {
     background: var(--vscode-inputValidation-errorBackground, #5a2a2a);

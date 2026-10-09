@@ -23,6 +23,8 @@ export interface PersistedViewState {
     collapsed?: Record<string, boolean>;
     collapsedSec?: Record<string, boolean>;
     expandedFolder?: Record<string, boolean>;
+    /** Epoch ms stamped by the host when the snapshot is flushed; drives the session-restore TTL window. */
+    savedAt?: number;
 }
 
 export interface PushDialogCommit {
@@ -71,6 +73,11 @@ export type ExtToWebviewMessage =
     }
     | { command: 'pushFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
     | {
+        command: 'showFileHistory';
+        filePath: string;
+        history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string }>;
+    }
+    | {
         command: 'showCompareDialog';
         branchName: string;
         currentBranch: string;
@@ -92,7 +99,7 @@ export type WebviewAction =
     | 'checkout' | 'push' | 'pull' | 'fetch' | 'merge' | 'rebase' | 'update'
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
-    | 'fileDiff' | 'resumeCherryPick';
+    | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
 export type WebviewToExtMessage =

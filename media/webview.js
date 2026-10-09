@@ -200,7 +200,8 @@ var state = {
     collapsed: {},
     collapsedSec: {},
     expandedFolder: {},
-    _pendingScrollTop: null
+    _pendingScrollTop: null,
+    _pendingRestore: null
 };
 
 /* ---------- view state persistence (Git Graph-style, via workspaceState) ---------- */
@@ -228,6 +229,49 @@ function applyPendingScroll() {
     if (state._pendingScrollTop === null) return;
     document.getElementById('scroll').scrollTop = state._pendingScrollTop;
     state._pendingScrollTop = null;
+}
+
+/* ---------- session restore (survives the setData re-render on panel re-show) ---------- */
+function loadDetailForRestore(hash) {
+    var info = document.getElementById('d-info');
+    var filesBox = document.getElementById('d-files');
+    if (info) { info.innerHTML = '<div class="empty">' + T('ui.loading') + '</div>'; }
+    if (filesBox) { filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>'; }
+    state.detailVisible = true;
+    applyDetailVisibility();
+    // Reuse the click path so the third panel shows the message + associated file list
+    vscode.postMessage({ command: 'selectCommits', hashes: [hash] });
+}
+
+// Apply a pending restore snapshot once its data is available. Works whether
+// restoreViewState arrives before or after the commits message.
+function applyRestoreNow() {
+    var pr = state._pendingRestore;
+    if (!pr) { return; }
+    if (pr.collapsed) { state.collapsed = pr.collapsed; }
+    if (pr.collapsedSec) { state.collapsedSec = pr.collapsedSec; }
+    if (pr.expandedFolder) { state.expandedFolder = pr.expandedFolder; }
+    if (pr.detailVisible === true) { state.detailVisible = true; }
+    var commitsLoaded = (state.commits || []).length > 0;
+    var target = pr.selectedHash;
+    var found = !!target && (state.commits || []).some(function (c) { return c.hash === target; });
+    if (found) {
+        state.selectedHash = target;
+        state.selectedHashes = [target];
+        state.lastClickedIndex = -1;
+        applyRowSelection();
+        applyDetailVisibility();
+        document.getElementById('scroll').scrollTop = pr.scrollTop || 0;
+        loadDetailForRestore(target);
+        state._pendingRestore = null;
+    } else if (commitsLoaded) {
+        // Target commit isn't in the loaded page: keep folds/scroll but drop the
+        // snapshot so later refreshes behave normally instead of sticking.
+        if (pr.scrollTop) { document.getElementById('scroll').scrollTop = pr.scrollTop; }
+        applyDetailVisibility();
+        state._pendingRestore = null;
+    }
+    // else: commits not loaded yet — keep _pendingRestore for the next data render
 }
 
 /* ---------- resizable panels ---------- */
@@ -1446,7 +1490,6 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
             items.push(['dropCommit', T('menu.dropCommit')]);
         }
         items.push(['newBranchFrom', T('menu.newBranchFrom')]);
-        items.push(['interactiveRebase', T('menu.interactiveRebase')]);
     }
     items.push(['copy', T('menu.copyHash')]);
     
@@ -1473,10 +1516,30 @@ document.getElementById('d-files').addEventListener('click', function (e) {
         saveViewState();
         return;
     }
+});
+
+// Double-click a file in the detail panel to open its commit diff (was single-click)
+document.getElementById('d-files').addEventListener('dblclick', function (e) {
     var file = e.target.closest('.frow.file');
     if (file && state.selectedHash) {
         vscode.postMessage({ command: 'action', action: 'fileDiff', hash: state.selectedHash, path: file.getAttribute('data-path') });
     }
+});
+
+// Right-click a file in the detail panel: compare against local working tree / cherry-pick the file
+document.getElementById('d-files').addEventListener('contextmenu', function (e) {
+    var file = e.target.closest('.frow.file');
+    if (!file || !state.selectedHash) { return; }
+    e.preventDefault();
+    if (window._hideTooltip) window._hideTooltip();
+    var path = file.getAttribute('data-path');
+    var items = [
+        ['fileCompareLocal', T('menu.fileCompareLocal')],
+        ['fileCherryPick', T('menu.fileCherryPick')]
+    ];
+    showMenu(e.clientX, e.clientY, items, function (action) {
+        vscode.postMessage({ command: 'action', action: action, hash: state.selectedHash, path: path });
+    });
 });
 
 window.addEventListener('message', function (ev) {
@@ -1537,6 +1600,9 @@ window.addEventListener('message', function (ev) {
         renderTree();
         renderRows();
         renderDetail();
+        // Re-apply any pending session restore that arrived before (or during) this
+        // full re-render — setData cleared selection/folds/scroll above.
+        applyRestoreNow();
     } else if (m.command === 'appendCommits') {
         state.commits = state.commits.concat(m.commits || []);
         state.hasMore = !!m.hasMore;
@@ -1643,17 +1709,14 @@ window.addEventListener('message', function (ev) {
         setLoader(false);
         renderRows();
         applyPendingScroll();
+        applyRestoreNow();
     } else if (m.command === 'restoreViewState') {
-        // Git Graph-style restoration: selection, scroll, folds, detail pane
+        // Git Graph-style restoration, deferred through a pending snapshot so it
+        // survives the setData re-render that fires on every panel re-show.
         var vs = m.state || {};
-        if (vs.branch) state.selectedBranch = vs.branch;
-        if (vs.selectedHash) state.selectedHash = vs.selectedHash;
-        if (vs.collapsed) state.collapsed = vs.collapsed;
-        if (vs.collapsedSec) state.collapsedSec = vs.collapsedSec;
-        if (vs.expandedFolder) state.expandedFolder = vs.expandedFolder;
-        if (vs.detailVisible === true) state.detailVisible = true;
-        state._pendingScrollTop = typeof vs.scrollTop === 'number' ? vs.scrollTop : 0;
-        applyDetailVisibility();
+        if (vs.branch) { state.selectedBranch = vs.branch; renderTree(); }
+        state._pendingRestore = vs;
+        applyRestoreNow();
     } else if (m.command === 'loading') {
         setBusy(m.area, !!m.on);
     } else if (m.command === 'showDialog') {
@@ -1670,6 +1733,8 @@ window.addEventListener('message', function (ev) {
         showCompareDialog(m.branchName, m.currentBranch, m.commits || []);
     } else if (m.command === 'compareFilesResponse') {
         window._handleCompareFiles(m.hash, m.files || []);
+    } else if (m.command === 'showFileHistory') {
+        showFileHistoryDialog(m.filePath, m.history || []);
     } else if (m.command === 'multiCommitsResponse') {
         // Handle multi-select commits response
         state.multiCommits = m.commits || [];
@@ -2094,6 +2159,92 @@ window._handleCompareFiles = function (hash, files) {
         if (panel) renderCompareFiles(panel, files);
     }
 };
+
+/* ---- file history dialog (read-only: every commit touching one file) ---- */
+var fileHistoryState = { commits: [], filePath: '', visibleCount: 20 };
+
+function showFileHistoryDialog(filePath, history) {
+    fileHistoryState = { commits: history, filePath: filePath, visibleCount: 20 };
+    var overlay = document.createElement('div');
+    overlay.className = 'push-dialog-overlay';
+    overlay.id = 'file-history-dialog';
+
+    function renderCommitBatch(startIdx, endIdx) {
+        return history.slice(startIdx, endIdx).map(function (c) {
+            var cleanMessage = (c.message || '').replace(/^`{1,3}\s*/, '');
+            var fullInfo = c.shortHash + ' ' + cleanMessage + '\n' + c.author + ' ' + fmtDate(c.date) + ' (' + fmtRelativeTime(c.date) + ')';
+            return '<div class="push-commit-row" data-hash="' + esc(c.hash) + '" data-title="' + esc(fullInfo) + '">' +
+                '<span class="push-commit-hash">' + esc(c.shortHash) + '</span>' +
+                '<span class="push-commit-msg">' + esc(cleanMessage) + '</span>' +
+                '<span class="push-commit-author">' + esc(c.author) + '</span>' +
+                '<span class="push-commit-date" data-title="' + esc(fmtDate(c.date)) + '">' + esc(fmtRelativeTime(c.date)) + '</span>' +
+                '</div>';
+        }).join('');
+    }
+
+    var commitRows = renderCommitBatch(0, 20);
+    var loadMoreHtml = '';
+    if (history.length > 20) {
+        loadMoreHtml = '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: history.length - 20 }) + '</button></div>';
+    }
+
+    var headerText = T('fileHistory.title') + ' <span class="push-compare-sub">' + esc(filePath) + '</span>';
+
+    overlay.innerHTML = '<div class="push-dialog-box">' +
+        '<div class="push-dialog-header">' + headerText + '</div>' +
+        '<div class="push-dialog-body">' +
+        '<div class="push-commits-list full"><div class="push-commits-scroll" id="file-history-scroll">' + commitRows + loadMoreHtml + '</div></div>' +
+        '</div>' +
+        '<div class="push-dialog-actions">' +
+        '<span class="file-history-hint">' + T('fileHistory.dblclickHint') + '</span>' +
+        '<button class="dialog-btn secondary" data-action="close">' + T('common.close') + '</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+
+    // Event delegation so dynamically added (load-more) rows work without duplicate handlers
+    var scroll = overlay.querySelector('#file-history-scroll');
+    scroll.addEventListener('click', function (e) {
+        var row = e.target.closest('.push-commit-row');
+        if (!row) { return; }
+        overlay.querySelectorAll('.push-commit-row').forEach(function (r) { r.classList.remove('sel'); });
+        row.classList.add('sel');
+    });
+    scroll.addEventListener('dblclick', function (e) {
+        var row = e.target.closest('.push-commit-row');
+        if (!row) { return; }
+        vscode.postMessage({ command: 'action', action: 'fileDiff', hash: row.getAttribute('data-hash'), path: filePath });
+    });
+
+    var loadMoreBtn = overlay.querySelector('.push-load-more-btn');
+    if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', function () {
+            var currentVisible = fileHistoryState.visibleCount || 20;
+            var nextBatchEnd = Math.min(currentVisible + 20, history.length);
+            var newRows = renderCommitBatch(currentVisible, nextBatchEnd);
+            var loadMoreContainer = overlay.querySelector('.push-load-more-container');
+            if (loadMoreContainer) {
+                var tempDiv = document.createElement('div');
+                tempDiv.innerHTML = newRows;
+                while (tempDiv.firstChild) {
+                    loadMoreContainer.parentNode.insertBefore(tempDiv.firstChild, loadMoreContainer);
+                }
+            }
+            fileHistoryState.visibleCount = nextBatchEnd;
+            if (nextBatchEnd < history.length) {
+                loadMoreBtn.textContent = T('common.loadMoreCommits', { n: history.length - nextBatchEnd });
+            } else {
+                loadMoreBtn.parentElement.remove();
+            }
+        });
+    }
+
+    overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            overlay.remove();
+        });
+    });
+}
 
 /* ---------- operation status indicator ---------- */
 // Operation status bar button event delegation (bind once, handle all clicks)

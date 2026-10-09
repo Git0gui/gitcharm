@@ -24,6 +24,8 @@
     "cmd.revealCommit": "View Commit in GitCharm",
     "cmd.updateBranch": "Update",
     "cmd.commitBranch": "Commit...",
+    "cmd.viewFileHistory": "View File History",
+    "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "Enable branch info caching for faster startup (cache is persisted and only updated on repository changes or Git operations)",
     "config.pullStrategy": "Update strategy when pulling a remote branch",
     "config.pullStrategy.merge": "Use git pull (merge)",

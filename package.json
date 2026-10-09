@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -154,6 +154,11 @@
         "command": "idea-git.commitBranch",
         "title": "%cmd.commitBranch%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.viewFileHistory",
+        "title": "%cmd.viewFileHistory%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {
@@ -177,12 +182,18 @@
         }
       ]
     },
+    "submenus": [
+      {
+        "id": "idea-git.editorSubmenu",
+        "label": "%submenu.gitcharm%"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
-          "command": "idea-git.compareFileWithBranch",
+          "submenu": "idea-git.editorSubmenu",
           "when": "resourceScheme == file",
-          "group": "navigation@100"
+          "group": "navigation@90"
         },
         {
           "command": "idea-git.toggleBlame",
@@ -195,6 +206,18 @@
           "command": "idea-git.toggleBlame",
           "when": "resourceScheme == file",
           "group": "navigation@1"
+        }
+      ],
+      "idea-git.editorSubmenu": [
+        {
+          "command": "idea-git.compareFileWithBranch",
+          "when": "resourceScheme == file",
+          "group": "1_compare@1"
+        },
+        {
+          "command": "idea-git.viewFileHistory",
+          "when": "resourceScheme == file",
+          "group": "3_history@1"
         }
       ],
       "commandPalette": [
@@ -224,6 +247,11 @@
           "command": "idea-git.compareFileWithBranch",
           "when": "resourceScheme == file",
           "group": "navigation@100"
+        },
+        {
+          "command": "idea-git.viewFileHistory",
+          "when": "resourceScheme == file",
+          "group": "navigation@101"
         }
       ]
     },

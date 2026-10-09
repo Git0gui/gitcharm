@@ -133,6 +133,15 @@ const zh: Record<string, string> = {
     'cherryPick.pickSelectMultiple': '选择多个提交拣选',
     'cherryPick.pickSelectMultipleDesc': '按住 Ctrl/Cmd 多选',
     'cherryPick.pickModePlaceHolder': '选择拣选模式',
+    'cherryPick.fileSuccess': '已从提交中检出文件 "{file}"',
+    'cherryPick.fileFailed': '挑选文件失败: {error}',
+
+    // file diff / history
+    'fileHistory.title': '文件历史',
+    'fileHistory.dblclickHint': '双击提交查看该文件在此提交的改动',
+    'fileHistory.empty': '该文件没有历史记录',
+    'fileHistory.failed': '获取文件历史失败: {error}',
+    'common.noFileSelected': '未选择文件',
     'cherryPick.pickPlaceHolder': '选择要拣选的提交（可多选）',
     'cherryPick.pickTitle': '拣选提交',
 
@@ -142,6 +151,11 @@ const zh: Record<string, string> = {
     'push.forceSuccess': '已强制推送 "{name}" 到远程',
     'push.failed': '推送失败: {error}',
     'push.pushedTo': '已推送到 {remote}{branch}',
+    'push.behindRemote': '"{name}" 落后远程 {count} 个提交，仍可强制推送',
+    'push.rejectedNonFastForward': '推送被拒绝：本地分支 "{name}" 落后于远程，请先拉取或强制推送',
+    'push.remoteAhead': '推送被拒绝：远程有本地没有的提交，请先 git pull 再推送',
+    'push.permissionDenied': '推送失败：权限不足，请检查仓库访问权限',
+    'push.authFailed': '推送失败：认证失败，请检查凭据',
     'pull.strategyMerge': '合并式拉取',
     'pull.strategyRebase': '变基式拉取',
     'pull.success': '{strategy}: 已从远程拉取 "{name}"',
@@ -315,6 +329,8 @@ const zh: Record<string, string> = {
     'menu.squashCommits': '合并提交',
     'menu.interactiveRebase': '交互式变基',
     'menu.copyHash': '复制 Hash',
+    'menu.fileCompareLocal': '与当前本地文件对比',
+    'menu.fileCherryPick': '挑选文件',
 
     // push dialog
     'pushDlg.allCommits': '全部提交',
@@ -472,6 +488,15 @@ const en: Record<string, string> = {
     'cherryPick.pickSelectMultiple': 'Select multiple commits',
     'cherryPick.pickSelectMultipleDesc': 'Hold Ctrl/Cmd to multi-select',
     'cherryPick.pickModePlaceHolder': 'Select pick mode',
+    'cherryPick.fileSuccess': 'Checked out file "{file}" from commit',
+    'cherryPick.fileFailed': 'Cherry-pick file failed: {error}',
+
+    // file diff / history
+    'fileHistory.title': 'File History',
+    'fileHistory.dblclickHint': 'Double-click a commit to view its changes to this file',
+    'fileHistory.empty': 'No history for this file',
+    'fileHistory.failed': 'Failed to get file history: {error}',
+    'common.noFileSelected': 'No file selected',
     'cherryPick.pickPlaceHolder': 'Select commits to cherry-pick (multi-select)',
     'cherryPick.pickTitle': 'Cherry-Pick Commits',
 
@@ -481,6 +506,11 @@ const en: Record<string, string> = {
     'push.forceSuccess': 'Force-pushed "{name}" to remote',
     'push.failed': 'Push failed: {error}',
     'push.pushedTo': 'Pushed to {remote}{branch}',
+    'push.behindRemote': '"{name}" is behind remote by {count} commits; force-push available',
+    'push.rejectedNonFastForward': 'Push rejected: local branch "{name}" is behind remote. Pull first or force-push.',
+    'push.remoteAhead': 'Push rejected: remote has commits you don\'t have locally. Run git pull first.',
+    'push.permissionDenied': 'Push failed: permission denied. Check repository access.',
+    'push.authFailed': 'Push failed: authentication failed. Check your credentials.',
     'pull.strategyMerge': 'Merge pull',
     'pull.strategyRebase': 'Rebase pull',
     'pull.success': '{strategy}: pulled "{name}" from remote',
@@ -654,6 +684,8 @@ const en: Record<string, string> = {
     'menu.squashCommits': 'Squash Commits',
     'menu.interactiveRebase': 'Interactive Rebase',
     'menu.copyHash': 'Copy Hash',
+    'menu.fileCompareLocal': 'Compare with Local File',
+    'menu.fileCherryPick': 'Cherry-Pick File',
 
     // push dialog
     'pushDlg.allCommits': 'All Commits',

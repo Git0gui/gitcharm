@@ -7,4 +7,3 @@ pyrightconfig.json
 **/*.map
 **/*.ts
 node_modules/**
-resources/screenshots/**
