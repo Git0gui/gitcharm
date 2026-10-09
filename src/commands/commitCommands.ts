@@ -669,46 +669,6 @@ export function registerCommitCommands(
             }
         }),
 
-        // SCM staged file: compare with working tree
-        vscode.commands.registerCommand('idea-git.compareStagedWithWorkingTree', async (resource?: vscode.Uri) => {
-            const uri = resource ?? vscode.window.activeTextEditor?.document.uri;
-            if (!uri) {
-                vscode.window.showErrorMessage(t('common.noFileSelected'));
-                return;
-            }
-            try {
-                const stagedContent = await gitService.getStagedFileContent(uri.fsPath);
-                const workingContent = await vscode.workspace.fs.readFile(uri);
-                const diff = await gitService.diffTwoContents(stagedContent.toString(), workingContent.toString(), uri.fsPath);
-                const doc = await vscode.workspace.openTextDocument({ content: diff, language: 'diff' });
-                await vscode.window.showTextDocument(doc, { preview: true });
-            } catch (error) {
-                vscode.window.showErrorMessage(t('fileDiff.failed', { error: String(error) }));
-            }
-        }),
-
-        // SCM staged file: cherry-pick file from a commit
-        vscode.commands.registerCommand('idea-git.cherryPickFile', async (resource?: vscode.Uri) => {
-            const uri = resource ?? vscode.window.activeTextEditor?.document.uri;
-            if (!uri) {
-                vscode.window.showErrorMessage(t('common.noFileSelected'));
-                return;
-            }
-            const commits = await graphView.getSelectedCommits();
-            if (!commits || commits.length === 0) {
-                vscode.window.showErrorMessage(t('cherryPick.fileNoCommitSelected'));
-                return;
-            }
-            const commitHash = commits[0].hash;
-            try {
-                await gitService.checkoutFileFromCommit(commitHash, uri.fsPath);
-                vscode.window.showInformationMessage(t('cherryPick.fileSuccess', { file: uri.fsPath.split('/').pop() ?? uri.fsPath }));
-                graphView.refresh();
-            } catch (error) {
-                vscode.window.showErrorMessage(t('cherryPick.fileFailed', { error: String(error) }));
-            }
-        }),
-
         // View file history across branches
         vscode.commands.registerCommand('idea-git.viewFileHistory', async (uri?: vscode.Uri) => {
             const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;

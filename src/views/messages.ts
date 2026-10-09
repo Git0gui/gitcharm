@@ -97,7 +97,7 @@ export type WebviewAction =
     | 'checkout' | 'push' | 'pull' | 'fetch' | 'merge' | 'rebase' | 'update'
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
-    | 'fileDiff' | 'resumeCherryPick';
+    | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
 export type WebviewToExtMessage =
@@ -131,5 +131,4 @@ export type WebviewToExtMessage =
     | { command: 'getCompareFiles'; hash: string }
     | { command: 'getCompareAllFiles' }
     | { command: 'compareFileDiff'; hash: string; path: string }
-    | { command: 'compareDialogClosed' }
-    | { command: 'selectedCommitsUpdated'; commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> };
+    | { command: 'compareDialogClosed' };

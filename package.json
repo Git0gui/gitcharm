@@ -156,16 +156,6 @@
         "category": "GitCharm"
       },
       {
-        "command": "idea-git.compareStagedWithWorkingTree",
-        "title": "%cmd.compareStagedWithWorkingTree%",
-        "category": "GitCharm"
-      },
-      {
-        "command": "idea-git.cherryPickFile",
-        "title": "%cmd.cherryPickFile%",
-        "category": "GitCharm"
-      },
-      {
         "command": "idea-git.viewFileHistory",
         "title": "%cmd.viewFileHistory%",
         "category": "GitCharm"
@@ -223,16 +213,6 @@
           "command": "idea-git.compareFileWithBranch",
           "when": "resourceScheme == file",
           "group": "1_compare@1"
-        },
-        {
-          "command": "idea-git.compareStagedWithWorkingTree",
-          "when": "resourceScheme == file && scmProvider == git && scmResourceGroup == staged",
-          "group": "1_compare@2"
-        },
-        {
-          "command": "idea-git.cherryPickFile",
-          "when": "resourceScheme == file",
-          "group": "2_cherrypick@1"
         },
         {
           "command": "idea-git.viewFileHistory",

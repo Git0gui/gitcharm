@@ -1473,10 +1473,30 @@ document.getElementById('d-files').addEventListener('click', function (e) {
         saveViewState();
         return;
     }
+});
+
+// Double-click a file in the detail panel to open its commit diff (was single-click)
+document.getElementById('d-files').addEventListener('dblclick', function (e) {
     var file = e.target.closest('.frow.file');
     if (file && state.selectedHash) {
         vscode.postMessage({ command: 'action', action: 'fileDiff', hash: state.selectedHash, path: file.getAttribute('data-path') });
     }
+});
+
+// Right-click a file in the detail panel: compare against local working tree / cherry-pick the file
+document.getElementById('d-files').addEventListener('contextmenu', function (e) {
+    var file = e.target.closest('.frow.file');
+    if (!file || !state.selectedHash) { return; }
+    e.preventDefault();
+    if (window._hideTooltip) window._hideTooltip();
+    var path = file.getAttribute('data-path');
+    var items = [
+        ['fileCompareLocal', T('menu.fileCompareLocal')],
+        ['fileCherryPick', T('menu.fileCherryPick')]
+    ];
+    showMenu(e.clientX, e.clientY, items, function (action) {
+        vscode.postMessage({ command: 'action', action: action, hash: state.selectedHash, path: path });
+    });
 });
 
 window.addEventListener('message', function (ev) {

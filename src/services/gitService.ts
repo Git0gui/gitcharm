@@ -672,34 +672,6 @@ export class GitService {
         return (await this.executeGitArgs(['show', '--stat', hash])).trim();
     }
 
-    /** Get staged file content (index version) */
-    async getStagedFileContent(filePath: string): Promise<Buffer> {
-        const repo = this._resolveRoot();
-        if (!repo) {throw new Error('No repository');}
-        // :0:filepath gets the index (staged) version
-        const output = await this.executeGitArgs(['show', `:${filePath}`]);
-        return Buffer.from(output, 'utf8');
-    }
-
-    /** Diff two arbitrary contents by path */
-    async diffTwoContents(oldContent: string, newContent: string, filePath: string): Promise<string> {
-        const fs = require('fs');
-        const os = require('os');
-        const path = require('path');
-        const tmpDir = os.tmpdir();
-        const oldFile = path.join(tmpDir, `gitcharm-old-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
-        const newFile = path.join(tmpDir, `gitcharm-new-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
-        try {
-            fs.writeFileSync(oldFile, oldContent, 'utf8');
-            fs.writeFileSync(newFile, newContent, 'utf8');
-            const diff = await this.executeGitArgs(['diff', '--no-index', oldFile, newFile]);
-            return diff;
-        } finally {
-            try { fs.unlinkSync(oldFile); } catch {}
-            try { fs.unlinkSync(newFile); } catch {}
-        }
-    }
-
     /** Checkout a single file from a specific commit into working tree */
     async checkoutFileFromCommit(commitHash: string, filePath: string): Promise<void> {
         assertHash(commitHash);

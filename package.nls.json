@@ -24,8 +24,6 @@
     "cmd.revealCommit": "View Commit in GitCharm",
     "cmd.updateBranch": "Update",
     "cmd.commitBranch": "Commit...",
-    "cmd.compareStagedWithWorkingTree": "Compare with Working Tree",
-    "cmd.cherryPickFile": "Cherry-Pick File",
     "cmd.viewFileHistory": "View File History",
     "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "Enable branch info caching for faster startup (cache is persisted and only updated on repository changes or Git operations)",

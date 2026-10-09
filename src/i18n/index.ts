@@ -133,12 +133,10 @@ const zh: Record<string, string> = {
     'cherryPick.pickSelectMultiple': '选择多个提交拣选',
     'cherryPick.pickSelectMultipleDesc': '按住 Ctrl/Cmd 多选',
     'cherryPick.pickModePlaceHolder': '选择拣选模式',
-    'cherryPick.fileNoCommitSelected': '请先在提交列表中选择一个提交',
     'cherryPick.fileSuccess': '已从提交中检出文件 "{file}"',
     'cherryPick.fileFailed': '挑选文件失败: {error}',
 
     // file diff / history
-    'fileDiff.failed': '文件对比失败: {error}',
     'fileHistory.empty': '该文件没有历史记录',
     'fileHistory.failed': '获取文件历史失败: {error}',
     'common.noFileSelected': '未选择文件',
@@ -329,6 +327,8 @@ const zh: Record<string, string> = {
     'menu.squashCommits': '合并提交',
     'menu.interactiveRebase': '交互式变基',
     'menu.copyHash': '复制 Hash',
+    'menu.fileCompareLocal': '与当前本地文件对比',
+    'menu.fileCherryPick': '挑选文件',
 
     // push dialog
     'pushDlg.allCommits': '全部提交',
@@ -486,12 +486,10 @@ const en: Record<string, string> = {
     'cherryPick.pickSelectMultiple': 'Select multiple commits',
     'cherryPick.pickSelectMultipleDesc': 'Hold Ctrl/Cmd to multi-select',
     'cherryPick.pickModePlaceHolder': 'Select pick mode',
-    'cherryPick.fileNoCommitSelected': 'Please select a commit first',
     'cherryPick.fileSuccess': 'Checked out file "{file}" from commit',
     'cherryPick.fileFailed': 'Cherry-pick file failed: {error}',
 
     // file diff / history
-    'fileDiff.failed': 'File diff failed: {error}',
     'fileHistory.empty': 'No history for this file',
     'fileHistory.failed': 'Failed to get file history: {error}',
     'common.noFileSelected': 'No file selected',
@@ -682,6 +680,8 @@ const en: Record<string, string> = {
     'menu.squashCommits': 'Squash Commits',
     'menu.interactiveRebase': 'Interactive Rebase',
     'menu.copyHash': 'Copy Hash',
+    'menu.fileCompareLocal': 'Compare with Local File',
+    'menu.fileCherryPick': 'Cherry-Pick File',
 
     // push dialog
     'pushDlg.allCommits': 'All Commits',

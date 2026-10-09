@@ -47,7 +47,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _memento: vscode.Memento;
     private _pendingViewState: PersistedViewState | undefined;
     private _viewStateTimer: NodeJS.Timeout | undefined;
-    private _selectedCommits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> | undefined;
 
     constructor(gitService: GitService, extensionUri: vscode.Uri, memento: vscode.Memento) {
         this._gitService = gitService;
@@ -309,11 +308,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    /** Get currently selected commits in the webview */
-    getSelectedCommits(): Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> | undefined {
-        return this._selectedCommits;
-    }
-
     /** Show file history dialog */
     async showFileHistory(filePath: string, history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string; branch: string }>): Promise<void> {
         if (!this._view) {return;}
@@ -516,10 +510,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     } finally {
                         this._postLoading('multiCommits', false);
                     }
-                    break;
-                case 'selectedCommitsUpdated':
-                    // Track selected commits for cherry-pick file operations
-                    this._selectedCommits = message.commits;
                     break;
                 case 'refreshBranches':
                     await this._refreshBranchesOnly();
@@ -903,6 +893,35 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     this._gitService.selectedCommitHash = message.hash;
                     await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath: message.path });
                     return;
+                case 'fileCompareLocal': {
+                    const hash = message.hash;
+                    const relPath = message.path;
+                    if (!hash || !relPath) { return; }
+                    const repoPath = this._gitService.repositoryPath;
+                    if (!repoPath) { return; }
+                    try {
+                        const localUri = vscode.Uri.file(path.join(repoPath, relPath));
+                        const fileName = relPath.split('/').pop() || relPath;
+                        const title = `${fileName} (${hash.substring(0, 7)} ↔ ${t('ext.workingTree')})`;
+                        await vscode.commands.executeCommand('vscode.diff', this._gitBlobUri(hash, relPath), localUri, title);
+                    } catch (err) {
+                        vscode.window.showErrorMessage(t('view.openDiffFailed', { error: String(err) }));
+                    }
+                    return;
+                }
+                case 'fileCherryPick': {
+                    const hash = message.hash;
+                    const relPath = message.path;
+                    if (!hash || !relPath) { return; }
+                    try {
+                        await this._gitService.checkoutFileFromCommit(hash, relPath);
+                        const fileName = relPath.split('/').pop() || relPath;
+                        vscode.window.showInformationMessage(t('cherryPick.fileSuccess', { file: fileName }));
+                    } catch (err) {
+                        vscode.window.showErrorMessage(t('cherryPick.fileFailed', { error: String(err) }));
+                    }
+                    return;
+                }
             }
             await this._reload(forceReload);
         } catch (error) {
