@@ -74,6 +74,8 @@ export function activate(ctx: vscode.ExtensionContext) {
 
     watcher.onDidCreate(() => {
         vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', true);
+        gitService.refreshRepositoryPath();
+        void graphView.refreshRepoState(true);
         if (!statusBarItem) {
             statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
             statusBarItem.text = '$(repo) GitCharm';
@@ -86,6 +88,8 @@ export function activate(ctx: vscode.ExtensionContext) {
 
     watcher.onDidDelete(() => {
         vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', false);
+        gitService.refreshRepositoryPath();
+        void graphView.refreshRepoState(true);
         if (statusBarItem) {
             statusBarItem.dispose();
             statusBarItem = undefined;

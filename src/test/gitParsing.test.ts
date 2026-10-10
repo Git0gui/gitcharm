@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseWorkingTreeSummary } from '../services/gitUtils';
 
 describe('parseTrackInfo', () => {
     it('parses ahead and behind counts', () => {
@@ -98,5 +98,26 @@ describe('branchCacheStore', () => {
     it('rejects missing branches arrays', () => {
         const bad = JSON.stringify({ version: BRANCH_CACHE_VERSION, timestamp: 1, repoPath: '/repo', branches: {} });
         assert.equal(parseBranchCache(bad), undefined);
+    });
+});
+
+describe('parseWorkingTreeSummary', () => {
+    it('returns zero files for a clean working tree', () => {
+        assert.deepEqual(parseWorkingTreeSummary(''), { files: 0, untracked: 0 });
+    });
+
+    it('counts untracked entries', () => {
+        const raw = '?? a.txt\0?? dir/b.txt\0';
+        assert.deepEqual(parseWorkingTreeSummary(raw), { files: 2, untracked: 2 });
+    });
+
+    it('counts staged and unstaged changes as files', () => {
+        const raw = 'M  a.txt\0 D b.txt\0?? c.txt\0';
+        assert.deepEqual(parseWorkingTreeSummary(raw), { files: 3, untracked: 1 });
+    });
+
+    it('does not double-count the rename source field', () => {
+        const raw = 'R  renamed_a.txt\0a.txt\0?? new.txt\0';
+        assert.deepEqual(parseWorkingTreeSummary(raw), { files: 2, untracked: 1 });
     });
 });

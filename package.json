@@ -162,6 +162,11 @@
         "command": "idea-git.viewFileHistory",
         "title": "%cmd.viewFileHistory%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.initRepository",
+        "title": "%cmd.initRepository%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {
@@ -169,8 +174,7 @@
         {
           "id": "idea-git-explorer",
           "title": "GitCharm",
-          "icon": "resources/git-icon.svg",
-          "when": "idea-git.hasGitRepo"
+          "icon": "resources/git-icon.svg"
         }
       ]
     },
@@ -180,8 +184,7 @@
           "id": "idea-git.mainView",
           "name": "Git Log",
           "type": "webview",
-          "icon": "resources/git-icon.svg",
-          "when": "idea-git.hasGitRepo"
+          "icon": "resources/git-icon.svg"
         }
       ]
     },
@@ -224,6 +227,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "idea-git.initRepository",
+          "when": "!idea-git.hasGitRepo"
+        },
         {
           "command": "idea-git.revealCommit",
           "when": "false"

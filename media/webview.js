@@ -203,6 +203,9 @@ var state = {
     fileViewMode: 'tree',
     graphVisible: true,
     graphOverflow: false,
+    repoState: 'ready',
+    repoFolder: '',
+    repoPendingFiles: 0,
     _pendingScrollTop: null,
     _pendingRestore: null
 };
@@ -1620,9 +1623,89 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     });
 });
 
+/* ---------- repository guidance page (no git / no repo / no commits) ---------- */
+var REPO_ICONS = {
+    noGit: '<svg width="34" height="34" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 4.5 6 2l4 2.5v3L6 10 2 7.5z"/><circle cx="11" cy="11" r="2.6"/><path d="M13 13l1.6 1.6"/></svg>',
+    noRepo: '<svg width="34" height="34" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="4" cy="3.5" r="1.8"/><circle cx="4" cy="12.5" r="1.8"/><circle cx="12" cy="8" r="1.8"/><path d="M4 5.3v5.4M5.6 4.4l4.8 2.8M5.6 11.6l4.8-2.8"/></svg>',
+    emptyRepo: '<svg width="34" height="34" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 5.5h12v8H2z"/><path d="M2 5.5 4 2h8l2 3.5"/><path d="M6.5 9h3"/></svg>'
+};
+
+function repoStateCopy(repoState, folder, files) {
+    if (repoState === 'noGit') {
+        return {
+            title: T('repo.noGitTitle'),
+            body: T('repo.noGitBody'),
+            actions: [{ key: 'recheckRepository', label: T('repo.recheck'), primary: true }]
+        };
+    }
+    if (repoState === 'noRepo') {
+        return {
+            title: T('repo.noRepoTitle'),
+            body: T('repo.noRepoBody', { folder: folder || '' }),
+            actions: [
+                { key: 'initRepository', label: T('repo.init'), primary: true },
+                { key: 'recheckRepository', label: T('repo.recheck') }
+            ]
+        };
+    }
+    if (repoState === 'emptyRepo') {
+        return {
+            title: T('repo.emptyTitle'),
+            body: files > 0 ? T('repo.emptyPending', { files: files }) : T('repo.emptyClean'),
+            actions: [
+                { key: 'openScmView', label: T('repo.openScm'), primary: true },
+                { key: 'recheckRepository', label: T('repo.recheck') }
+            ]
+        };
+    }
+    return null;
+}
+
+function renderRepoState() {
+    var box = document.getElementById('repo-state');
+    if (!box) { return; }
+    var copy = repoStateCopy(state.repoState, state.repoFolder, state.repoPendingFiles);
+    if (!copy) {
+        box.className = '';
+        box.innerHTML = '';
+        return;
+    }
+    var btns = copy.actions.map(function (a) {
+        return '<button type="button" class="dialog-btn ' + (a.primary ? 'primary' : 'secondary') +
+            '" data-repo-action="' + a.key + '">' + esc(a.label) + '</button>';
+    }).join('');
+    box.className = 'on ' + state.repoState;
+    box.innerHTML = '<div class="rs-card">' +
+        '<div class="rs-icon">' + (REPO_ICONS[state.repoState] || '') + '</div>' +
+        '<div class="rs-title">' + esc(copy.title) + '</div>' +
+        '<div class="rs-body">' + esc(copy.body) + '</div>' +
+        '<div class="rs-actions">' + btns + '</div>' +
+        '</div>';
+}
+
+var repoStateBox = document.getElementById('repo-state');
+if (repoStateBox) {
+    repoStateBox.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-repo-action]');
+        if (!btn) { return; }
+        vscode.postMessage({ command: btn.getAttribute('data-repo-action') });
+    });
+}
+
 window.addEventListener('message', function (ev) {
     var m = ev.data;
-    if (m.command === 'setData') {
+    if (m.command === 'setRepoState') {
+        state.repoState = m.state || 'ready';
+        state.repoPendingFiles = typeof m.files === 'number' ? m.files : 0;
+        state.repoFolder = m.folder || '';
+        if (state.repoState !== 'ready') {
+            // No data will ever arrive to clear the startup skeleton
+            loadState.initialLoad = false;
+            hideInitialLoading();
+            setBusy('rows', false);
+        }
+        renderRepoState();
+    } else if (m.command === 'setData') {
         // Clear all state before setting new data to prevent accumulation
         state.commits = m.commits || [];
         state.local = m.local || [];
@@ -1633,6 +1716,12 @@ window.addEventListener('message', function (ev) {
         state.hasMore = !!m.hasMore;
         state.headHash = m.headHash || '';
         state.inProgress = m.inProgress || null;
+        
+        // History has arrived — drop the guidance page if it was showing
+        if (state.repoState !== 'ready') {
+            state.repoState = 'ready';
+            renderRepoState();
+        }
         
         // Mark branches as loaded
         loadState.branchesLoaded = true;

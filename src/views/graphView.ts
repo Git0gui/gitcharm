@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, LogFilters } from '../services/gitService';
-import { ExtToWebviewMessage, OperationKind, PersistedViewState, WebviewToExtMessage } from './messages';
+import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getLocale, t, webviewStrings } from '../i18n';
 
@@ -46,6 +46,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
     private _initialInProgress: 'rebase' | 'merge' | 'cherry-pick' | null = null;
+    // Last computed panel state; buffered until the webview reports 'ready'
+    private _repoState: RepoUiState | undefined;
+    private _repoPendingFiles: number | undefined;
     private _memento: vscode.Memento;
     private _pendingViewState: PersistedViewState | undefined;
     private _viewStateTimer: NodeJS.Timeout | undefined;
@@ -126,6 +129,61 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      */
     refresh(force: boolean = true): void {
         void this._reload(force);
+    }
+
+    /**
+     * Decide what the panel can actually show, then either paint the guidance
+     * page or load history. Every git query is skipped while git is missing,
+     * the workspace is not a repository, or the repository has no commits —
+     * otherwise the user gets a stack of "unknown revision" error toasts
+     * instead of an actionable message.
+     */
+    async refreshRepoState(forceGitProbe: boolean = false): Promise<RepoUiState> {
+        const state = await this._computeRepoState(forceGitProbe);
+        this._repoState = state;
+        this._repoPendingFiles = state === 'emptyRepo'
+            ? (await this._gitService.getWorkingTreeSummary().catch(() => undefined))?.files
+            : undefined;
+        this._postRepoState();
+
+        if (state === 'ready') {
+            Promise.all([
+                this._loadAndDisplayBranches(),
+                this._loadAndDisplayCommits()
+            ]).catch(error => {
+                vscode.window.showErrorMessage(t('view.loadDataFailed', { error: String(error) }));
+            });
+            void this._refreshDivergence();
+            return state;
+        }
+
+        // No history to show: reset both regions so nothing stale stays on screen
+        this._post({ command: 'setBranches', local: [], remote: [], currentBranch: '' });
+        this._post({ command: 'setCommits', commits: [], hasMore: false });
+        return state;
+    }
+
+    private async _computeRepoState(forceGitProbe: boolean): Promise<RepoUiState> {
+        if (!(await this._gitService.isGitAvailable(forceGitProbe))) {return 'noGit';}
+        if (!this._gitService.repositoryPath) {return 'noRepo';}
+        try {
+            return (await this._gitService.hasAnyCommit()) ? 'ready' : 'emptyRepo';
+        } catch (error) {
+            logger.debug('[GitCharm] Commit existence probe failed:', error);
+            return 'emptyRepo';
+        }
+    }
+
+    /** Push the buffered state to the webview once it has loaded its script. */
+    private _postRepoState(): void {
+        if (!this._webviewReady || !this._repoState) {return;}
+        const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        this._post({
+            command: 'setRepoState',
+            state: this._repoState,
+            files: this._repoPendingFiles,
+            folder: folder ? path.basename(folder) : undefined
+        });
     }
 
     /**
@@ -516,8 +574,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'refreshBranches':
                     await this._refreshBranchesOnly();
                     break;
+                case 'initRepository':
+                    await vscode.commands.executeCommand('idea-git.initRepository');
+                    break;
+                case 'recheckRepository':
+                    await this.refreshRepoState(true);
+                    break;
+                case 'openScmView':
+                    await vscode.commands.executeCommand('workbench.view.scm');
+                    break;
                 case 'ready':
                     this._webviewReady = true;
+                    this._postRepoState();
                     if (this._initialInProgress) {
                         this._post({ command: 'setInProgress', inProgress: this._initialInProgress });
                     }
@@ -614,32 +682,22 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             })
             .catch(() => {});
 
-        // Step 2 & 3: Load branches AND commits in parallel for maximum speed
-        // Both operations run concurrently, each updates the UI when ready.
-        // Restore the previously viewed branch first so the initial commit
-        // load targets it directly (Git Graph-style state restoration),
-        // but only when the snapshot is within the session TTL window.
+        // Step 2: Restore the previously viewed branch first so the initial commit
+        // load targets it directly (Git Graph-style state restoration), but only
+        // when the snapshot is within the session TTL window.
         const savedView = this._restorableState();
         if (savedView?.branch) {
             this._branch = savedView.branch;
         }
-        Promise.all([
-            this._loadAndDisplayBranches(),
-            this._loadAndDisplayCommits()
-        ]).catch(error => {
-            vscode.window.showErrorMessage(t('view.loadDataFailed', { error: String(error) }));
-        });
-        
-        // Step 4: Async refresh divergence data (non-blocking, updates arrows when ready)
-        setTimeout(() => {
-            void this._refreshDivergence();
-        }, 100);
+
+        // Step 3: probe git / repository / commits, then load branches AND commits
+        // in parallel only when there is history to load.
+        void this.refreshRepoState();
 
         // Re-query (current branch included) every time the panel is shown again
         webviewView.onDidChangeVisibility(() => {
             if (webviewView.visible) {
-                this._reload(true);
-                this._startBranchCheck();
+                void this._onPanelShown();
             } else {
                 this._stopBranchCheck();
                 this._flushViewState();
@@ -648,6 +706,19 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 this._gitService.releaseHeavyCaches();
             }
         });
+    }
+
+    /** Panel became visible: refresh the repository state, then history. */
+    private async _onPanelShown(): Promise<void> {
+        if (this._repoState === 'ready') {
+            this._reload(true);
+            this._startBranchCheck();
+            return;
+        }
+        // Guidance is showing — re-probe; refreshRepoState loads history itself
+        // as soon as the repository becomes usable.
+        const state = await this.refreshRepoState(true);
+        if (state === 'ready') {this._startBranchCheck();}
     }
 
     private _flushViewState(): void {
@@ -1017,6 +1088,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     private async _reload(force: boolean = false) {
         if (!this._view) {return;}
+        if (this._repoState !== 'ready') {
+            // Guidance page is showing; history queries would fail here
+            await this.refreshRepoState();
+            return;
+        }
         logger.debug(`[GitCharm] _reload called with branch=${this._branch || 'all'}, force=${force}`);
         this._postLoading('rows', true);
         try {
@@ -1097,7 +1173,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Load branches in background and update webview when ready.
      */
     private async _loadAndDisplayBranches(): Promise<void> {
-        if (!this._view) {return;}
+        if (!this._view || this._repoState !== 'ready') {return;}
         
         try {
             // Get cached branch data (fast, no git commands if cache hit)
@@ -1174,7 +1250,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Load commits in background and update webview when ready.
      */
     private async _loadAndDisplayCommits(): Promise<void> {
-        if (!this._view) {return;}
+        if (!this._view || this._repoState !== 'ready') {return;}
         
         const startTime = Date.now();
         logger.debug('[GitCharm] Starting commit load...');
@@ -1247,7 +1323,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * the tree can show push/pull arrows without blocking the main data load.
      */
     private async _refreshDivergence(): Promise<void> {
-        if (!this._view) {return;}
+        if (!this._view || this._repoState !== 'ready') {return;}
         try {
             // Use lightweight method that only queries divergence info (much faster than full branch details)
             const divergenceMap = await this._gitService.getDivergenceInfo();
@@ -1355,6 +1431,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             <div id="d-info"></div>
         </div>
     </div>
+    <div id="repo-state"></div>
     <script nonce="${nonce}">window.__INITIAL__=${payloadJson};window.I18N_STRINGS=${i18nJson};</script>
     <script nonce="${nonce}" src="${jsUri}"></script>
 </body>

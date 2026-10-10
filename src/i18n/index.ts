@@ -293,6 +293,23 @@ const zh: Record<string, string> = {
     'ui.refreshFiles': '刷新提交文件',
     'ui.loadingCommitFiles': '正在加载提交文件...',
 
+    // repository guidance page (panel stays usable without git / repo / commits)
+    'repo.noGitTitle': '未检测到 Git',
+    'repo.noGitBody': '插件需要调用 git 命令。请先安装 Git，或把 git 加入 PATH，然后重新检测。',
+    'repo.noRepoTitle': '当前文件夹不是 Git 仓库',
+    'repo.noRepoBody': '在 {folder} 初始化一个仓库，即可拥有与 IDEA 一致的提交图谱。',
+    'repo.emptyTitle': '仓库还没有提交',
+    'repo.emptyPending': '{files} 个文件等待首次提交。在源代码管理面板中提交后，点「重新检测」即可看到提交图谱。',
+    'repo.emptyClean': '工作区是干净的，尚未创建任何提交。添加文件并在源代码管理面板提交后，点「重新检测」。',
+    'repo.init': '初始化仓库',
+    'repo.recheck': '重新检测',
+    'repo.openScm': '打开源代码管理',
+    'repo.noFolder': '未打开工作区文件夹，无法初始化仓库',
+    'repo.alreadyRepo': '当前工作区已经是一个 Git 仓库',
+    'repo.initProgress': '正在初始化 Git 仓库...',
+    'repo.initSuccess': '已在 {path} 初始化 Git 仓库',
+    'repo.initFailed': '初始化仓库失败: {error}',
+
     // webview dynamic strings
     'w.divergeBehind': '落后远端 {n} 个提交，需更新',
     'w.divergeAhead': '领先远端 {n} 个提交，需推送',
@@ -652,6 +669,23 @@ const en: Record<string, string> = {
     'ui.showCommitFiles': 'Show commit files',
     'ui.refreshFiles': 'Refresh commit files',
     'ui.loadingCommitFiles': 'Loading commit files...',
+
+    // repository guidance page (panel stays usable without git / repo / commits)
+    'repo.noGitTitle': 'Git not found',
+    'repo.noGitBody': 'This panel needs the git command line. Install Git, or add it to your PATH, then re-check.',
+    'repo.noRepoTitle': 'This folder is not a Git repository',
+    'repo.noRepoBody': 'Initialize a repository in {folder} to get the IDEA-style commit graph.',
+    'repo.emptyTitle': 'No commits yet',
+    'repo.emptyPending': '{files} file(s) are waiting for the first commit. Commit them in Source Control, then re-check.',
+    'repo.emptyClean': 'The working tree is clean and no commit exists yet. Add files, commit in Source Control, then re-check.',
+    'repo.init': 'Initialize repository',
+    'repo.recheck': 'Re-check',
+    'repo.openScm': 'Open Source Control',
+    'repo.noFolder': 'No workspace folder is open, so a repository cannot be initialized',
+    'repo.alreadyRepo': 'This workspace is already a Git repository',
+    'repo.initProgress': 'Initializing Git repository...',
+    'repo.initSuccess': 'Initialized a Git repository in {path}',
+    'repo.initFailed': 'Failed to initialize the repository: {error}',
 
     // webview dynamic strings
     'w.divergeBehind': '{n} behind remote, update needed',

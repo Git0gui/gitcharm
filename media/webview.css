@@ -1600,3 +1600,60 @@ canvas.graph-canvas {
     flex-shrink: 0;
     opacity: 0.8;
 }
+
+/* ---------- repository guidance page (no git / no repo / no commits) ---------- */
+#repo-state {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: var(--vscode-editor-background, #1e1e1e);
+}
+#repo-state.on {
+    display: flex;
+    animation: contentFadeIn 0.3s ease-out;
+}
+.rs-card {
+    max-width: 380px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+}
+.rs-icon {
+    width: 56px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    color: var(--vscode-textLink-foreground, #3794ff);
+    background: var(--vscode-input-background, #3c3c3c);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.rs-card:hover .rs-icon { transform: scale(1.05); }
+#repo-state.noGit .rs-icon {
+    color: var(--vscode-errorForeground, #f48771);
+}
+.rs-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--vscode-foreground, #cccccc);
+}
+.rs-body {
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--vscode-descriptionForeground, #9d9d9d);
+}
+.rs-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}

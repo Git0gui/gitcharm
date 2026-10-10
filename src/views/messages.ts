@@ -8,6 +8,15 @@ import { GraphCommit, CommitDetail, FileStat } from '../services/gitService';
 
 export type OperationKind = 'rebase' | 'merge' | 'cherry-pick';
 
+/**
+ * What the panel can meaningfully show right now. Anything other than 'ready'
+ * replaces the commit list with guidance instead of running commands that fail.
+ * - noGit: the git binary could not be spawned
+ * - noRepo: git works, but the workspace is not a repository
+ * - emptyRepo: repository exists but has no commits yet
+ */
+export type RepoUiState = 'ready' | 'noGit' | 'noRepo' | 'emptyRepo';
+
 export interface DivergenceEntry {
     ahead: number;
     behind: number;
@@ -55,6 +64,7 @@ export type ExtToWebviewMessage =
         searchContext?: { query?: string; resultCount?: number };
     }
     | { command: 'setBranches'; local: string[]; remote: string[]; currentBranch?: string }
+    | { command: 'setRepoState'; state: RepoUiState; files?: number; folder?: string }
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'setHeadHash'; headHash: string }
@@ -111,6 +121,9 @@ export type WebviewToExtMessage =
     | { command: 'selectBranch'; branch: string }
     | { command: 'refresh' }
     | { command: 'refreshBranches' }
+    | { command: 'initRepository' }
+    | { command: 'recheckRepository' }
+    | { command: 'openScmView' }
     | { command: 'refreshFiles'; hash: string }
     | { command: 'showNotification'; message: string; type?: string }
     | { command: 'showStatusBarMessage'; message: string; timeout?: number }

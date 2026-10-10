@@ -25,6 +25,7 @@
     "cmd.updateBranch": "更新",
     "cmd.commitBranch": "提交...",
     "cmd.viewFileHistory": "查看文件所有历史提交",
+    "cmd.initRepository": "在当前文件夹初始化 Git 仓库",
     "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "启用分支信息缓存以提高启动速度（缓存持久保存，仅在仓库变化或执行 Git 操作时更新）",
     "config.pullStrategy": "拉取远程分支时的更新策略",
