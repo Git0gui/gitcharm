@@ -54,8 +54,9 @@ GitCharm provides a three-panel Git log view:
 ### Performance
 
 - **Instant open**: three-phase progressive loading (skeleton → branches → commits), startup < 10ms
-- **Filesystem refs**: parses `.git/refs` (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
-- **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; invalidated on Git operations
+- **Filesystem refs**: resolves the git directory (plain clones, linked worktrees, shared `commondir`) and parses its refs (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
+- **No built-in git extension needed**: GitCharm never activates or reads `vscode.git`; branch lists, the current branch and ahead/behind counts all come from our own refs reader and a single `for-each-ref`, so the panel works even with the built-in Git extension disabled
+- **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; a filesystem watch on the git directory drops stale caches when you commit, fetch or switch branches elsewhere
 - **Canvas graph**: pixel-precise commit graph rendered on Canvas with high-DPI support, several times faster than SVG/DOM
 
 ### Experience & Reliability
@@ -76,7 +77,7 @@ GitCharm provides a three-panel Git log view:
 
 - **VSCode** ≥ 1.95.0, or **Qoder** latest
 - **Git** ≥ 2.0.0
-- Built-in **vscode.git** extension enabled (default)
+- No dependency on the built-in **vscode.git** extension — it may be disabled
 
 ## Installation
 
@@ -203,8 +204,9 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 ### 性能
 
 - **秒开**：三阶段渐进式加载（骨架屏 → 分支 → 提交），启动 < 10ms
-- **直读 refs**：直接解析 `.git/refs`（loose + packed-refs），数百分支也不卡死，避免大量 `git rev-parse` 子进程
-- **智能缓存**：分支信息持久化到工作区状态（Memento），重启后立即可用；Git 操作后自动失效更新
+- **直读 refs**：先定位 git 目录（普通克隆、linked worktree、共享 `commondir` 都能解析），再直接读 refs（loose + packed-refs），数百分支也不卡死，避免大量 `git rev-parse` 子进程
+- **不依赖内置 git 扩展**：全程不激活、不读取 `vscode.git`；分支列表、当前分支、超前/落后全部来自自研 refs 读取器 + 单条 `for-each-ref`，禁用内置 Git 扩展也能正常用
+- **智能缓存**：分支信息持久化到工作区状态（Memento），重启后立即可用；对 git 目录做文件监听，在别处提交 / 拉取 / 切分支时自动失效
 - **Canvas 图谱**：提交图用 Canvas 像素级绘制，高 DPI 自适应，比 SVG/DOM 高效数倍
 
 ### 体验与可靠性
@@ -225,7 +227,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 - **VSCode** ≥ 1.95.0，或 **Qoder** 最新版
 - **Git** ≥ 2.0.0
-- 内置 **vscode.git** 扩展保持启用（默认开启）
+- 不依赖内置 **vscode.git** 扩展，禁用它也能正常使用
 
 ## 安装
 

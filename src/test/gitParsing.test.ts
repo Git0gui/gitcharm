@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseWorkingTreeSummary } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary } from '../services/gitUtils';
 
 describe('parseTrackInfo', () => {
     it('parses ahead and behind counts', () => {
@@ -41,6 +41,22 @@ describe('parseSymbolicRef', () => {
 
     it('returns undefined for non-branch refs', () => {
         assert.equal(parseSymbolicRef('ref: refs/remotes/origin/main'), undefined);
+    });
+});
+
+describe('parseRefPath', () => {
+    it('accepts both HEAD and head-name spellings', () => {
+        assert.equal(parseRefPath('ref: refs/heads/main'), 'main');
+        assert.equal(parseRefPath('refs/heads/feature_x\n'), 'feature_x');
+    });
+
+    it('keeps nested branch paths', () => {
+        assert.equal(parseRefPath('refs/heads/v0.0.5/no-vscode-git'), 'v0.0.5/no-vscode-git');
+    });
+
+    it('returns undefined for SHAs and non-branch refs', () => {
+        assert.equal(parseRefPath('8e9cf03f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d'), undefined);
+        assert.equal(parseRefPath('refs/tags/v1.0.0'), undefined);
     });
 });
 

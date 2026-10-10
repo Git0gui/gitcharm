@@ -5,6 +5,7 @@ import { GitService, GraphCommit, LogFilters } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
+import { resolveGitDir } from '../services/gitPaths';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -794,8 +795,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Watch .git/HEAD for external branch switches (CLI, other tools).
-     * Falls back to 2s polling when the watcher cannot be set up.
+     * Watch HEAD for external branch switches (CLI, other tools). Falls back to
+     * 2s polling when the watcher cannot be set up.
      */
     private _startBranchCheck(): void {
         this._stopBranchCheck(); // Clear any existing watcher/timer
@@ -806,7 +807,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         });
 
         const repoPath = this._gitService.repositoryPath;
-        const headFile = repoPath ? path.join(repoPath, '.git', 'HEAD') : undefined;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        const headFile = gitDir ? path.join(gitDir, 'HEAD') : undefined;
         if (headFile && fs.existsSync(headFile)) {
             try {
                 this._headWatcher = fs.watch(headFile, () => {
@@ -854,7 +856,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     /**
      * Pause branch checking for a specified duration (ms).
-     * Used after operations like rename that temporarily confuse vscode.git state.
+     * Used after operations like rename, while our own optimistic update is still
+     * the freshest view of the branch tree.
      */
     pauseBranchCheck(durationMs: number): void {
         this._skipBranchCheckUntil = Date.now() + durationMs;

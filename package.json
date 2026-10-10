@@ -25,9 +25,6 @@
   "engines": {
     "vscode": "^1.95.0"
   },
-  "extensionDependencies": [
-    "vscode.git"
-  ],
   "categories": [
     "SCM Providers",
     "Visualization"

@@ -40,19 +40,17 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 写提交消息类内容用 `-F`（文件）或 stdin，**禁止拼进命令行**（注入风险 + 编码问题）。
 - rebase/squash 等需要编辑器的操作：用 `env` + `cp` 作为 GIT_EDITOR/GIT_SEQUENCE_EDITOR，不要依赖交互式编辑器。
 
-### vscode.git API 使用边界
+### 禁止依赖 vscode.git（已彻底移除）
 
-- **冷路径禁止 await vscode.git 激活**：`_loadGraphData` / `_loadBranchDetails` / `getDivergenceInfo` / `getHeadHash` 不得触发 `gitExt.activate()`（其内部仓库扫描是多 spawn，大仓库秒级）。
-- **热路径可以用**：push / compareFileWithBranch 的分支存在性检查（`getBranchesFromVscodeGit()`），以及 `onDidChangeState` 事件驱动缓存失效。
-- `repo.getRefs()` 替代已废弃的 `state.refs`（最低 VSCode 1.95.0）。
-- **已知缺陷，禁止踩**：
-  - `repo.log(branch)` 忽略分支参数、返回共享缓存的相同对象引用，且 `repo.log()` 忽略 since/until——提交日志一律走 git 命令。
-  - `Commit.parents` 可能是 `string[]` 或 `object[].hash`，必须做类型归一化（`typeof p === 'string' ? p : p.hash`）。
-  - vscode.git 的 refs/HEAD 变更事件有延迟：需要权威数据时读 `.git/HEAD` 文件 + `for-each-ref` 校准，不要信事件到达时的 state 快照。
+- **不得再调用内置 git 扩展的任何 API**：`extensions.getExtension('vscode.git')`、`gitExt.activate()`、`getAPI(1)`、`repo.state` / `repo.getRefs()` / `repo.log()`，全部禁止；`package.json` 也不再有 `extensionDependencies`。回归测试 `src/test/noVscodeGit.test.ts` 会扫 `src/**` 拦住这类用法。
+- **原因**：激活 vscode.git 是多 spawn 的仓库扫描（大仓库秒级），且它的 refs/HEAD 缓存滞后于真实变更；`repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定，踩坑成本高于收益。
+- **原本从 vscode.git 拿的数据一律走本地实现**：分支名 → `RefsReader`（读 refs 文件）；upstream/ahead/behind → `_getBranchTrackInfo()`（单条 `for-each-ref`）；当前分支 → 读 `HEAD`；工作区是否干净 → `getWorkingTreeSummary()`（`status --porcelain -z`）；缓存失效 → `GitService.watchRepositoryChanges()`（`fs.watch` git 目录）。
+- git 目录一律用 `resolveGitDir()` / `resolveCommonDir()`（src/services/gitPaths.ts）定位：linked worktree 的 `.git` 是 `gitdir:` 指针文件，refs 还可能在 `commondir` 指向的公共目录，直接拼 `.git/refs` 会读空。
 
 ## 4. 缓存体系（性能的生命线）
 
-- **分支/tag 映射走 `RefsReader`**：直接读 `.git/refs`（loose + packed-refs），5s TTL；ref 变更操作后必须 `invalidate()`。禁止为取分支列表 spawn `git branch`。
+- **分支/tag 映射走 `RefsReader`**：直接读 git 目录下的 refs（`resolveGitDir()` + `commondir`，loose + packed-refs），5s TTL；ref 变更操作后必须 `invalidate()`。禁止为取分支列表 spawn `git branch`。
+- **外部变更靠 `watchRepositoryChanges()`**：`fs.watch` git 目录（HEAD/index/packed-refs + refs 递归），250ms 防抖后 `invalidateVolatile()`。这是 vscode.git `onDidChangeState` 删除后的唯一事件驱动失效来源；订阅者用 `Disposable` 归还，最后一个 token 释放时才真正关监听。
 - **ahead/behind 走 `_getBranchTrackInfo()`**：单次 `for-each-ref refs/heads/ --format=%(refname:short)|%(upstream:short)|%(upstream:track)`，3s TTL + in-flight Promise 去重；格式化的 track 字符串要剥字面引号。
 - **divergence 箭头展示必须实时**：`_refreshDivergence` 用 `force=true` 绕过 TTL。
 - **持久化一律用 `ExtensionContext.workspaceState`（Memento）**，禁止往工作区写缓存文件（`.vscode/.qoder` 下的旧缓存文件机制已删除，`PersistedBranchCache` 负责一次性迁移）。
@@ -94,14 +92,14 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 ## 8. Git 操作行为约定
 
 - **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。
-- **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防 vscode.git 延迟覆盖）；删除时若正在查看该分支的提交则切回当前分支。
+- **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防止乐观结果被过期快照盖掉）；删除时若正在查看该分支的提交则切回当前分支。
 - 重命名/删除后必须同步内部状态（`_branch`、`selectedBranch`），否则后续命令报 `unknown revision`。
 - push 允许无 upstream 分支：`getUpstream` 包 try-catch；无 upstream 时用 `git log remote..local` 取待推送提交；推送对话框提交列表与箭头共用 `getBranchesWithDetails` 同一数据源，区分首次推送/已最新/有待推送三态，提交分页（首屏 20 条 + 加载更多）。
 - `updateBranch`：远程存在同名分支时自动建立跟踪。
 - **冲突处理（merge/rebase/cherry-pick）一律交 VSCode 原生 SCM 视图**，插件只提供继续/终止入口和顶部持久化状态栏；冲突检测合并 stderr+stdout，扫 `unmerged files`、cherry-pick failed 等关键词，`isConflictError` 入参必须是字符串。
 - 分支刷新按钮只刷分支树，不动中间提交列表；拉取其他分支时不触发 `_reload()`。
-- 外部分支变更检测：`fs.watch` `.git/HEAD` + 300ms 防抖，仅 webview 可见时启用，轮询（2s）作兜底；`pauseBranchCheck` 冷却语义保留。
-- 日期筛选：`--since/--until` 与 vscode.git 均不认 ISO 8601 的 `T`，转换为空格分隔格式。
+- 外部分支变更检测：`fs.watch` git 目录下的 `HEAD`（用 `resolveGitDir()` 定位）+ 300ms 防抖，仅 webview 可见时启用，轮询（2s）作兜底；`pauseBranchCheck` 冷却语义保留。
+- 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
 
 ## 9. Git 工作流约束（AI 协作红线）

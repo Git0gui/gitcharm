@@ -4,7 +4,6 @@ import { parseLogLine } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
-    getBranchesFromVscodeGit,
     getBranchName,
     combineErrorText,
     tryHandleConflict,
@@ -158,7 +157,7 @@ export function registerBranchCommands(
                         graphView.pauseBranchCheck(5000);
 
                         vscode.window.showInformationMessage(t('branch.deleted', { name: branchName }));
-                        // Don't refresh - optimistic update is sufficient and avoids vscode.git state delay issues
+                        // Don't refresh - the optimistic update already matches git's state
                     } catch (error: any) {
                         // Rollback on failure
                         graphView.addBranchOptimistically(branchName, false);
@@ -209,7 +208,8 @@ export function registerBranchCommands(
                         // Invalidate caches after successful rename
                         gitService.invalidateVolatile();
 
-                        // Pause branch checking for 5 seconds to let vscode.git update its state
+                        // Cool down branch detection so our own git-dir watch does not
+                        // race the optimistic update already applied to the tree
                         // This prevents the periodic check from overwriting the optimistic update with stale data
                         graphView.pauseBranchCheck(5000);
 
@@ -349,34 +349,13 @@ export function registerBranchCommands(
             }
 
             try {
-                // Try to get branch data from VSCode's built-in Git extension first (fastest)
-                const repoPath = gitService.repositoryPath;
-                let remoteExists: boolean;
-
-                if (repoPath) {
-                    const vscodeBranches = await getBranchesFromVscodeGit(repoPath);
-                    if (vscodeBranches) {
-                        // Got branches from vscode.git - use them!
-                        // Note: vscodeBranches.remote already contains full names like "origin/main"
-                        const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
-                        remoteExists = vscodeBranches.remote.includes(searchName);
-                        logger.debug(`[GitCharm] Using vscode.git cache for push check. Looking for: ${searchName}, Found: ${remoteExists}`);
-                        logger.debug(`[GitCharm] Remote branches: ${vscodeBranches.remote.join(', ')}`);
-                    } else {
-                        // Fallback to our own cache
-                        const branchDetails = await gitService.getBranchesWithDetails(false);
-                        const remoteNames = branchDetails.remote.map(b => b.name);
-                        const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
-                        remoteExists = remoteNames.includes(searchName);
-                        logger.debug(`[GitCharm] Using internal cache for push check. Looking for: ${searchName}, Found: ${remoteExists}`);
-                    }
-                } else {
-                    // No repo path, use internal cache
-                    const branchDetails = await gitService.getBranchesWithDetails(false);
-                    const remoteNames = branchDetails.remote.map(b => b.name);
-                    const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
-                    remoteExists = remoteNames.includes(searchName);
-                }
+                // Remote-tracking branch names come from our refs cache (loose refs +
+                // packed-refs on disk), so this never waits on another extension.
+                const branchDetails = await gitService.getBranchesWithDetails(false);
+                const remoteNames = branchDetails.remote.map(b => b.name);
+                const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
+                const remoteExists = remoteNames.includes(searchName);
+                logger.debug(`[GitCharm] Push check: looking for ${searchName}, found: ${remoteExists}`);
 
                 // For existing branches, get commits for display
                 // For new branches, skip commit fetching (show empty list)

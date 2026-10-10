@@ -4,7 +4,7 @@ import { GitService } from './services/gitService';
 import { logger } from './services/logger';
 import { GraphViewProvider } from './views/graphView';
 import { BlameProvider } from './services/blameProvider';
-import { getVscodeGitApi, getBranchesFromVscodeGit, gitBlobUri } from './commands/helpers';
+import { gitBlobUri } from './commands/helpers';
 import { registerBranchCommands } from './commands/branchCommands';
 import { registerCommitCommands } from './commands/commitCommands';
 import { registerOperationCommands } from './commands/operationCommands';
@@ -101,22 +101,10 @@ export function activate(ctx: vscode.ExtensionContext) {
 
     ctx.subscriptions.push(watcher);
 
-    // Register event-driven cache invalidation using VSCode's built-in Git extension
-    // This ensures caches stay fresh without polling - react to actual repository changes
-    const repoPath = gitService.repositoryPath;
-    if (repoPath) {
-        getVscodeGitApi().then(api => {
-            if (api) {
-                const disposables = gitService.registerVscodeGitEventListeners(api);
-                ctx.subscriptions.push(...disposables);
-                logger.info('[GitCharm] Event-driven cache invalidation enabled via vscode.git');
-            } else {
-                logger.debug('[GitCharm] vscode.git not available, falling back to manual refresh');
-            }
-        }).catch(error => {
-            logger.debug('[GitCharm] Failed to register vscode.git event listeners:', error);
-        });
-    }
+    // Event-driven cache invalidation: watch the git directory itself, so changes
+    // made outside this extension (CLI, other tools) are picked up without polling
+    // and without depending on the built-in git extension being enabled.
+    ctx.subscriptions.push(gitService.watchRepositoryChanges());
 
     // Command to focus the Git Log panel
     ctx.subscriptions.push(
@@ -192,23 +180,11 @@ export function activate(ctx: vscode.ExtensionContext) {
             }
 
             try {
-                // Try to get branch data from VSCode's built-in Git extension first (fastest)
-                let localBranches: string[] = [];
-                let remoteBranches: string[] = [];
-
-                const vscodeBranches = await getBranchesFromVscodeGit(repoPath);
-                if (vscodeBranches) {
-                    // Got branches from vscode.git - use them!
-                    localBranches = vscodeBranches.local;
-                    remoteBranches = vscodeBranches.remote;
-                    logger.debug('[GitCharm] Using vscode.git cache for file comparison');
-                } else {
-                    // Fallback to our own cache
-                    const branchDetails = await gitService.getBranchesWithDetails(false);
-                    localBranches = branchDetails.local.map(b => b.name);
-                    remoteBranches = branchDetails.remote.map(b => b.name);
-                    logger.debug('[GitCharm] Using internal cache for file comparison');
-                }
+                // Branch names come from our own refs cache (read off disk), so the
+                // picker works whether or not the built-in git extension is enabled.
+                const branchDetails = await gitService.getBranchesWithDetails(false);
+                const localBranches = branchDetails.local.map(b => b.name);
+                const remoteBranches = branchDetails.remote.map(b => b.name);
 
                 const items = [
                     ...localBranches.map(b => ({ label: `$(git-branch) ${b}`, description: t('common.local'), branch: b })),

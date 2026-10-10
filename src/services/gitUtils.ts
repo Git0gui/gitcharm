@@ -130,6 +130,17 @@ export function parseSymbolicRef(content: string): string | undefined {
     return m ? m[1] : undefined;
 }
 
+/**
+ * Extract a branch name from either a `ref: refs/heads/<branch>` line (HEAD) or a
+ * bare `refs/heads/<branch>` path (`rebase-merge/head-name`). Returns undefined for
+ * raw SHAs and for refs outside refs/heads.
+ */
+export function parseRefPath(content: string): string | undefined {
+    const trimmed = content.trim();
+    const symbolic = trimmed.match(/^(?:ref: )?refs\/heads\/(.+)$/);
+    return symbolic ? symbolic[1] : undefined;
+}
+
 /** Working-tree change counts used by the empty-repository guidance page. */
 export interface WorkingTreeSummary {
     files: number;

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { runGit, splitNul, GitRunOptions } from './gitRunner';
 import { RefsReader } from './refsReader';
 import { PersistedBranchCache } from './persistedBranchCache';
+import { resolveCommonDir, resolveGitDir } from './gitPaths';
 import { logger } from './logger';
 import {
     GitCommit,
@@ -15,6 +16,7 @@ import {
     parseGraphLine,
     parseTrackInfo,
     parseSymbolicRef,
+    parseRefPath,
     parseWorkingTreeSummary,
     WorkingTreeSummary
 } from './gitUtils';
@@ -92,6 +94,12 @@ function q(value: string): string {
     return `"${value}"`;
 }
 
+/** Git dir writes arrive in bursts (one command touches several files). */
+const WATCH_DEBOUNCE_MS = 250;
+
+/** Top-level git dir files whose contents the caches depend on. */
+const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir']);
+
 export class GitService {
     /** Max cached entries per cache (branch list / commit log / per-commit files). */
     static readonly CACHE_MAX = 20; // Reduced from 30 to save memory
@@ -131,6 +139,12 @@ export class GitService {
     // Cached result of the `git --version` probe (undefined = not probed yet)
     private _gitAvailable: boolean | undefined;
 
+    // Git directory watcher: external changes (CLI, other tools) invalidate caches
+    private _repoWatchers: fs.FSWatcher[] = [];
+    private _watchDebounce: NodeJS.Timeout | undefined;
+    private _watchRequested = false;
+    private readonly _watchTokens = new Set<symbol>();
+
     constructor(memento: vscode.Memento) {
         this._persistedCache = new PersistedBranchCache(memento, () => this._repositoryPath);
         this._repositoryPath = this._resolveRoot();
@@ -149,36 +163,80 @@ export class GitService {
             this._rootValue = undefined;
             // Re-resolve root for new workspace
             this._repositoryPath = this._resolveRoot();
+            this._startRepositoryWatch();
         });
     }
 
     /**
-     * Register event listeners from VSCode's built-in Git extension to automatically
-     * invalidate caches when repository state changes (branches, commits, etc.).
-     * This enables event-driven cache updates instead of polling.
+     * Watch the git directory so changes made outside this extension (CLI
+     * commits, fetches, branch switches by other tools) drop the caches that
+     * would otherwise go stale. Replaces the state events we used to borrow
+     * from vscode.git; debounced because git writes many files per command.
      */
-    registerVscodeGitEventListeners(api: any): vscode.Disposable[] {
-        const disposables: vscode.Disposable[] = [];
-        
-        if (!api || !api.repositories) {return disposables;}
-        
-        // Listen to all repositories' state changes
-        for (const repo of api.repositories) {
-            if (repo.rootUri && repo.rootUri.fsPath === this._repositoryPath) {
-                // Listen to repository state changes (branch switches, commits, fetches, etc.)
-                const disposable = repo.onDidChangeState(() => {
-                    logger.debug('[GitCharm] Repository state changed (via vscode.git), invalidating volatile caches');
-                    // Invalidate only volatile caches (graph, branches), keep immutable ones (commit details, files)
-                    this.invalidateVolatile();
-                });
-                disposables.push(disposable);
-                
-                logger.debug('[GitCharm] Registered vscode.git state change listener for', this._repositoryPath);
-                break;
+    watchRepositoryChanges(): vscode.Disposable {
+        this._watchRequested = true;
+        this._startRepositoryWatch();
+
+        const token = Symbol('gitWatch');
+        this._watchTokens.add(token);
+
+        return new vscode.Disposable(() => {
+            this._watchTokens.delete(token);
+            if (this._watchTokens.size === 0) {
+                this._watchRequested = false;
+                this._stopRepositoryWatch();
             }
+        });
+    }
+
+    private _startRepositoryWatch(): void {
+        this._stopRepositoryWatch();
+        if (!this._watchRequested) {return;}
+
+        const repoPath = this._resolveRoot();
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (!gitDir) {return;}
+
+        // HEAD/index/packed-refs live in the worktree's own git dir; refs may be
+        // shared through commondir, so both places get a watcher.
+        const targets: Array<{ dir: string; recursive: boolean }> = [
+            { dir: gitDir, recursive: false },
+            { dir: path.join(resolveCommonDir(gitDir), 'refs'), recursive: true }
+        ];
+        for (const target of targets) {
+            if (!fs.existsSync(target.dir)) {continue;}
+            try {
+                const watcher = fs.watch(target.dir, { recursive: target.recursive }, (_event, filename) => {
+                    if (target.recursive || !filename || WATCHED_STATE_FILES.has(filename.toString())) {
+                        this._scheduleWatchInvalidation();
+                    }
+                });
+                // Watching is a nicety: on failure the explicit invalidation after
+                // every mutation plus the webview's HEAD poll still keeps UI correct.
+                watcher.on('error', () => watcher.close());
+                this._repoWatchers.push(watcher);
+            } catch { /* platform without watch support */ }
         }
-        
-        return disposables;
+    }
+
+    private _scheduleWatchInvalidation(): void {
+        if (this._watchDebounce) {clearTimeout(this._watchDebounce);}
+        this._watchDebounce = setTimeout(() => {
+            this._watchDebounce = undefined;
+            logger.debug('[GitCharm] Git directory changed, volatile caches dropped');
+            this.invalidateVolatile();
+        }, WATCH_DEBOUNCE_MS);
+    }
+
+    private _stopRepositoryWatch(): void {
+        for (const watcher of this._repoWatchers) {
+            try { watcher.close(); } catch { /* already closed */ }
+        }
+        this._repoWatchers = [];
+        if (this._watchDebounce) {
+            clearTimeout(this._watchDebounce);
+            this._watchDebounce = undefined;
+        }
     }
 
     get repositoryPath(): string | undefined {
@@ -217,7 +275,11 @@ export class GitService {
         this._rootKey = undefined;
         this._rootValue = undefined;
         this.clearAllCaches();
-        return this._resolveRoot();
+        const root = this._resolveRoot();
+        // The watcher follows a specific directory, so a new repo (git init, clone)
+        // or a removed one needs the watch re-pointed.
+        this._startRepositoryWatch();
+        return root;
     }
 
     /**
@@ -774,179 +836,69 @@ export class GitService {
     }
 
     /**
-     * Get the current branch name
+     * Current branch name, read straight from the git directory. `.git/HEAD` is
+     * authoritative and updated synchronously by checkout / `branch -m` (even from
+     * another terminal), so no subprocess and no cached view is involved. Detached
+     * HEAD has no branch name and returns an empty string.
      */
     async getCurrentBranch(): Promise<string> {
-        // During rebase/merge, `branch --show-current` may return empty or HEAD.
-        // Fall back to reading .git/HEAD or .git/rebase-merge/head-name.
         const repo = this._resolveRoot();
         if (!repo) {return '';}
 
-        const fs = require('fs');
-        const path = require('path');
-        const gitDir = path.join(repo, '.git');
+        const gitDir = resolveGitDir(repo);
+        if (gitDir) {
+            // During an interactive rebase HEAD is detached; the branch we started
+            // from is parked in rebase-merge/head-name as a full ref path.
+            const headName = this._readGitFile(path.join(gitDir, 'rebase-merge', 'head-name'));
+            const rebasing = headName ? parseRefPath(headName) : undefined;
+            if (rebasing) {return rebasing;}
 
-        // During interactive rebase, the original branch name is stored in head-name
-        const headNamePath = path.join(gitDir, 'rebase-merge', 'head-name');
-        if (fs.existsSync(headNamePath)) {
-            try {
-                const content = fs.readFileSync(headNamePath, 'utf8').trim();
-                // Content is like "refs/heads/feature_x"
-                const match = content.match(/refs\/heads\/(.+)/);
-                if (match) {return match[1];}
-            } catch { /* ignore */ }
+            const branch = parseSymbolicRef(this._readGitFile(path.join(gitDir, 'HEAD')) ?? '');
+            return branch ?? '';
         }
 
-        // Prefer the authoritative .git/HEAD symbolic ref: it is updated synchronously
-        // by mutations like `git branch -m`, whereas vscode.git's cached HEAD.name lags
-        // and would make the current branch briefly show its pre-rename name.
-        try {
-            const headContent = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8');
-            const branch = parseSymbolicRef(headContent);
-            if (branch) {return branch;}
-            // Detached HEAD (raw SHA) falls through to vscode.git / git command below
-        } catch { /* ignore, fall through */ }
-
-        // Try vscode.git API first (fastest)
-        const repoPath = this._repositoryPath;
-        if (repoPath) {
-            try {
-                const getVscodeGitRepository = require('../extension').getVscodeGitRepository;
-                const repo = await getVscodeGitRepository(repoPath);
-                
-                if (repo && repo.state && repo.state.HEAD && repo.state.HEAD.name) {
-                    logger.debug('[GitCharm] Got current branch from vscode.git:', repo.state.HEAD.name);
-                    return repo.state.HEAD.name;
-                }
-            } catch (error) {
-                logger.debug('[GitCharm] Failed to get current branch from vscode.git:', error);
-            }
-        }
-        
-        // Fallback to git command
-        logger.debug('[GitCharm] Falling back to git command for current branch');
-
-        // During merge, branch --show-current usually works, but fall back to HEAD ref
-        const output = (await this.executeGitArgs(['branch', '--show-current'])).trim();
-        if (output && output !== 'HEAD') {return output;}
-
-        // Last resort: parse .git/HEAD for detached HEAD state
-        try {
-            const headContent = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8');
-            const branch = parseSymbolicRef(headContent);
-            if (branch) {return branch;}
-        } catch { /* ignore */ }
-
-        return output || '';
+        // Layout we cannot read (worktree pointer that no longer resolves): one
+        // plumbing call, still without activating any other extension.
+        const output = (await this.executeGitArgs(['symbolic-ref', '--short', '-q', 'HEAD'])).trim();
+        return output === 'HEAD' ? '' : output;
     }
 
-    /**
-     * Check if working tree is clean (no unstaged changes)
-     */
+    /** Read a small git bookkeeping file; undefined when it is missing or locked. */
+    private _readGitFile(filePath: string): string | undefined {
+        try {
+            return fs.readFileSync(filePath, 'utf8');
+        } catch {
+            return undefined;
+        }
+    }
+
+    /** Working tree has neither staged nor unstaged changes (single status call). */
     async isClean(): Promise<boolean> {
-        const repoPath = this._repositoryPath;
-        if (repoPath) {
-            try {
-                const getVscodeGitRepository = require('../extension').getVscodeGitRepository;
-                const repo = await getVscodeGitRepository(repoPath);
-                
-                if (repo && repo.state) {
-                    const workingTreeChanges = repo.state.workingTreeChanges || [];
-                    const indexChanges = repo.state.indexChanges || [];
-                    return workingTreeChanges.length === 0 && indexChanges.length === 0;
-                }
-            } catch (error) {
-                logger.debug('[GitCharm] Failed to check working tree status from vscode.git:', error);
-            }
-        }
-        
-        // Fallback to git command
-        const output = await this.executeGitArgs(['status', '--porcelain']);
-        return !output || output.trim() === '';
+        const summary = await this.getWorkingTreeSummary();
+        return summary.files === 0;
     }
 
-    /**
-     * Get all local branches
-     */
+    /** Local branch names, from refs on disk (no subprocess unless the layout is odd). */
     async getLocalBranches(): Promise<string[]> {
-        // Try vscode.git API first
-        const repoPath = this._repositoryPath;
-        if (repoPath) {
-            try {
-                const getVscodeGitRepository = require('../extension').getVscodeGitRepository;
-                const repo = await getVscodeGitRepository(repoPath);
-                
-                if (repo) {
-                    let refs: any[] = [];
-                    if (typeof repo.getRefs === 'function') {
-                        refs = await repo.getRefs();
-                    } else if (repo.state && repo.state.refs) {
-                        refs = repo.state.refs;
-                    }
-                    
-                    if (refs.length > 0) {
-                        const local = refs
-                            .filter(ref => ref.type === 0 && ref.name) // type 0 = Head (local branch)
-                            .map(ref => ref.name);
-                        logger.debug(`[GitCharm] Got ${local.length} local branches from vscode.git`);
-                        return local;
-                    }
-                }
-            } catch (error) {
-                logger.debug('[GitCharm] Failed to get local branches from vscode.git:', error);
-            }
-        }
-        
-        // Fallback to git command
-        logger.debug('[GitCharm] Falling back to git command for local branches');
-        const output = (await this.executeGitArgs(['branch', '--format=%(refname:short)'])).trim();
-        if (!output) {return [];}
-        return output.split('\n').filter(b => b.trim());
+        const names = this._refsReader.readBranchNames();
+        if (names.local.length > 0) {return names.local;}
+        return this._readRefNames('refs/heads/');
     }
 
-    /**
-     * Get all remote branches
-     */
+    /** Remote-tracking branch names (`origin/main` style), from refs on disk. */
     async getRemoteBranches(): Promise<string[]> {
-        // Try vscode.git API first
-        const repoPath = this._repositoryPath;
-        if (repoPath) {
-            try {
-                const getVscodeGitRepository = require('../extension').getVscodeGitRepository;
-                const repo = await getVscodeGitRepository(repoPath);
-                
-                if (repo) {
-                    let refs: any[] = [];
-                    if (typeof repo.getRefs === 'function') {
-                        refs = await repo.getRefs();
-                    } else if (repo.state && repo.state.refs) {
-                        refs = repo.state.refs;
-                    }
-                    
-                    if (refs.length > 0) {
-                        const remote = refs
-                            .filter(ref => ref.type === 1 && ref.name) // type 1 = RemoteHead
-                            .map(ref => {
-                                let name = ref.name;
-                                if (name.startsWith('refs/remotes/')) {
-                                    name = name.substring('refs/remotes/'.length);
-                                }
-                                return name;
-                            });
-                        logger.debug(`[GitCharm] Got ${remote.length} remote branches from vscode.git`);
-                        return remote;
-                    }
-                }
-            } catch (error) {
-                logger.debug('[GitCharm] Failed to get remote branches from vscode.git:', error);
-            }
-        }
-        
-        // Fallback to git command
-        logger.debug('[GitCharm] Falling back to git command for remote branches');
-        const output = (await this.executeGitArgs(['branch', '-r', '--format=%(refname:short)'])).trim();
-        if (!output) {return [];}
-        return output.split('\n').filter(b => b.trim());
+        const names = this._refsReader.readBranchNames();
+        if (names.remote.length > 0) {return names.remote;}
+        return this._readRefNames('refs/remotes/');
+    }
+
+    private async _readRefNames(namespace: string): Promise<string[]> {
+        const output = await this.executeGitArgs([
+            'for-each-ref', namespace, '--format=%(refname:short)'
+        ]);
+        return output.split('\n')
+            .map(line => line.replace(/^"|"$/g, '').trim())
+            .filter(Boolean);
     }
 
     /**
@@ -1491,9 +1443,9 @@ export class GitService {
     }
 
     private async _loadBranchDetails(): Promise<BranchDetails> {
-        // Cold-path design: no vscode.git activation, no subprocess for names.
-        // Branch names come straight from .git refs (fs reads); upstream/track
-        // info comes from one shared for-each-ref spawn.
+        // Cold-path design: no subprocess for names. Branch names come straight
+        // from the refs files (incl. packed-refs); upstream/track info comes from
+        // one shared for-each-ref spawn.
         const [currentBranch, trackMap] = await Promise.all([
             this.getCurrentBranch(),
             this._getBranchTrackInfo()
@@ -1502,15 +1454,14 @@ export class GitService {
         const names = this._refsReader.readBranchNames();
 
         if (names.local.length === 0 && names.remote.length === 0) {
-            // Unusual layout (e.g. worktree where .git is a file): use git commands
+            // Nothing readable on disk (unborn branch, inaccessible refs): ask git
             const local: BranchDetails['local'] = [];
             for (const [name, t] of trackMap) {
                 local.push({ name, upstream: t.upstream, ahead: t.ahead, behind: t.behind });
             }
             let remote: BranchDetails['remote'] = [];
             try {
-                const remoteOutput = await this.executeGitArgs(['branch', '-r', '--format=%(refname:short)']);
-                remote = remoteOutput.split('\n').filter(b => b.trim()).map(name => ({ name }));
+                remote = (await this._readRefNames('refs/remotes/')).map(name => ({ name }));
             } catch { /* no remotes */ }
             return { current: currentBranch, local, remote };
         }
@@ -1569,18 +1520,12 @@ export class GitService {
         const startTime = Date.now();
         logger.debug(`[GitCharm] _loadGraphData called: limit=${limit}, skip=${skip}, branch=${branch || 'all'}`);
         
-        // If searching by hash, always use git commands (vscode.git API doesn't support hash search)
+        // A hash-like query resolves to that single commit rather than a text search
         const searchText = f.text?.trim();
         const isHashLike = (v: string): boolean => /^[0-9a-f]{4,40}$/i.test(v);
         const hashSearch = searchText && isHashLike(searchText) ? searchText : undefined;
-        
         if (hashSearch) {
-            logger.debug(`[GitCharm] Hash-like search detected (${hashSearch}), using git commands directly`);
-            // Fall through to git command path below
-        } else if (f.from || f.to) {
-            // Date filters require git commands (vscode.git API doesn't support since/until reliably)
-            logger.debug(`[GitCharm] Date filter active, using git commands for accurate filtering`);
-            // Fall through to git command path below
+            logger.debug(`[GitCharm] Hash-like search detected (${hashSearch})`);
         }
         logger.debug('[GitCharm] Using git commands');
         
