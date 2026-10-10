@@ -444,6 +444,8 @@ function fmtRelativeTime(s) {
 }
 
 var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2"/><circle cx="4.5" cy="12.5" r="2"/><circle cx="11.5" cy="5.5" r="2"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
+// Same silhouette with filled nodes: the checked-out branch has to stand out in the tree.
+var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="4.5" cy="12.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="11.5" cy="5.5" r="2" fill="currentColor" stroke-width="1"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
 // Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
 // the stroke-based carets used across the panel. currentColor keeps it theme aware.
@@ -514,7 +516,9 @@ function renderTree() {
     var q = state.bfilter.toLowerCase();
     function match(n) { return !q || n.toLowerCase().indexOf(q) >= 0; }
     function item(n, icon, depth, label) {
-        var cls = 'bitem' + (n === state.selectedBranch ? ' sel' : '') + (n === state.current ? ' cur' : '') + (n === state.highlight ? ' hl' : '');
+        var isCur = n === state.current;
+        if (isCur) {icon = I_BRANCH_CURRENT;}
+        var cls = 'bitem' + (n === state.selectedBranch ? ' sel' : '') + (isCur ? ' cur' : '') + (n === state.highlight ? ' hl' : '');
         var d = state.divergence[n];
         var arrows = '';
         

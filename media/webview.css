@@ -434,6 +434,7 @@ svg { flex: none; }
 }
 .bitem.sel .bname { color: inherit; font-weight: 600; }
 .bitem.cur .bname { color: var(--vscode-textLink-foreground, #4da3ff); font-weight: 600; }
+.bitem.cur > svg { color: var(--vscode-textLink-foreground, #4da3ff); }
 .bitem.sel.cur .bname { color: inherit; }
 .bitem.hl { background: var(--vscode-list-hoverBackground, #2a2d2e); }
 .bname { overflow: hidden; text-overflow: ellipsis; }
