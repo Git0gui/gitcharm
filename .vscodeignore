@@ -1,9 +1,17 @@
 .vscode/**
 .qoder/**
 src/**
+out/test/**
 .gitignore
+.eslintrc.json
+.tsbuildinfo
+AGENTS.md
 tsconfig.json
 pyrightconfig.json
 **/*.map
 **/*.ts
+**/*.vsix
 node_modules/**
+# README screenshots are rewritten to the public GitHub repo when packaging,
+# so the copies inside the VSIX are never requested.
+resources/screenshots/**

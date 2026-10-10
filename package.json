@@ -33,8 +33,7 @@
     "Visualization"
   ],
   "activationEvents": [
-    "workspaceContains:.git",
-    "onView:idea-git.mainView"
+    "workspaceContains:.git"
   ],
   "main": "./out/extension.js",
   "contributes": {
