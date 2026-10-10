@@ -4,6 +4,7 @@ import * as path from 'path';
 import { GitService, GraphCommit, LogFilters } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
+import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -62,6 +63,29 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /** Type-checked postMessage; silently drops when the panel is not created yet. */
     private _post(msg: ExtToWebviewMessage): void {
         void this._view?.webview.postMessage(msg);
+    }
+
+    /** Media plus the active file-icon theme folder, so the webview may load their assets. */
+    private _webviewOptions(): vscode.WebviewOptions {
+        const roots = [vscode.Uri.joinPath(this._extensionUri, 'media')];
+        const themeRoot = iconThemeResourceRoot();
+        if (themeRoot) {roots.push(themeRoot);}
+        return { enableScripts: true, localResourceRoots: roots };
+    }
+
+    private _postFileIconTheme(): void {
+        const webview = this._view?.webview;
+        if (!webview) {return;}
+        // The theme folder can change between posts, so the allow-list is refreshed too.
+        webview.options = this._webviewOptions();
+        const pack = getFileIconPack(absolute => webview.asWebviewUri(vscode.Uri.file(absolute)).toString());
+        this._post({ command: 'setFileIconTheme', pack });
+    }
+
+    /** Re-resolve the file-icon theme after workbench.iconTheme or the colour theme changed. */
+    refreshFileIconTheme(): void {
+        invalidateFileIconCache();
+        if (this._webviewReady) {this._postFileIconTheme();}
     }
 
     /**
@@ -473,10 +497,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     async resolveWebviewView(webviewView: vscode.WebviewView) {
         this._view = webviewView;
         this._webviewReady = false;
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'media')]
-        };
+        webviewView.webview.options = this._webviewOptions();
 
         webviewView.webview.onDidReceiveMessage(async (message: WebviewToExtMessage) => {
             switch (message.command) {
@@ -586,6 +607,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'ready':
                     this._webviewReady = true;
                     this._postRepoState();
+                    this._postFileIconTheme();
                     if (this._initialInProgress) {
                         this._post({ command: 'setInProgress', inProgress: this._initialInProgress });
                     }

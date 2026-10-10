@@ -206,6 +206,7 @@ var state = {
     repoState: 'ready',
     repoFolder: '',
     repoPendingFiles: 0,
+    iconPack: null,
     _pendingScrollTop: null,
     _pendingRestore: null
 };
@@ -444,7 +445,10 @@ function fmtRelativeTime(s) {
 
 var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2"/><circle cx="4.5" cy="12.5" r="2"/><circle cx="11.5" cy="5.5" r="2"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
-var I_FOLDER = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 4h5l2 2h7v8H1V4z"/></svg>';
+// Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
+// the stroke-based carets used across the panel. currentColor keeps it theme aware.
+var I_FOLDER = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+var I_FOLDER_OPEN = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2V7H2v-2.5z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/><path d="M2 7.8h12l-1.2 4.3a1.5 1.5 0 0 1-1.4 1.1H3.6a1.5 1.5 0 0 1-1.4-1.1L2 8.6" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
 var I_FILE = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 1.5h6l3 3v10h-9z"/></svg>';
 // VSCode-explorer-style chevrons (theme-aware via currentColor)
 var I_CARET_R = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
@@ -452,6 +456,52 @@ var I_CARET_D = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" str
 // File list mode switch icons: indented tree vs. flat rows (theme-aware via currentColor)
 var I_TREE_MODE = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 3h4"/><path d="M6 6.5h4"/><path d="M6 12.5h4"/><path d="M2 9.5h4"/><path d="M4 3v9.5"/></svg>';
 var I_FLAT_MODE = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 3.5h12"/><path d="M2 8h12"/><path d="M2 12.5h12"/></svg>';
+
+/* ---------- workbench file-icon theme ---------- */
+function applyIconFont(pack) {
+    var el = document.getElementById('icon-font-style');
+    if (!pack || !pack.font) {
+        if (el) {el.remove();}
+        return;
+    }
+    if (!el) {
+        el = document.createElement('style');
+        el.id = 'icon-font-style';
+        document.head.appendChild(el);
+    }
+    el.textContent = '@font-face{font-family:' + JSON.stringify(pack.font.family) + ';src:url(' + JSON.stringify(pack.font.url) + ');format("woff");}';
+}
+
+/** Same precedence the explorer uses: exact name, then longest extension, then default. */
+function iconDefForFile(name) {
+    var pack = state.iconPack;
+    if (!pack) {return null;}
+    var lower = String(name).toLowerCase();
+    var slash = Math.max(lower.lastIndexOf('/'), lower.lastIndexOf('\\'));
+    if (slash >= 0) {lower = lower.slice(slash + 1);}
+    var defId = pack.fileNames[lower];
+    if (!defId) {
+        var dot = lower.indexOf('.');
+        while (dot > 0 && !defId) {
+            defId = pack.fileExtensions[lower.slice(dot + 1)];
+            dot = lower.indexOf('.', dot + 1);
+        }
+    }
+    defId = defId || pack.file;
+    return defId ? (pack.defs[defId] || null) : null;
+}
+
+/** Theme icon markup, or the built-in fallback when the theme has nothing for it. */
+function iconHtml(def, fallback) {
+    if (!def) {return fallback;}
+    if (def.url) {return '<img class="fi" src="' + esc(def.url) + '" alt="">';}
+    if (def.glyph) {
+        var style = 'font-family:' + esc(state.iconPack.font ? state.iconPack.font.family : 'inherit');
+        if (def.color) {style += ';color:' + esc(def.color);}
+        return '<span class="fi fi-glyph" style="' + style + '">' + esc(def.glyph) + '</span>';
+    }
+    return fallback;
+}
 
 /* ---------- left branch tree ---------- */
 function renderTree() {
@@ -514,7 +564,7 @@ function renderTree() {
             var expanded = !!q || !!state.expandedFolder[p];
             var folderCaret = expanded ? I_CARET_D : I_CARET_R;
             out.push('<div class="bfolder" data-folder="' + esc(p) + '" style="padding-left:' + (8 + depth * 16) + 'px">' +
-                '<span class="caret">' + folderCaret + '</span>' + I_FOLDER +
+                '<span class="caret">' + folderCaret + '</span>' + (expanded ? I_FOLDER_OPEN : I_FOLDER) +
                 '<span class="bname">' + esc(k) + '</span><span class="count">' + cnt + '</span></div>');
             if (expanded) renderNode(child, p, depth + 1, icon, out);
         });
@@ -525,7 +575,7 @@ function renderTree() {
         var sectionCaret = collapsed ? I_CARET_R : I_CARET_D;
         var caret = '<span class="caret">' + sectionCaret + '</span>';
         var cnt = count === undefined ? '' : '<span class="count">' + count + '</span>';
-        return '<div class="bsec" data-sec="' + key + '">' + caret + I_FOLDER + '<span>' + esc(title) + '</span>' + cnt + '</div>';
+        return '<div class="bsec" data-sec="' + key + '">' + caret + (collapsed ? I_FOLDER : I_FOLDER_OPEN) + '<span>' + esc(title) + '</span>' + cnt + '</div>';
     }
     function section(key, title, list, icon) {
         var total = list.filter(match).length;
@@ -1080,10 +1130,10 @@ function renderDetail() {
 function detailFileRowHtml(r) {
     var pad = fileRowPad(r.depth);
     if (r.kind === 'dir') {
-        return '<div class="frow dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + I_FOLDER + '<span class="fname" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
+        return '<div class="frow dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + (r.closed ? I_FOLDER : I_FOLDER_OPEN) + '<span class="fname" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
     }
     var f = r.file;
-    return '<div class="frow file" data-path="' + esc(f.path) + '" style="' + pad + '"><span class="caret"></span><span class="st-' + esc(f.status) + '">' + I_FILE + '</span><span class="fname" data-title="' + esc(f.path) + '">' + esc(r.name) + '</span>' +
+    return '<div class="frow file" data-path="' + esc(f.path) + '" style="' + pad + '"><span class="caret"></span><span class="fi-wrap st-' + esc(f.status) + '">' + iconHtml(iconDefForFile(r.name), I_FILE) + '</span><span class="fname" data-title="' + esc(f.path) + '">' + esc(r.name) + '</span>' +
          '<span class="fstat"><span class="add">+' + (f.added || 0) + '</span> <span class="del">-' + (f.deleted || 0) + '</span> <span class="st-' + esc(f.status) + '">' + esc(f.status) + '</span></span></div>';
 }
 
@@ -1699,7 +1749,11 @@ if (repoStateBox) {
 
 window.addEventListener('message', function (ev) {
     var m = ev.data;
-    if (m.command === 'setRepoState') {
+    if (m.command === 'setFileIconTheme') {
+        state.iconPack = m.pack || null;
+        applyIconFont(state.iconPack);
+        renderDetail();
+    } else if (m.command === 'setRepoState') {
         state.repoState = m.state || 'ready';
         state.repoPendingFiles = typeof m.files === 'number' ? m.files : 0;
         state.repoFolder = m.folder || '';
@@ -2033,7 +2087,7 @@ function dialogSidePanelHtml(ids) {
 function dialogFileRowHtml(r) {
     var pad = fileRowPad(r.depth);
     if (r.kind === 'dir') {
-        return '<div class="push-file-row dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + I_FOLDER + '<span class="push-file-name" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
+        return '<div class="push-file-row dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + (r.closed ? I_FOLDER : I_FOLDER_OPEN) + '<span class="push-file-name" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
     }
     var f = r.file;
     return '<div class="push-file-row file" data-path="' + esc(f.path) + '" style="' + pad + '">' +

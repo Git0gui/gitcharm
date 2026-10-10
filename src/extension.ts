@@ -50,6 +50,16 @@ export function activate(ctx: vscode.ExtensionContext) {
         }
     }));
 
+    // File icons come from the workbench themes, so a switch has to re-send the pack
+    ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('workbench.iconTheme')) {
+            graphView.refreshFileIconTheme();
+        }
+    }));
+    ctx.subscriptions.push(vscode.window.onDidChangeActiveColorTheme(() => {
+        graphView.refreshFileIconTheme();
+    }));
+
     // Set context key for view visibility
     vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', hasGitRepo);
 

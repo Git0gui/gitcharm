@@ -824,6 +824,21 @@ canvas.graph-canvas {
     background: var(--vscode-list-hoverBackground, #2a2d2e);
     transform: translateX(2px);
 }
+/* Icons taken from the active workbench file-icon theme */
+.fi-wrap { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; }
+.fi {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+}
+.fi-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    line-height: 1;
+}
 .fname { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fcount { flex: none; min-width: 22px; text-align: right; font-size: 10px; color: var(--vscode-descriptionForeground, #888); }
 .caret { flex: none; font-size: 13px; font-weight: 600; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--vscode-descriptionForeground, #888); line-height: 1; }

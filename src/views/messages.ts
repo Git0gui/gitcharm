@@ -1,4 +1,5 @@
 import { GraphCommit, CommitDetail, FileStat } from '../services/gitService';
+import { FileIconPack } from '../services/fileIconTheme';
 
 /**
  * Message protocol between the extension host and the graph webview.
@@ -72,6 +73,7 @@ export type ExtToWebviewMessage =
     | { command: 'setDivergence'; divergence: Record<string, DivergenceEntry> }
     | { command: 'setCurrentBranch'; branch: string }
     | { command: 'setDetail'; commit: CommitDetail; files: FileStat[] }
+    | { command: 'setFileIconTheme'; pack?: FileIconPack }
     | { command: 'multiCommitsResponse'; commits: CommitDetail[]; files: FileStat[] }
     | { command: 'revealCommit'; hash: string }
     | { command: 'restoreViewState'; state: PersistedViewState }
