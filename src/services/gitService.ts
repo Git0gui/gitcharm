@@ -14,7 +14,9 @@ import {
     parseLogLine,
     parseGraphLine,
     parseTrackInfo,
-    parseSymbolicRef
+    parseSymbolicRef,
+    parseWorkingTreeSummary,
+    WorkingTreeSummary
 } from './gitUtils';
 import { t } from '../i18n';
 
@@ -122,10 +124,12 @@ export class GitService {
     // Cherry-pick resume state: persisted to workspaceState for crash recovery
     private static readonly CHERRY_PICK_RESUME_KEY = 'git-charm.cherryPickResume';
 
-    // Git-root discovery is an fs walk plus a git spawn; memoize per start dir
+    // Git-root discovery is a filesystem walk; memoize per start dir
     private _rootMemo = new Map<string, string | undefined>();
     private _rootKey: string | undefined;
     private _rootValue: string | undefined;
+    // Cached result of the `git --version` probe (undefined = not probed yet)
+    private _gitAvailable: boolean | undefined;
 
     constructor(memento: vscode.Memento) {
         this._persistedCache = new PersistedBranchCache(memento, () => this._repositoryPath);
@@ -179,6 +183,64 @@ export class GitService {
 
     get repositoryPath(): string | undefined {
         return this._resolveRoot();
+    }
+
+    /**
+     * Whether a `git` binary can be spawned at all. Separates "git is not
+     * installed / not on PATH" from "this folder is not a repository" so the
+     * panel can give the right guidance. The result is cached because the probe
+     * runs on a hot path; pass `force` after the user asks to re-check.
+     */
+    async isGitAvailable(force: boolean = false): Promise<boolean> {
+        if (!force && this._gitAvailable !== undefined) {return this._gitAvailable;}
+        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+        try {
+            await runGit(['--version'], { cwd, timeoutMs: 8000 });
+            this._gitAvailable = true;
+        } catch (error) {
+            // Only a failed spawn (git missing / not executable) means "no git";
+            // a non-zero exit comes from a binary that is installed and working.
+            const code = (error as { code?: unknown }).code;
+            this._gitAvailable = code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM';
+            logger.debug('[GitCharm] git binary probe:', this._gitAvailable, error);
+        }
+        return this._gitAvailable;
+    }
+
+    /**
+     * Drop the memoised git-root discovery and re-read the filesystem. Call this
+     * after `git init` or when an external tool creates/removes `.git`, so the
+     * panel reacts without a restart.
+     */
+    refreshRepositoryPath(): string | undefined {
+        this._rootMemo.clear();
+        this._rootKey = undefined;
+        this._rootValue = undefined;
+        this.clearAllCaches();
+        return this._resolveRoot();
+    }
+
+    /**
+     * True once at least one commit exists anywhere in the repository. A freshly
+     * initialised repo has none, and every history command would fail there.
+     */
+    async hasAnyCommit(): Promise<boolean> {
+        const output = await this.executeGitArgs(['rev-list', '--all', '--max-count=1'], { timeoutMs: 8000 });
+        return output.trim() !== '';
+    }
+
+    /** Working-tree change counts for the empty-repository guidance page. */
+    async getWorkingTreeSummary(): Promise<WorkingTreeSummary> {
+        const raw = await this.executeGitArgs(['status', '--porcelain', '-z'], { timeoutMs: 10000 });
+        return parseWorkingTreeSummary(raw);
+    }
+
+    /**
+     * Create a repository in `cwd` (which must not be inside one already).
+     * Not repo-scoped, so it runs straight through the runner with an explicit cwd.
+     */
+    async initRepository(cwd: string): Promise<void> {
+        await runGit(['init'], { cwd, timeoutMs: 20000 });
     }
 
     /**
@@ -357,9 +419,11 @@ export class GitService {
 
         // NUL-delimited plumbing output: stable across versions and safe for
         // paths containing spaces or newlines.
+        // --root is required for the initial commit: diff-tree diffs against the
+        // first parent, so a parentless commit would otherwise report no files.
         const [nameStatus, numStat] = await Promise.all([
-            this.executeGitArgs(['diff-tree', '--no-commit-id', '-r', '-M', '--name-status', '-z', hash]).catch(() => ''),
-            this.executeGitArgs(['diff-tree', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
+            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--name-status', '-z', hash]).catch(() => ''),
+            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
         ]);
 
         // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
@@ -406,9 +470,9 @@ export class GitService {
 
     /**
      * Find the git root directory.
-     * Prioritizes workspace folders over the active editor's file location,
-     * and validates each candidate with `git rev-parse` to avoid false positives
-     * (e.g. stale .git files or corrupted directories).
+     * Prioritizes workspace folders over the active editor's file location, and
+     * requires a real `.git` layout (HEAD / gitdir redirect) so stale or
+     * corrupted `.git` entries do not produce false positives.
      */
     private _findGitRoot(): string | undefined {
         const path = require('path');
@@ -446,35 +510,38 @@ export class GitService {
     }
 
     /**
-     * Walk up from `startDir` until a directory containing a valid .git is found.
+     * Walk up from `startDir` until a directory holding a real `.git` is found.
+     * Detection is filesystem-only: spawning git here would make a missing git
+     * binary indistinguishable from a folder that simply is not a repository.
      */
     private _probeRoot(startDir: string): string | undefined {
-        const fs = require('fs');
-        const path = require('path');
-
         let currentDir = startDir;
         while (currentDir !== path.dirname(currentDir)) {
-            const gitPath = path.join(currentDir, '.git');
-            if (fs.existsSync(gitPath)) {
-                // Found a .git entry — verify it's a real repo using cwd (not shell cd)
-                try {
-                    const { execSync } = require('child_process');
-                    const result = execSync('git rev-parse --is-inside-work-tree', {
-                        cwd: currentDir,
-                        encoding: 'utf8',
-                        timeout: 3000,
-                        stdio: ['pipe', 'pipe', 'pipe']
-                    }).trim();
-                    if (result === 'true') {
-                        return currentDir;
-                    }
-                } catch {
-                    // Not a valid git repo, continue searching
-                }
+            if (this._hasGitDir(path.join(currentDir, '.git'))) {
+                return currentDir;
             }
             currentDir = path.dirname(currentDir);
         }
         return undefined;
+    }
+
+    /**
+     * A `.git` directory is a repository when it carries HEAD; a `.git` file is
+     * one when it redirects to a gitdir (worktree / submodule).
+     */
+    private _hasGitDir(gitPath: string): boolean {
+        try {
+            const stat = fs.lstatSync(gitPath);
+            if (stat.isDirectory()) {
+                return fs.existsSync(path.join(gitPath, 'HEAD'));
+            }
+            if (stat.isFile()) {
+                return fs.readFileSync(gitPath, 'utf8').startsWith('gitdir:');
+            }
+        } catch {
+            // Unreadable or absent .git — keep walking up
+        }
+        return false;
     }
 
     /**

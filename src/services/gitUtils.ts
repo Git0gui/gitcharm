@@ -129,3 +129,29 @@ export function parseSymbolicRef(content: string): string | undefined {
     const m = content.trim().match(/^ref: refs\/heads\/(.+)$/);
     return m ? m[1] : undefined;
 }
+
+/** Working-tree change counts used by the empty-repository guidance page. */
+export interface WorkingTreeSummary {
+    files: number;
+    untracked: number;
+}
+
+/**
+ * Summarise `git status --porcelain -z` output (NUL-separated entries).
+ * A rename/copy entry is followed by an extra field carrying the source path,
+ * which belongs to the same file and must not be counted again.
+ */
+export function parseWorkingTreeSummary(raw: string): WorkingTreeSummary {
+    const summary: WorkingTreeSummary = { files: 0, untracked: 0 };
+    const fields = raw.split('\0').filter(entry => entry.length > 0);
+    for (let i = 0; i < fields.length; i++) {
+        const status = fields[i].substring(0, 2);
+        summary.files++;
+        if (status === '??') {
+            summary.untracked++;
+        } else if (status[0] === 'R' || status[0] === 'C') {
+            i++;
+        }
+    }
+    return summary;
+}

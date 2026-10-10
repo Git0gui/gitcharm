@@ -25,6 +25,7 @@
     "cmd.updateBranch": "Update",
     "cmd.commitBranch": "Commit...",
     "cmd.viewFileHistory": "View File History",
+    "cmd.initRepository": "Initialize a Git Repository in This Folder",
     "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "Enable branch info caching for faster startup (cache is persisted and only updated on repository changes or Git operations)",
     "config.pullStrategy": "Update strategy when pulling a remote branch",

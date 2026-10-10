@@ -118,6 +118,39 @@ export function registerOperationCommands(
             } catch (error: any) {
                 vscode.window.showErrorMessage(t('op.abortFailed', { error: combineErrorText(error) }));
             }
+        }),
+
+        // Create a repository in the open folder. The panel never disappears, so
+        // the guidance page flips straight to the empty-repository checklist.
+        vscode.commands.registerCommand('idea-git.initRepository', async () => {
+            const folder = vscode.workspace.workspaceFolders?.[0];
+            if (!folder) {
+                vscode.window.showErrorMessage(t('repo.noFolder'));
+                return;
+            }
+            if (gitService.repositoryPath) {
+                vscode.window.showInformationMessage(t('repo.alreadyRepo'));
+                return;
+            }
+
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('repo.initProgress'),
+                    cancellable: false
+                },
+                async () => {
+                    try {
+                        await gitService.initRepository(folder.uri.fsPath);
+                        gitService.refreshRepositoryPath();
+                        void vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', true);
+                        await graphView.refreshRepoState(true);
+                        vscode.window.showInformationMessage(t('repo.initSuccess', { path: folder.uri.fsPath }));
+                    } catch (error) {
+                        vscode.window.showErrorMessage(t('repo.initFailed', { error: String(error) }));
+                    }
+                }
+            );
         })
     );
 }

@@ -201,6 +201,12 @@ var state = {
     collapsedSec: {},
     expandedFolder: {},
     fileViewMode: 'tree',
+    graphVisible: true,
+    graphOverflow: false,
+    repoState: 'ready',
+    repoFolder: '',
+    repoPendingFiles: 0,
+    iconPack: null,
     _pendingScrollTop: null,
     _pendingRestore: null
 };
@@ -220,7 +226,8 @@ function saveViewState() {
                 collapsed: state.collapsed,
                 collapsedSec: state.collapsedSec,
                 expandedFolder: state.expandedFolder,
-                fileViewMode: state.fileViewMode || 'tree'
+                fileViewMode: state.fileViewMode || 'tree',
+                graphVisible: state.graphVisible !== false
             }
         });
     }, 400);
@@ -254,6 +261,10 @@ function applyRestoreNow() {
     if (pr.collapsedSec) { state.collapsedSec = pr.collapsedSec; }
     if (pr.expandedFolder) { state.expandedFolder = pr.expandedFolder; }
     if (pr.fileViewMode === 'tree' || pr.fileViewMode === 'flat') { state.fileViewMode = pr.fileViewMode; }
+    if (typeof pr.graphVisible === 'boolean' && pr.graphVisible !== state.graphVisible) {
+        state.graphVisible = pr.graphVisible;
+        renderRows();   // the graph column width is baked into the row markup
+    }
     if (pr.detailVisible === true) { state.detailVisible = true; }
     var commitsLoaded = (state.commits || []).length > 0;
     var target = pr.selectedHash;
@@ -433,8 +444,13 @@ function fmtRelativeTime(s) {
 }
 
 var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2"/><circle cx="4.5" cy="12.5" r="2"/><circle cx="11.5" cy="5.5" r="2"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
+// Same silhouette with filled nodes: the checked-out branch has to stand out in the tree.
+var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="4.5" cy="12.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="11.5" cy="5.5" r="2" fill="currentColor" stroke-width="1"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
-var I_FOLDER = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 4h5l2 2h7v8H1V4z"/></svg>';
+// Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
+// the stroke-based carets used across the panel. currentColor keeps it theme aware.
+var I_FOLDER = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+var I_FOLDER_OPEN = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2V7H2v-2.5z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/><path d="M2 7.8h12l-1.2 4.3a1.5 1.5 0 0 1-1.4 1.1H3.6a1.5 1.5 0 0 1-1.4-1.1L2 8.6" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
 var I_FILE = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3.5 1.5h6l3 3v10h-9z"/></svg>';
 // VSCode-explorer-style chevrons (theme-aware via currentColor)
 var I_CARET_R = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
@@ -442,6 +458,52 @@ var I_CARET_D = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" str
 // File list mode switch icons: indented tree vs. flat rows (theme-aware via currentColor)
 var I_TREE_MODE = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 3h4"/><path d="M6 6.5h4"/><path d="M6 12.5h4"/><path d="M2 9.5h4"/><path d="M4 3v9.5"/></svg>';
 var I_FLAT_MODE = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 3.5h12"/><path d="M2 8h12"/><path d="M2 12.5h12"/></svg>';
+
+/* ---------- workbench file-icon theme ---------- */
+function applyIconFont(pack) {
+    var el = document.getElementById('icon-font-style');
+    if (!pack || !pack.font) {
+        if (el) {el.remove();}
+        return;
+    }
+    if (!el) {
+        el = document.createElement('style');
+        el.id = 'icon-font-style';
+        document.head.appendChild(el);
+    }
+    el.textContent = '@font-face{font-family:' + JSON.stringify(pack.font.family) + ';src:url(' + JSON.stringify(pack.font.url) + ');format("woff");}';
+}
+
+/** Same precedence the explorer uses: exact name, then longest extension, then default. */
+function iconDefForFile(name) {
+    var pack = state.iconPack;
+    if (!pack) {return null;}
+    var lower = String(name).toLowerCase();
+    var slash = Math.max(lower.lastIndexOf('/'), lower.lastIndexOf('\\'));
+    if (slash >= 0) {lower = lower.slice(slash + 1);}
+    var defId = pack.fileNames[lower];
+    if (!defId) {
+        var dot = lower.indexOf('.');
+        while (dot > 0 && !defId) {
+            defId = pack.fileExtensions[lower.slice(dot + 1)];
+            dot = lower.indexOf('.', dot + 1);
+        }
+    }
+    defId = defId || pack.file;
+    return defId ? (pack.defs[defId] || null) : null;
+}
+
+/** Theme icon markup, or the built-in fallback when the theme has nothing for it. */
+function iconHtml(def, fallback) {
+    if (!def) {return fallback;}
+    if (def.url) {return '<img class="fi" src="' + esc(def.url) + '" alt="">';}
+    if (def.glyph) {
+        var style = 'font-family:' + esc(state.iconPack.font ? state.iconPack.font.family : 'inherit');
+        if (def.color) {style += ';color:' + esc(def.color);}
+        return '<span class="fi fi-glyph" style="' + style + '">' + esc(def.glyph) + '</span>';
+    }
+    return fallback;
+}
 
 /* ---------- left branch tree ---------- */
 function renderTree() {
@@ -454,7 +516,9 @@ function renderTree() {
     var q = state.bfilter.toLowerCase();
     function match(n) { return !q || n.toLowerCase().indexOf(q) >= 0; }
     function item(n, icon, depth, label) {
-        var cls = 'bitem' + (n === state.selectedBranch ? ' sel' : '') + (n === state.current ? ' cur' : '') + (n === state.highlight ? ' hl' : '');
+        var isCur = n === state.current;
+        if (isCur) {icon = I_BRANCH_CURRENT;}
+        var cls = 'bitem' + (n === state.selectedBranch ? ' sel' : '') + (isCur ? ' cur' : '') + (n === state.highlight ? ' hl' : '');
         var d = state.divergence[n];
         var arrows = '';
         
@@ -504,7 +568,7 @@ function renderTree() {
             var expanded = !!q || !!state.expandedFolder[p];
             var folderCaret = expanded ? I_CARET_D : I_CARET_R;
             out.push('<div class="bfolder" data-folder="' + esc(p) + '" style="padding-left:' + (8 + depth * 16) + 'px">' +
-                '<span class="caret">' + folderCaret + '</span>' + I_FOLDER +
+                '<span class="caret">' + folderCaret + '</span>' + (expanded ? I_FOLDER_OPEN : I_FOLDER) +
                 '<span class="bname">' + esc(k) + '</span><span class="count">' + cnt + '</span></div>');
             if (expanded) renderNode(child, p, depth + 1, icon, out);
         });
@@ -515,7 +579,7 @@ function renderTree() {
         var sectionCaret = collapsed ? I_CARET_R : I_CARET_D;
         var caret = '<span class="caret">' + sectionCaret + '</span>';
         var cnt = count === undefined ? '' : '<span class="count">' + count + '</span>';
-        return '<div class="bsec" data-sec="' + key + '">' + caret + I_FOLDER + '<span>' + esc(title) + '</span>' + cnt + '</div>';
+        return '<div class="bsec" data-sec="' + key + '">' + caret + (collapsed ? I_FOLDER : I_FOLDER_OPEN) + '<span>' + esc(title) + '</span>' + cnt + '</div>';
     }
     function section(key, title, list, icon) {
         var total = list.filter(match).length;
@@ -555,6 +619,8 @@ function renderRows() {
             return;
         }
         document.getElementById('rows').innerHTML = '<div class="empty">' + T('w.noMatch') + '</div>';
+        document.getElementById('rows').style.minWidth = '';
+        removeGraphCanvas();
         return;
     }
     
@@ -572,11 +638,27 @@ function renderRows() {
     var lanes = [];
     var laneLastRow = [];
     var commitLane = {};
-    function slotLane() {
-        for (var i = 0; i < lanes.length; i++) if (!lanes[i].pending) return i;
+    // Lane columns are capped on purpose: past ~20 concurrent branches the graph is
+    // unreadable anyway, and an uncapped column pushes the commit messages out of view.
+    // The last column is reserved as an overflow lane that extra chains share.
+    var MAX_LANES = 24;
+    var OVERFLOW_LANE = MAX_LANES - 1;
+    var graphOverflow = false;
+    function chainContinues(hash, i) {
+        var j = rowOf[hash];
+        return j !== undefined && j > i;
+    }
+    function newLane() {
         lanes.push({ pending: null, color: null });
         laneLastRow.push(undefined);
         return lanes.length - 1;
+    }
+    function slotLane() {
+        for (var i = 0; i < lanes.length; i++) { if (i < OVERFLOW_LANE && !lanes[i].pending) return i; }
+        if (lanes.length < OVERFLOW_LANE) {return newLane();}
+        graphOverflow = true;
+        while (lanes.length <= OVERFLOW_LANE) {newLane();}
+        return OVERFLOW_LANE;
     }
     list.forEach(function (c, i) {
         var expecting = [];
@@ -587,18 +669,22 @@ function renderRows() {
         commitLane[c.hash] = li;
         laneLastRow[li] = i;
         for (var e = 1; e < expecting.length; e++) lanes[expecting[e]].pending = null;
-        lanes[li].pending = c.parents[0] || null;
+        // Hold the lane only while the first parent is actually in this page — a chain
+        // that leaves the loaded window can never be drawn and would leak the column.
+        var p0 = c.parents[0];
+        lanes[li].pending = (li !== OVERFLOW_LANE && p0 && chainContinues(p0, i)) ? p0 : null;
         for (var pi = 1; pi < c.parents.length; pi++) {
             var ph = c.parents[pi];
-            if (rowOf[ph] === undefined || rowOf[ph] <= i) continue;
+            if (!chainContinues(ph, i)) {continue;}
             var nl = slotLane();
             if (!lanes[nl].color) lanes[nl].color = laneColor('merge' + i + '_' + pi);
-            lanes[nl].pending = ph;
+            if (nl !== OVERFLOW_LANE) lanes[nl].pending = ph;
         }
     });
 
     var laneW = 12;
-    var graphW = Math.max(lanes.length, 1) * laneW + 8;
+    state.graphOverflow = graphOverflow;
+    var graphW = state.graphVisible === false ? 0 : Math.max(lanes.length, 1) * laneW + 8;
     var totalH = list.length * ROW_H;
 
     // Build HTML rows (without dots)
@@ -695,6 +781,7 @@ function renderRows() {
 
     // Draw graph on canvas overlay
     drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, totalH, rowOf);
+    updateGraphToggleUi();
 }
 
 /**
@@ -759,7 +846,7 @@ function renderMultiCommitDetail(info, filesBox) {
     
     // Build file tree
     var mode = state.fileViewMode || FILE_MODE_TREE;
-    var fh = '<div class="fhead"><span>' + T('w.filesCount', { n: mergedFiles.length }) + '</span>' + fileModeBtnHtml(mode) + '</div>';
+    var fh = fileHeadHtml(mergedFiles.length, mode);
     fh += buildFileRows(mergedFiles, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
@@ -768,8 +855,29 @@ function renderMultiCommitDetail(info, filesBox) {
 /**
  * Draw the commit graph using Canvas API for pixel-perfect alignment.
  */
+function removeGraphCanvas() {
+    var canvas = document.querySelector('#rows canvas.graph-canvas');
+    if (canvas && canvas.parentNode) {canvas.parentNode.removeChild(canvas);}
+}
+
+/** Reflect the graph column state on the toolbar toggle (label + overflow hint). */
+function updateGraphToggleUi() {
+    var btn = document.getElementById('tg-graph');
+    if (!btn) {return;}
+    var hidden = state.graphVisible === false;
+    var label = T(hidden ? 'ui.showGraph' : 'ui.hideGraph');
+    if (!hidden && state.graphOverflow) {label += ' · ' + T('ui.graphOverflow');}
+    btn.setAttribute('data-title', label);
+    btn.classList.toggle('off', hidden);
+    btn.classList.toggle('warn', !hidden && !!state.graphOverflow);
+}
+
 function drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, totalH, rowOf) {
     var wrap = document.getElementById('rows');
+    if (graphW <= 0) {
+        removeGraphCanvas();
+        return;
+    }
     var firstGarea = wrap.querySelector('.garea');
     if (!firstGarea) return;
 
@@ -949,6 +1057,11 @@ function fileModeBtnHtml(mode) {
     return '<button class="fmode-btn" data-fmode="' + (toTree ? FILE_MODE_TREE : FILE_MODE_FLAT) + '" data-title="' + esc(label) + '">' + (toTree ? I_TREE_MODE : I_FLAT_MODE) + '</button>';
 }
 
+/** Header row of the commit-detail file list; the inner group is pinned on both scroll axes. */
+function fileHeadHtml(count, mode) {
+    return '<div class="fhead"><div class="fhead-inner"><span>' + T('w.filesCount', { n: count }) + '</span>' + fileModeBtnHtml(mode) + '</div></div>';
+}
+
 function fileRowPad(depth) {
     return 'padding-left:' + (8 + depth * 14) + 'px';
 }
@@ -1011,7 +1124,7 @@ function renderDetail() {
     info.innerHTML = mh;
 
     var mode = state.fileViewMode || FILE_MODE_TREE;
-    var fh = '<div class="fhead"><span>' + T('w.filesCount', { n: files.length }) + '</span>' + fileModeBtnHtml(mode) + '</div>';
+    var fh = fileHeadHtml(files.length, mode);
     fh += buildFileRows(files, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
@@ -1021,10 +1134,10 @@ function renderDetail() {
 function detailFileRowHtml(r) {
     var pad = fileRowPad(r.depth);
     if (r.kind === 'dir') {
-        return '<div class="frow dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + I_FOLDER + '<span class="fname" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
+        return '<div class="frow dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + (r.closed ? I_FOLDER : I_FOLDER_OPEN) + '<span class="fname" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
     }
     var f = r.file;
-    return '<div class="frow file" data-path="' + esc(f.path) + '" style="' + pad + '"><span class="caret"></span><span class="st-' + esc(f.status) + '">' + I_FILE + '</span><span class="fname" data-title="' + esc(f.path) + '">' + esc(r.name) + '</span>' +
+    return '<div class="frow file" data-path="' + esc(f.path) + '" style="' + pad + '"><span class="caret"></span><span class="fi-wrap st-' + esc(f.status) + '">' + iconHtml(iconDefForFile(r.name), I_FILE) + '</span><span class="fname" data-title="' + esc(f.path) + '">' + esc(r.name) + '</span>' +
          '<span class="fstat"><span class="add">+' + (f.added || 0) + '</span> <span class="del">-' + (f.deleted || 0) + '</span> <span class="st-' + esc(f.status) + '">' + esc(f.status) + '</span></span></div>';
 }
 
@@ -1162,6 +1275,11 @@ document.getElementById('f-to').addEventListener('keydown', function(e) {
 });
 document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
+});
+document.getElementById('tg-graph').addEventListener('click', function () {
+    state.graphVisible = state.graphVisible === false;
+    renderRows();
+    saveViewState();
 });
 document.getElementById('f-bfilter').addEventListener('input', function (e) {
     state.bfilter = e.target.value.trim();
@@ -1564,9 +1682,93 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     });
 });
 
+/* ---------- repository guidance page (no git / no repo / no commits) ---------- */
+var REPO_ICONS = {
+    noGit: '<svg width="34" height="34" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 4.5 6 2l4 2.5v3L6 10 2 7.5z"/><circle cx="11" cy="11" r="2.6"/><path d="M13 13l1.6 1.6"/></svg>',
+    noRepo: '<svg width="34" height="34" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="4" cy="3.5" r="1.8"/><circle cx="4" cy="12.5" r="1.8"/><circle cx="12" cy="8" r="1.8"/><path d="M4 5.3v5.4M5.6 4.4l4.8 2.8M5.6 11.6l4.8-2.8"/></svg>',
+    emptyRepo: '<svg width="34" height="34" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 5.5h12v8H2z"/><path d="M2 5.5 4 2h8l2 3.5"/><path d="M6.5 9h3"/></svg>'
+};
+
+function repoStateCopy(repoState, folder, files) {
+    if (repoState === 'noGit') {
+        return {
+            title: T('repo.noGitTitle'),
+            body: T('repo.noGitBody'),
+            actions: [{ key: 'recheckRepository', label: T('repo.recheck'), primary: true }]
+        };
+    }
+    if (repoState === 'noRepo') {
+        return {
+            title: T('repo.noRepoTitle'),
+            body: T('repo.noRepoBody', { folder: folder || '' }),
+            actions: [
+                { key: 'initRepository', label: T('repo.init'), primary: true },
+                { key: 'recheckRepository', label: T('repo.recheck') }
+            ]
+        };
+    }
+    if (repoState === 'emptyRepo') {
+        return {
+            title: T('repo.emptyTitle'),
+            body: files > 0 ? T('repo.emptyPending', { files: files }) : T('repo.emptyClean'),
+            actions: [
+                { key: 'openScmView', label: T('repo.openScm'), primary: true },
+                { key: 'recheckRepository', label: T('repo.recheck') }
+            ]
+        };
+    }
+    return null;
+}
+
+function renderRepoState() {
+    var box = document.getElementById('repo-state');
+    if (!box) { return; }
+    var copy = repoStateCopy(state.repoState, state.repoFolder, state.repoPendingFiles);
+    if (!copy) {
+        box.className = '';
+        box.innerHTML = '';
+        return;
+    }
+    var btns = copy.actions.map(function (a) {
+        return '<button type="button" class="dialog-btn ' + (a.primary ? 'primary' : 'secondary') +
+            '" data-repo-action="' + a.key + '">' + esc(a.label) + '</button>';
+    }).join('');
+    box.className = 'on ' + state.repoState;
+    box.innerHTML = '<div class="rs-card">' +
+        '<div class="rs-icon">' + (REPO_ICONS[state.repoState] || '') + '</div>' +
+        '<div class="rs-title">' + esc(copy.title) + '</div>' +
+        '<div class="rs-body">' + esc(copy.body) + '</div>' +
+        '<div class="rs-actions">' + btns + '</div>' +
+        '</div>';
+}
+
+var repoStateBox = document.getElementById('repo-state');
+if (repoStateBox) {
+    repoStateBox.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-repo-action]');
+        if (!btn) { return; }
+        vscode.postMessage({ command: btn.getAttribute('data-repo-action') });
+    });
+}
+
 window.addEventListener('message', function (ev) {
     var m = ev.data;
-    if (m.command === 'setData') {
+    if (m.command === 'setFileIconTheme') {
+        state.iconPack = m.pack || null;
+        applyIconFont(state.iconPack);
+        renderDetail();
+    } else if (m.command === 'setRepoState') {
+        state.repoState = m.state || 'ready';
+        state.repoPendingFiles = typeof m.files === 'number' ? m.files : 0;
+        state.repoFolder = m.folder || '';
+        if (state.repoState !== 'ready') {
+            // No data will ever arrive to clear the startup skeleton
+            loadState.initialLoad = false;
+            hideInitialLoading();
+            setBusy('rows', false);
+        }
+        renderRepoState();
+    } else if (m.command === 'setData') {
         // Clear all state before setting new data to prevent accumulation
         state.commits = m.commits || [];
         state.local = m.local || [];
@@ -1577,6 +1779,12 @@ window.addEventListener('message', function (ev) {
         state.hasMore = !!m.hasMore;
         state.headHash = m.headHash || '';
         state.inProgress = m.inProgress || null;
+        
+        // History has arrived — drop the guidance page if it was showing
+        if (state.repoState !== 'ready') {
+            state.repoState = 'ready';
+            renderRepoState();
+        }
         
         // Mark branches as loaded
         loadState.branchesLoaded = true;
@@ -1883,7 +2091,7 @@ function dialogSidePanelHtml(ids) {
 function dialogFileRowHtml(r) {
     var pad = fileRowPad(r.depth);
     if (r.kind === 'dir') {
-        return '<div class="push-file-row dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + I_FOLDER + '<span class="push-file-name" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
+        return '<div class="push-file-row dir" data-path="' + esc(r.path) + '" style="' + pad + '"><span class="caret">' + (r.closed ? I_CARET_R : I_CARET_D) + '</span>' + (r.closed ? I_FOLDER : I_FOLDER_OPEN) + '<span class="push-file-name" data-title="' + esc(r.path) + '">' + esc(r.name) + '</span><span class="fcount">' + r.count + '</span></div>';
     }
     var f = r.file;
     return '<div class="push-file-row file" data-path="' + esc(f.path) + '" style="' + pad + '">' +

@@ -284,11 +284,31 @@ const zh: Record<string, string> = {
     'ui.toDate': '截止日期',
     'ui.clearDate': '清空日期',
     'ui.refreshCommits': '刷新提交记录',
+    'ui.hideGraph': '隐藏提交图',
+    'ui.showGraph': '显示提交图',
+    'ui.graphOverflow': '分支过多，已合并部分泳道',
     'ui.loading': '加载中...',
     'ui.loadingCommits': '正在加载提交记录...',
     'ui.showCommitFiles': '显示提交文件',
     'ui.refreshFiles': '刷新提交文件',
     'ui.loadingCommitFiles': '正在加载提交文件...',
+
+    // repository guidance page (panel stays usable without git / repo / commits)
+    'repo.noGitTitle': '未检测到 Git',
+    'repo.noGitBody': '插件需要调用 git 命令。请先安装 Git，或把 git 加入 PATH，然后重新检测。',
+    'repo.noRepoTitle': '当前文件夹不是 Git 仓库',
+    'repo.noRepoBody': '在 {folder} 初始化一个仓库，即可拥有与 IDEA 一致的提交图谱。',
+    'repo.emptyTitle': '仓库还没有提交',
+    'repo.emptyPending': '{files} 个文件等待首次提交。在源代码管理面板中提交后，点「重新检测」即可看到提交图谱。',
+    'repo.emptyClean': '工作区是干净的，尚未创建任何提交。添加文件并在源代码管理面板提交后，点「重新检测」。',
+    'repo.init': '初始化仓库',
+    'repo.recheck': '重新检测',
+    'repo.openScm': '打开源代码管理',
+    'repo.noFolder': '未打开工作区文件夹，无法初始化仓库',
+    'repo.alreadyRepo': '当前工作区已经是一个 Git 仓库',
+    'repo.initProgress': '正在初始化 Git 仓库...',
+    'repo.initSuccess': '已在 {path} 初始化 Git 仓库',
+    'repo.initFailed': '初始化仓库失败: {error}',
 
     // webview dynamic strings
     'w.divergeBehind': '落后远端 {n} 个提交，需更新',
@@ -359,6 +379,7 @@ const zh: Record<string, string> = {
 
     // extension.ts
     'ext.statusTooltip': '打开 GitCharm 日志面板',
+    'ext.statusTooltipNoRepo': '打开 GitCharm 面板初始化 Git 仓库',
     'ext.openDiffFailed': '无法打开文件差异: {error}',
     'ext.selectFile': '请选择一个文件',
     'ext.noGitRepo': '未找到 git 仓库',
@@ -641,11 +662,31 @@ const en: Record<string, string> = {
     'ui.toDate': 'End date',
     'ui.clearDate': 'Clear date',
     'ui.refreshCommits': 'Refresh commits',
+    'ui.hideGraph': 'Hide commit graph',
+    'ui.showGraph': 'Show commit graph',
+    'ui.graphOverflow': 'Too many branches — some lanes were merged',
     'ui.loading': 'Loading...',
     'ui.loadingCommits': 'Loading commits...',
     'ui.showCommitFiles': 'Show commit files',
     'ui.refreshFiles': 'Refresh commit files',
     'ui.loadingCommitFiles': 'Loading commit files...',
+
+    // repository guidance page (panel stays usable without git / repo / commits)
+    'repo.noGitTitle': 'Git not found',
+    'repo.noGitBody': 'This panel needs the git command line. Install Git, or add it to your PATH, then re-check.',
+    'repo.noRepoTitle': 'This folder is not a Git repository',
+    'repo.noRepoBody': 'Initialize a repository in {folder} to get the IDEA-style commit graph.',
+    'repo.emptyTitle': 'No commits yet',
+    'repo.emptyPending': '{files} file(s) are waiting for the first commit. Commit them in Source Control, then re-check.',
+    'repo.emptyClean': 'The working tree is clean and no commit exists yet. Add files, commit in Source Control, then re-check.',
+    'repo.init': 'Initialize repository',
+    'repo.recheck': 'Re-check',
+    'repo.openScm': 'Open Source Control',
+    'repo.noFolder': 'No workspace folder is open, so a repository cannot be initialized',
+    'repo.alreadyRepo': 'This workspace is already a Git repository',
+    'repo.initProgress': 'Initializing Git repository...',
+    'repo.initSuccess': 'Initialized a Git repository in {path}',
+    'repo.initFailed': 'Failed to initialize the repository: {error}',
 
     // webview dynamic strings
     'w.divergeBehind': '{n} behind remote, update needed',
@@ -716,6 +757,7 @@ const en: Record<string, string> = {
 
     // extension.ts
     'ext.statusTooltip': 'Open GitCharm log panel',
+    'ext.statusTooltipNoRepo': 'Open GitCharm to initialize a Git repository',
     'ext.openDiffFailed': 'Cannot open file diff: {error}',
     'ext.selectFile': 'Please select a file',
     'ext.noGitRepo': 'No git repository found',

@@ -50,22 +50,35 @@ export function activate(ctx: vscode.ExtensionContext) {
         }
     }));
 
+    // File icons come from the workbench themes, so a switch has to re-send the pack
+    ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('workbench.iconTheme')) {
+            graphView.refreshFileIconTheme();
+        }
+    }));
+    ctx.subscriptions.push(vscode.window.onDidChangeActiveColorTheme(() => {
+        graphView.refreshFileIconTheme();
+    }));
+    // A theme installed in this session only appears in the extension registry once
+    // it settles; re-resolve then so the icons apply without a window reload.
+    ctx.subscriptions.push(vscode.extensions.onDidChange(() => {
+        graphView.refreshFileIconTheme();
+    }));
+
     // Set context key for view visibility
     vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', hasGitRepo);
 
-    // Status bar item: only show when git repo exists
-    let statusBarItem: vscode.StatusBarItem | undefined;
-    if (hasGitRepo) {
-        statusBarItem = vscode.window.createStatusBarItem(
-            vscode.StatusBarAlignment.Left,
-            100
-        );
-        statusBarItem.text = '$(repo) GitCharm';
-        statusBarItem.tooltip = t('ext.statusTooltip');
-        statusBarItem.command = 'idea-git.openGraphView';
-        statusBarItem.show();
-        ctx.subscriptions.push(statusBarItem);
-    }
+    // Status bar entry stays put in every workspace: without a repository it is the
+    // route into the panel's guidance page
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    statusBarItem.text = '$(repo) GitCharm';
+    statusBarItem.command = 'idea-git.openGraphView';
+    statusBarItem.show();
+    ctx.subscriptions.push(statusBarItem);
+    const setStatusBarTooltip = (hasRepo: boolean): void => {
+        statusBarItem.tooltip = t(hasRepo ? 'ext.statusTooltip' : 'ext.statusTooltipNoRepo');
+    };
+    setStatusBarTooltip(hasGitRepo);
 
     // Watch for git repository changes (git init, clone, etc.)
     const watcher = vscode.workspace.createFileSystemWatcher(
@@ -74,22 +87,16 @@ export function activate(ctx: vscode.ExtensionContext) {
 
     watcher.onDidCreate(() => {
         vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', true);
-        if (!statusBarItem) {
-            statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-            statusBarItem.text = '$(repo) GitCharm';
-            statusBarItem.tooltip = t('ext.statusTooltip');
-            statusBarItem.command = 'idea-git.openGraphView';
-            statusBarItem.show();
-            ctx.subscriptions.push(statusBarItem);
-        }
+        gitService.refreshRepositoryPath();
+        void graphView.refreshRepoState(true);
+        setStatusBarTooltip(true);
     });
 
     watcher.onDidDelete(() => {
         vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', false);
-        if (statusBarItem) {
-            statusBarItem.dispose();
-            statusBarItem = undefined;
-        }
+        gitService.refreshRepositoryPath();
+        void graphView.refreshRepoState(true);
+        setStatusBarTooltip(false);
     });
 
     ctx.subscriptions.push(watcher);
