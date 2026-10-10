@@ -792,7 +792,7 @@ function renderMultiCommitDetail(info, filesBox) {
     
     // Build file tree
     var mode = state.fileViewMode || FILE_MODE_TREE;
-    var fh = '<div class="fhead"><span>' + T('w.filesCount', { n: mergedFiles.length }) + '</span>' + fileModeBtnHtml(mode) + '</div>';
+    var fh = fileHeadHtml(mergedFiles.length, mode);
     fh += buildFileRows(mergedFiles, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
@@ -1003,6 +1003,11 @@ function fileModeBtnHtml(mode) {
     return '<button class="fmode-btn" data-fmode="' + (toTree ? FILE_MODE_TREE : FILE_MODE_FLAT) + '" data-title="' + esc(label) + '">' + (toTree ? I_TREE_MODE : I_FLAT_MODE) + '</button>';
 }
 
+/** Header row of the commit-detail file list; the inner group is pinned on both scroll axes. */
+function fileHeadHtml(count, mode) {
+    return '<div class="fhead"><div class="fhead-inner"><span>' + T('w.filesCount', { n: count }) + '</span>' + fileModeBtnHtml(mode) + '</div></div>';
+}
+
 function fileRowPad(depth) {
     return 'padding-left:' + (8 + depth * 14) + 'px';
 }
@@ -1065,7 +1070,7 @@ function renderDetail() {
     info.innerHTML = mh;
 
     var mode = state.fileViewMode || FILE_MODE_TREE;
-    var fh = '<div class="fhead"><span>' + T('w.filesCount', { n: files.length }) + '</span>' + fileModeBtnHtml(mode) + '</div>';
+    var fh = fileHeadHtml(files.length, mode);
     fh += buildFileRows(files, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';

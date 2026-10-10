@@ -767,19 +767,25 @@ canvas.graph-canvas {
     line-height: 1.5;
 }
 
+/* Spans the whole scrollable width so the divider stays continuous; the inner group
+   is pinned horizontally too, otherwise long paths push the mode switch out of view. */
 .fhead {
     position: sticky;
     top: 0;
     z-index: 1;
+    background: var(--vscode-sideBar-background, #252526);
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+.fhead-inner {
+    position: sticky;
+    left: 0;
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 6px;
+    width: max-content;
     padding: 6px 10px;
     font-size: 11px;
     color: var(--vscode-descriptionForeground, #888);
-    background: var(--vscode-sideBar-background, #252526);
-    border-bottom: 1px solid var(--vscode-panel-border, #333);
 }
 /* Flat / directory-tree switch, shown at the right of a file list header */
 .fmode-btn {
