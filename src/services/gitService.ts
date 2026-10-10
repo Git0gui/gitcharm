@@ -287,6 +287,10 @@ export class GitService {
      * initialised repo has none, and every history command would fail there.
      */
     async hasAnyCommit(): Promise<boolean> {
+        // Any branch or tag ref points at a commit, so the refs read from disk
+        // answer the common case without a subprocess; only ref-less states
+        // (fresh init, detached-only history) fall through to rev-list.
+        if (this._refsReader.readBranchRefs().size > 0) {return true;}
         const output = await this.executeGitArgs(['rev-list', '--all', '--max-count=1'], { timeoutMs: 8000 });
         return output.trim() !== '';
     }
