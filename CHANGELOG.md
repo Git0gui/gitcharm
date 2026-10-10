@@ -2,6 +2,25 @@
 
 所有重要更改都将记录在此文件中。
 
+## [0.0.5] - 2026-10-11
+
+### 优化
+
+- **彻底移除对内置 `vscode.git` 扩展的依赖**：分支列表、当前分支、upstream/ahead-behind、HEAD 哈希一律改由自有实现提供——refs（含 packed-refs）与 `HEAD` 直接读文件，track 信息用单条 `for-each-ref`，缓存失效改由 `fs.watch` git 目录驱动。`package.json` 不再声明 `extensionDependencies: ["vscode.git"]`，禁用内置 Git 扩展也能正常使用；面板首屏不再可能被内置扩展的仓库扫描（多子进程、大仓库秒级）拖慢
+- **缓存失效改为事件驱动**：`GitService.watchRepositoryChanges()` 监听 `HEAD`/`index`/`packed-refs` 与 `refs` 目录（递归），250ms 防抖后丢弃易失缓存；订阅方按 token 归还 Disposable，最后一个释放时才真正关监听。外部终端里的 checkout/commit 不再需要等缓存过期或轮询
+- **打包体积从 442KB 降到 156KB**：VSIX 内剔除 `resources/screenshots`（README 图片链接打包时会被 vsce 重写成 GitHub raw 绝对地址，市场不会请求包内副本）、`out/test`、`AGENTS.md`、`.tsbuildinfo`、`.eslintrc.json` 与上一版 `.vsix`；并删除冗余的 `onView` 激活事件（VS Code 会从 `contributes.views` 自动生成）
+- **能读文件就不启子进程**：`hasAnyCommit` 先看 refs 上有没有指针（零提交仓库才回落 `rev-list`），`dropLastCommit` 的脏工作区检查复用同一次 `status --porcelain -z` 解析（不再额外 `status`），`getHeadHash` 直接由 `HEAD` + refs 得出哈希
+
+### 修复
+
+- **linked worktree 下 git 状态读不到**：worktree 的 `.git` 是 `gitdir:` 指针文件、refs 又共享在 `commondir` 指向的公共目录，旧代码拼 `repoPath/.git` 去读 `HEAD`、`MERGE_HEAD`、`rebase-merge`、`CHERRY_PICK_HEAD` 一律落空（冲突/变基状态栏不显示、分支与哈希退回子进程）。新增纯 fs 的 `resolveGitDir()` / `resolveCommonDir()`，所有状态文件读取统一走 worktree 感知路径
+- **git log 的位置参数存在参数注入面**：无 shell 的 argv 执行下，旧代码靠静默剥离 `" \` $` 来"消毒"，既会篡改合法分支名又挡不住以 `-` 开头的输入被 git 当成选项（如 hash 搜索框填入 `--output=…`）。现在分支 rev 走 `assertRef`（新增拒绝前导 `-`，合法 ref 本就不允许）、hash 走 `assertHash`，`--grep/--author/--since/--until` 作为选项值原样传递
+
+### 文档
+
+- AGENTS.md 新增「禁止依赖 vscode.git」硬约束与数据替换对照表；README 中英特性清单同步（含"内置 Git 扩展可禁用"）
+- 新增回归测试 `noVscodeGit.test.ts`：扫描 `src/**` 拦住重新引用内置 git API 的写法，并校验 `package.json` 不再有 `extensionDependencies`
+
 ## [0.0.4] - 2026-10-11
 
 ### 新增
