@@ -54,6 +54,10 @@ describe('assertRef', () => {
     it('rejects names ending with /', () => {
         assert.throws(() => assertRef('trailing/'), /不合法/);
     });
+
+    it('rejects names starting with - so they cannot be read as options', () => {
+        assert.throws(() => assertRef('--output=/tmp/x'), /不合法/);
+    });
 });
 
 describe('assertHash', () => {

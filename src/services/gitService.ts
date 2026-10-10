@@ -1544,22 +1544,23 @@ export class GitService {
         // Use git log with graph format to get topology info
         // %ai = author date (matches GitCharm default display)
         const format = '%H|%h|%s|%an|%ai|%P';
-        const safe = (v: string) => v.replace(/["\\$`]/g, '');
 
         const buildArgs = (forHash: boolean, useBranch: string | undefined): string[] => {
             const a: string[] = ['log'];
             if (forHash) {
                 // Hash search: limit to exactly 1 commit to avoid returning all ancestors
-                a.push('-n', '1', safe(hashSearch!));
+                a.push('-n', '1', assertHash(hashSearch!));
             } else {
-                a.push(useBranch ? safe(useBranch) : '--all');
+                // Positional revs are validated, not sanitised: argv spawn means no
+                // shell interpolation, and a legal ref can never start with '-'.
+                a.push(useBranch ? assertRef(useBranch) : '--all');
             }
             a.push('--topo-order');
             if (searchText && !forHash) {
                 // Use --grep for commit message search without --fixed-strings to allow partial matching
-                a.push('--regexp-ignore-case', `--grep=${safe(searchText)}`);
+                a.push('--regexp-ignore-case', `--grep=${searchText}`);
             }
-            if (f.author) {a.push(`--author=${safe(f.author)}`);}
+            if (f.author) {a.push(`--author=${f.author}`);}
             if (f.from) {
                 // Git prefers 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS' format
                 // Convert ISO 8601 back to space-separated format for better compatibility
@@ -1570,7 +1571,7 @@ export class GitService {
                     fromDate = fromDate + ' 00:00:00';
                 }
                 logger.debug(`[GitCharm] Date filter --since: "${fromDate}"`);
-                a.push(`--since=${safe(fromDate)}`);
+                a.push(`--since=${fromDate}`);
             }
             if (f.to) {
                 // Git prefers 'YYYY-MM-DD HH:MM:SS' format
@@ -1581,7 +1582,7 @@ export class GitService {
                     toDate = toDate + ' 23:59:59';
                 }
                 logger.debug(`[GitCharm] Date filter --until: "${toDate}"`);
-                a.push(`--until=${safe(toDate)}`);
+                a.push(`--until=${toDate}`);
             }
             if (skip > 0 && !forHash) {a.push(`--skip=${skip}`);}
             if (!forHash) {

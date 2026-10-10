@@ -27,7 +27,9 @@ export function assertShellSafe(value: string, label: string): string {
 
 export function assertRef(value: string, label = t('label.branch')): string {
     assertShellSafe(value, label);
-    if (REF_ILLEGAL.test(value) || value.includes('..') || value.includes('@{') || value.startsWith('/') || value.endsWith('/')) {
+    // A ref that begins with '-' would be parsed as an option by git; check-ref-format
+    // forbids it for real refs anyway, so this only rejects hostile input.
+    if (REF_ILLEGAL.test(value) || value.includes('..') || value.includes('@{') || value.startsWith('-') || value.startsWith('/') || value.endsWith('/')) {
         throw new Error(t('err.invalidRef', { label, value }));
     }
     return value;
