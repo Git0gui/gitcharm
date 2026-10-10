@@ -44,7 +44,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 
 - **冷路径禁止 await vscode.git 激活**：`_loadGraphData` / `_loadBranchDetails` / `getDivergenceInfo` / `getHeadHash` 不得触发 `gitExt.activate()`（其内部仓库扫描是多 spawn，大仓库秒级）。
 - **热路径可以用**：push / compareFileWithBranch 的分支存在性检查（`getBranchesFromVscodeGit()`），以及 `onDidChangeState` 事件驱动缓存失效。
-- `repo.getRefs()` 替代已废弃的 `state.refs`（最低 VSCode 1.95.0）。
+- 优先使用 `repo.getRefs()`；VS Code 1.50 起的兼容范围内若该方法不可用，回退读取 `state.refs`。扩展最低支持 VS Code 1.50.0。
 - **已知缺陷，禁止踩**：
   - `repo.log(branch)` 忽略分支参数、返回共享缓存的相同对象引用，且 `repo.log()` 忽略 since/until——提交日志一律走 git 命令。
   - `Commit.parents` 可能是 `string[]` 或 `object[].hash`，必须做类型归一化（`typeof p === 'string' ? p : p.hash`）。

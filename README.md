@@ -74,7 +74,7 @@ GitCharm provides a three-panel Git log view:
 
 ## Requirements
 
-- **VSCode** ≥ 1.95.0, or **Qoder** latest
+- **VSCode** ≥ 1.50.0, or **Qoder** latest
 - **Git** ≥ 2.0.0
 - Built-in **vscode.git** extension enabled (default)
 
@@ -223,7 +223,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ## 环境要求
 
-- **VSCode** ≥ 1.95.0，或 **Qoder** 最新版
+- **VSCode** ≥ 1.50.0，或 **Qoder** 最新版
 - **Git** ≥ 2.0.0
 - 内置 **vscode.git** 扩展保持启用（默认开启）
 

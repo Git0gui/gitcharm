@@ -23,7 +23,7 @@
     "cherry-pick"
   ],
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.50.0"
   },
   "extensionDependencies": [
     "vscode.git"
