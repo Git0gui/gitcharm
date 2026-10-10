@@ -53,19 +53,17 @@ export function activate(ctx: vscode.ExtensionContext) {
     // Set context key for view visibility
     vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', hasGitRepo);
 
-    // Status bar item: only show when git repo exists
-    let statusBarItem: vscode.StatusBarItem | undefined;
-    if (hasGitRepo) {
-        statusBarItem = vscode.window.createStatusBarItem(
-            vscode.StatusBarAlignment.Left,
-            100
-        );
-        statusBarItem.text = '$(repo) GitCharm';
-        statusBarItem.tooltip = t('ext.statusTooltip');
-        statusBarItem.command = 'idea-git.openGraphView';
-        statusBarItem.show();
-        ctx.subscriptions.push(statusBarItem);
-    }
+    // Status bar entry stays put in every workspace: without a repository it is the
+    // route into the panel's guidance page
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    statusBarItem.text = '$(repo) GitCharm';
+    statusBarItem.command = 'idea-git.openGraphView';
+    statusBarItem.show();
+    ctx.subscriptions.push(statusBarItem);
+    const setStatusBarTooltip = (hasRepo: boolean): void => {
+        statusBarItem.tooltip = t(hasRepo ? 'ext.statusTooltip' : 'ext.statusTooltipNoRepo');
+    };
+    setStatusBarTooltip(hasGitRepo);
 
     // Watch for git repository changes (git init, clone, etc.)
     const watcher = vscode.workspace.createFileSystemWatcher(
@@ -76,24 +74,14 @@ export function activate(ctx: vscode.ExtensionContext) {
         vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', true);
         gitService.refreshRepositoryPath();
         void graphView.refreshRepoState(true);
-        if (!statusBarItem) {
-            statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-            statusBarItem.text = '$(repo) GitCharm';
-            statusBarItem.tooltip = t('ext.statusTooltip');
-            statusBarItem.command = 'idea-git.openGraphView';
-            statusBarItem.show();
-            ctx.subscriptions.push(statusBarItem);
-        }
+        setStatusBarTooltip(true);
     });
 
     watcher.onDidDelete(() => {
         vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', false);
         gitService.refreshRepositoryPath();
         void graphView.refreshRepoState(true);
-        if (statusBarItem) {
-            statusBarItem.dispose();
-            statusBarItem = undefined;
-        }
+        setStatusBarTooltip(false);
     });
 
     ctx.subscriptions.push(watcher);

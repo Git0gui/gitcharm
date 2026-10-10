@@ -379,6 +379,7 @@ const zh: Record<string, string> = {
 
     // extension.ts
     'ext.statusTooltip': '打开 GitCharm 日志面板',
+    'ext.statusTooltipNoRepo': '打开 GitCharm 面板初始化 Git 仓库',
     'ext.openDiffFailed': '无法打开文件差异: {error}',
     'ext.selectFile': '请选择一个文件',
     'ext.noGitRepo': '未找到 git 仓库',
@@ -756,6 +757,7 @@ const en: Record<string, string> = {
 
     // extension.ts
     'ext.statusTooltip': 'Open GitCharm log panel',
+    'ext.statusTooltipNoRepo': 'Open GitCharm to initialize a Git repository',
     'ext.openDiffFailed': 'Cannot open file diff: {error}',
     'ext.selectFile': 'Please select a file',
     'ext.noGitRepo': 'No git repository found',
