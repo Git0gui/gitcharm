@@ -53,6 +53,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _memento: vscode.Memento;
     private _pendingViewState: PersistedViewState | undefined;
     private _viewStateTimer: NodeJS.Timeout | undefined;
+    // Theme folder currently granted to the webview (undefined = none)
+    private _grantedThemeRoot: string | undefined;
 
     constructor(gitService: GitService, extensionUri: vscode.Uri, memento: vscode.Memento) {
         this._gitService = gitService;
@@ -66,20 +68,36 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /** Media plus the active file-icon theme folder, so the webview may load their assets. */
-    private _webviewOptions(): vscode.WebviewOptions {
+    private _webviewOptions(themeRoot: vscode.Uri | undefined): vscode.WebviewOptions {
         const roots = [vscode.Uri.joinPath(this._extensionUri, 'media')];
-        const themeRoot = iconThemeResourceRoot();
         if (themeRoot) {roots.push(themeRoot);}
         return { enableScripts: true, localResourceRoots: roots };
+    }
+
+    /**
+     * Rewriting webview options rebuilds its resource loader, so this only happens on
+     * first resolve or when the theme folder actually moved.
+     */
+    private _applyWebviewOptions(webview: vscode.Webview, force: boolean): void {
+        const themeRoot = iconThemeResourceRoot();
+        const rootPath = themeRoot?.fsPath;
+        if (!force && rootPath === this._grantedThemeRoot) {return;}
+        webview.options = this._webviewOptions(themeRoot);
+        this._grantedThemeRoot = rootPath;
     }
 
     private _postFileIconTheme(): void {
         const webview = this._view?.webview;
         if (!webview) {return;}
-        // The theme folder can change between posts, so the allow-list is refreshed too.
-        webview.options = this._webviewOptions();
-        const pack = getFileIconPack(absolute => webview.asWebviewUri(vscode.Uri.file(absolute)).toString());
-        this._post({ command: 'setFileIconTheme', pack });
+        try {
+            this._applyWebviewOptions(webview, false);
+            const pack = getFileIconPack(absolute => webview.asWebviewUri(vscode.Uri.file(absolute)).toString());
+            this._post({ command: 'setFileIconTheme', pack });
+        } catch (error) {
+            // Icons are decoration: an unreadable theme must never take the panel down.
+            logger.warn('[GitCharm] file icon theme unavailable:', error);
+            this._post({ command: 'setFileIconTheme' });
+        }
     }
 
     /** Re-resolve the file-icon theme after workbench.iconTheme or the colour theme changed. */
@@ -497,7 +515,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     async resolveWebviewView(webviewView: vscode.WebviewView) {
         this._view = webviewView;
         this._webviewReady = false;
-        webviewView.webview.options = this._webviewOptions();
+        this._grantedThemeRoot = undefined;
+        this._applyWebviewOptions(webviewView.webview, true);
 
         webviewView.webview.onDidReceiveMessage(async (message: WebviewToExtMessage) => {
             switch (message.command) {
@@ -607,7 +626,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'ready':
                     this._webviewReady = true;
                     this._postRepoState();
-                    this._postFileIconTheme();
                     if (this._initialInProgress) {
                         this._post({ command: 'setInProgress', inProgress: this._initialInProgress });
                     }
@@ -647,6 +665,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         const hash = this._pendingReveal;
                         this._pendingReveal = undefined;
                         this._post({ command: 'revealCommit', hash });
+                    }
+                    {
+                        // Reading the icon theme JSON is synchronous work on the host, so it
+                        // goes after everything the panel needs to show its data.
+                        setTimeout(() => this._postFileIconTheme(), 0);
                     }
                     break;
                 case 'saveViewState':

@@ -59,6 +59,11 @@ export function activate(ctx: vscode.ExtensionContext) {
     ctx.subscriptions.push(vscode.window.onDidChangeActiveColorTheme(() => {
         graphView.refreshFileIconTheme();
     }));
+    // A theme installed in this session only appears in the extension registry once
+    // it settles; re-resolve then so the icons apply without a window reload.
+    ctx.subscriptions.push(vscode.extensions.onDidChange(() => {
+        graphView.refreshFileIconTheme();
+    }));
 
     // Set context key for view visibility
     vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', hasGitRepo);
