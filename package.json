@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -33,7 +33,8 @@
     "Visualization"
   ],
   "activationEvents": [
-    "workspaceContains:.git"
+    "workspaceContains:.git",
+    "onView:idea-git.mainView"
   ],
   "main": "./out/extension.js",
   "contributes": {
