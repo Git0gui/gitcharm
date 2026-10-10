@@ -872,6 +872,21 @@ export class GitService {
         }
     }
 
+    /** The current worktree's git directory, with `gitdir:` pointers resolved. */
+    private _gitDir(): string | undefined {
+        const repo = this._resolveRoot();
+        return repo ? resolveGitDir(repo) : undefined;
+    }
+
+    /**
+     * True while a cherry-pick is paused on unresolved conflicts. The state file
+     * lives in the worktree's own git dir, so linked worktrees read correctly.
+     */
+    hasCherryPickHead(): boolean {
+        const gitDir = this._gitDir();
+        return gitDir !== undefined && fs.existsSync(path.join(gitDir, 'CHERRY_PICK_HEAD'));
+    }
+
     /** Working tree has neither staged nor unstaged changes (single status call). */
     async isClean(): Promise<boolean> {
         const summary = await this.getWorkingTreeSummary();
@@ -1144,11 +1159,8 @@ export class GitService {
      * Returns 'rebase' | 'merge' | 'cherry-pick' | undefined.
      */
     async getInProgressOperation(): Promise<'rebase' | 'merge' | 'cherry-pick' | undefined> {
-        const repo = this._resolveRoot();
-        if (!repo) {return undefined;}
-        const fs = require('fs');
-        const path = require('path');
-        const gitDir = path.join(repo, '.git');
+        const gitDir = this._gitDir();
+        if (!gitDir) {return undefined;}
 
         // Check for rebase in progress (including pull --rebase conflicts)
         if (fs.existsSync(path.join(gitDir, 'rebase-merge')) || fs.existsSync(path.join(gitDir, 'rebase-apply'))) {
@@ -1715,12 +1727,13 @@ export class GitService {
      * Resolve the current HEAD commit hash.
      */
     async getHeadHash(): Promise<string> {
-        // Read .git/HEAD + refs from the filesystem (no subprocess); fall back
-        // to rev-parse for unusual layouts (worktrees) or empty repos.
+        // Read HEAD + refs from the filesystem (no subprocess). The git directory
+        // comes from resolveGitDir so linked worktrees are read the same way.
         const repoPath = this._repositoryPath;
-        if (repoPath) {
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (gitDir) {
             try {
-                const head = fs.readFileSync(path.join(repoPath, '.git', 'HEAD'), 'utf8').trim();
+                const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
                 if (head.startsWith('ref:')) {
                     const short = head.substring(4).trim().replace(/^refs\/(heads|remotes)\//, '');
                     const hash = this._refsReader.readBranchRefs().get(short);
@@ -1731,13 +1744,6 @@ export class GitService {
             } catch { /* fall through to git command */ }
         }
         return (await this.executeGitArgs(['rev-parse', 'HEAD'])).trim();
-    }
-
-    /**
-     * True when the working tree has no uncommitted changes.
-     */
-    async isWorkingTreeClean(): Promise<boolean> {
-        return (await this.executeGitArgs(['status', '--porcelain'])).trim() === '';
     }
 
     /**
@@ -1758,7 +1764,7 @@ export class GitService {
         if (commitHash !== head) {
             throw new Error(t('commit.dropOnlyLast'));
         }
-        if (!(await this.isWorkingTreeClean())) {
+        if (!(await this.isClean())) {
             throw new Error(t('err.dropDirtyWorktree'));
         }
         await this._execMutate(['reset', '--hard', 'HEAD~1']);

@@ -641,24 +641,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         // Restore cherry-pick resume state if valid and conflicts are resolved
                         const resumeState = this._gitService.loadCherryPickResume(this._memento);
                         if (resumeState && resumeState.remainingHashes.length > 0) {
-                            // Verify cherry-pick conflicts have been resolved (CHERRY_PICK_HEAD removed)
-                            const repoPath = this._gitService.repositoryPath;
-                            if (repoPath) {
-                                const fs = require('fs');
-                                const path = require('path');
-                                const hasCherryPickHead = fs.existsSync(path.join(repoPath, '.git', 'CHERRY_PICK_HEAD'));
-                                
-                                // Only show resume button when conflicts are resolved (no CHERRY_PICK_HEAD)
-                                if (!hasCherryPickHead) {
-                                    this._post({ 
-                                        command: 'showCherryPickResume', 
-                                        remainingHashes: resumeState.remainingHashes, 
-                                        conflictHash: resumeState.conflictHash 
-                                    });
-                                } else {
-                                    // Conflicts still exist - don't show resume button yet
-                                    // User needs to resolve in SCM first
-                                }
+                            // Only show resume button when conflicts are resolved (no CHERRY_PICK_HEAD)
+                            if (!this._gitService.hasCherryPickHead()) {
+                                this._post({
+                                    command: 'showCherryPickResume',
+                                    remainingHashes: resumeState.remainingHashes,
+                                    conflictHash: resumeState.conflictHash
+                                });
                             }
                         }
                     }
@@ -996,21 +985,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // Resume cherry-pick after conflict resolution
                     const remainingHashes = message.remainingHashes || [];
                     if (remainingHashes.length > 0) {
-                        // Verify conflicts have been resolved (CHERRY_PICK_HEAD should not exist)
                         try {
-                            const repoPath = this._gitService.repositoryPath;
-                            if (repoPath) {
-                                const fs = require('fs');
-                                const path = require('path');
-                                const hasCherryPickHead = fs.existsSync(path.join(repoPath, '.git', 'CHERRY_PICK_HEAD'));
-                                
-                                if (hasCherryPickHead) {
-                                    // Conflicts still exist - user needs to resolve them first
-                                    vscode.window.showWarningMessage(t('cherryPick.resolveConflictsFirst'));
-                                    return;
-                                }
+                            // Conflicts still exist (CHERRY_PICK_HEAD present) - resolve in SCM first
+                            if (this._gitService.hasCherryPickHead()) {
+                                vscode.window.showWarningMessage(t('cherryPick.resolveConflictsFirst'));
+                                return;
                             }
-                            
+
                             await vscode.commands.executeCommand('idea-git.cherryPick', { hashes: remainingHashes });
                             forceReload = true;
                         } catch (error: any) {
