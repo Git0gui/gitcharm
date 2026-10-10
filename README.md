@@ -63,7 +63,10 @@ GitCharm provides a three-panel Git log view:
 - **Bilingual UI**: fully localized interface, follows editor language or set manually
 - **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
-- **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs
+- **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs; the header (count + switch) stays pinned while scrolling in any direction
+- **Theme-aware file icons**: changed files borrow the icons of the active file-icon theme — installed themes as well as the built-in one, font-based and SVG-based alike; folders use a matching two-tone glyph, and the checked-out branch gets a filled branch icon
+- **Never squeezed out**: the graph column is capped and can be hidden entirely (persisted), so repositories with many branches still show full commit messages
+- **Works without a repository**: the panel and the status bar entry are always present; a folder without `.git` gets a guided page that can run `git init` for you
 - **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges
 - **Pre-rebase check**: detects uncommitted changes before rebasing to avoid failures
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts detected in one place, top status bar with Continue / Abort, conflicts delegated to the native SCM view
@@ -89,7 +92,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 
 ## Usage
 
-1. Open a workspace containing a Git repository
+1. Open a workspace containing a Git repository — a folder without one still opens the panel and offers `git init`
 2. Click the **GitCharm** tab in the bottom panel to reveal the three-panel log view
 3. Tree nodes: single-click folders to expand, **double-click a branch to switch**; right-click a node or commit row for context actions
 
@@ -209,7 +212,10 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **中英双语**：界面全量本地化，跟随编辑器语言或手动指定
 - **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口）
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
-- **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换
+- **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换；表头（数量 + 切换按钮）在任意方向滚动时保持吸附
+- **文件图标跟随主题**：变更文件直接使用当前文件图标主题的图标（已安装主题与内置主题通用，字体型与 SVG 型都支持），文件夹用配套的双色图标，当前分支则显示实心分支图标
+- **不再挤压信息列**：提交图列宽封顶且可整体隐藏（持久化），分支再多的仓库也能看全提交信息
+- **无仓库也能用**：面板与状态栏入口常驻，没有 `.git` 的文件夹会给出引导页，并可一键执行 `git init`
 - **IDEA 风格视觉**：圆角 6–12px、平滑过渡、悬停微动效、tag 黄色徽章
 - **变基前检查**：自动检测未提交更改，避免变基失败
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部状态栏提供"继续 / 终止"，冲突自动交原生 SCM 视图解决
@@ -235,7 +241,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ## 使用方法
 
-1. 打开一个 Git 仓库工作区
+1. 打开一个 Git 仓库工作区——没有 `.git` 的文件夹同样能打开面板，并会提供一键 `git init` 引导
 2. 在底部面板点击 **GitCharm** 标签，即可看到三栏日志视图
 3. 树节点：文件夹单击展开、分支**双击切换**；右键节点或提交行呼出对应操作菜单
 
