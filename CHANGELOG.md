@@ -13,6 +13,7 @@
 
 ### 修复
 
+- **在 VS Code 里切分支时面板感知弱**：外部切换的探测原先把 `fs.watch` 绑在 `HEAD` 文件本身——git 是用 `HEAD.lock` + rename 覆写它，Windows 上还能收到事件，macOS/Linux 的 inotify 绑 inode，第一次切换后就变成孤儿监听；而 2s 轮询又只在 watcher 报 `error` 时才启动，孤儿监听并不报错、只是从此静默无事件，于是"切一次还行、后面全不刷新"。现在监听 git 目录并按 `HEAD` 过滤，轮询与监听常开并存（读 `HEAD` 是纯文件读取，不启子进程），任何一路失效另一路仍会跟上
 - **linked worktree 下 git 状态读不到**：worktree 的 `.git` 是 `gitdir:` 指针文件、refs 又共享在 `commondir` 指向的公共目录，旧代码拼 `repoPath/.git` 去读 `HEAD`、`MERGE_HEAD`、`rebase-merge`、`CHERRY_PICK_HEAD` 一律落空（冲突/变基状态栏不显示、分支与哈希退回子进程）。新增纯 fs 的 `resolveGitDir()` / `resolveCommonDir()`，所有状态文件读取统一走 worktree 感知路径
 - **git log 的位置参数存在参数注入面**：无 shell 的 argv 执行下，旧代码靠静默剥离 `" \` $` 来"消毒"，既会篡改合法分支名又挡不住以 `-` 开头的输入被 git 当成选项（如 hash 搜索框填入 `--output=…`）。现在分支 rev 走 `assertRef`（新增拒绝前导 `-`，合法 ref 本就不允许）、hash 走 `assertHash`，`--grep/--author/--since/--until` 作为选项值原样传递
 

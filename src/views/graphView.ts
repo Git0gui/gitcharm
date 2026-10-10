@@ -24,6 +24,8 @@ interface GraphPayload {
 const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
 const ALL_COMMITS_ROW = '__all__';
+/** How often to re-read HEAD while the panel is visible (watcher backstop). */
+const BRANCH_POLL_MS = 2000;
 
 export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly PAGE_FIRST = 20;
@@ -784,8 +786,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Watch HEAD for external branch switches (CLI, other tools). Falls back to
-     * 2s polling when the watcher cannot be set up.
+     * Watch for external branch switches (VS Code's own Git UI, CLI, other tools).
+     *
+     * The watch is on the git *directory* with a HEAD filter rather than on HEAD
+     * itself: git rewrites HEAD as HEAD.lock + rename, which orphans a file-level
+     * watcher after the first switch. The interval runs alongside the watcher for
+     * the same reason — a silently dead watcher would otherwise never be noticed,
+     * and reading HEAD is a plain file read, so polling costs no subprocess.
      */
     private _startBranchCheck(): void {
         this._stopBranchCheck(); // Clear any existing watcher/timer
@@ -797,17 +804,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
         const repoPath = this._gitService.repositoryPath;
         const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
-        const headFile = gitDir ? path.join(gitDir, 'HEAD') : undefined;
-        if (headFile && fs.existsSync(headFile)) {
+        if (gitDir) {
             try {
-                this._headWatcher = fs.watch(headFile, () => {
+                const watcher = fs.watch(gitDir, (_event, filename) => {
+                    // An unknown filename is treated as HEAD: some platforms omit it.
+                    if (filename && filename.toString() !== 'HEAD') {return;}
                     if (this._headDebounce) {clearTimeout(this._headDebounce);}
                     this._headDebounce = setTimeout(() => void this._checkBranchNow(), 300);
                 });
-                this._headWatcher.on('error', () => this._startBranchPolling());
-                return;
+                this._headWatcher = watcher;
+                watcher.on('error', () => {
+                    if (this._headWatcher === watcher) {this._headWatcher = undefined;}
+                    try { watcher.close(); } catch { /* already closed */ }
+                });
             } catch {
-                // Fall through to polling
+                // No watch support on this platform: polling only
             }
         }
         this._startBranchPolling();
@@ -815,7 +826,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     private _startBranchPolling(): void {
         if (this._branchCheckTimer) {return;} // Already polling
-        this._branchCheckTimer = setInterval(() => void this._checkBranchNow(), 2000);
+        this._branchCheckTimer = setInterval(() => void this._checkBranchNow(), BRANCH_POLL_MS);
     }
 
     private async _checkBranchNow(): Promise<void> {

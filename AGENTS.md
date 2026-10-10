@@ -98,7 +98,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - `updateBranch`：远程存在同名分支时自动建立跟踪。
 - **冲突处理（merge/rebase/cherry-pick）一律交 VSCode 原生 SCM 视图**，插件只提供继续/终止入口和顶部持久化状态栏；冲突检测合并 stderr+stdout，扫 `unmerged files`、cherry-pick failed 等关键词，`isConflictError` 入参必须是字符串。
 - 分支刷新按钮只刷分支树，不动中间提交列表；拉取其他分支时不触发 `_reload()`。
-- 外部分支变更检测：`fs.watch` git 目录下的 `HEAD`（用 `resolveGitDir()` 定位）+ 300ms 防抖，仅 webview 可见时启用，轮询（2s）作兜底；`pauseBranchCheck` 冷却语义保留。
+- 外部分支变更检测：**`fs.watch` 监听 git 目录本身**（用 `resolveGitDir()` 定位）并按 `filename === 'HEAD'` 过滤 + 300ms 防抖，**不要监听 HEAD 文件本身**——git 以 `HEAD.lock` + rename 覆写 HEAD，Windows 上文件级 watcher 仍可靠（实测三次 checkout 都收到事件），但 macOS/Linux 的 inotify 绑的是 inode，rename 覆盖后就成了孤儿监听，不可移植。轮询（2s，读 HEAD 零子进程）**常开**作兜底，不能只在 watcher `error` 时启用（孤儿监听不会报错，只是从此静默无事件）。仅 webview 可见时启用；`pauseBranchCheck` 冷却语义保留。
 - 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
 
