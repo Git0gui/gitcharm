@@ -201,6 +201,8 @@ var state = {
     collapsedSec: {},
     expandedFolder: {},
     fileViewMode: 'tree',
+    graphVisible: true,
+    graphOverflow: false,
     _pendingScrollTop: null,
     _pendingRestore: null
 };
@@ -220,7 +222,8 @@ function saveViewState() {
                 collapsed: state.collapsed,
                 collapsedSec: state.collapsedSec,
                 expandedFolder: state.expandedFolder,
-                fileViewMode: state.fileViewMode || 'tree'
+                fileViewMode: state.fileViewMode || 'tree',
+                graphVisible: state.graphVisible !== false
             }
         });
     }, 400);
@@ -254,6 +257,10 @@ function applyRestoreNow() {
     if (pr.collapsedSec) { state.collapsedSec = pr.collapsedSec; }
     if (pr.expandedFolder) { state.expandedFolder = pr.expandedFolder; }
     if (pr.fileViewMode === 'tree' || pr.fileViewMode === 'flat') { state.fileViewMode = pr.fileViewMode; }
+    if (typeof pr.graphVisible === 'boolean' && pr.graphVisible !== state.graphVisible) {
+        state.graphVisible = pr.graphVisible;
+        renderRows();   // the graph column width is baked into the row markup
+    }
     if (pr.detailVisible === true) { state.detailVisible = true; }
     var commitsLoaded = (state.commits || []).length > 0;
     var target = pr.selectedHash;
@@ -555,6 +562,8 @@ function renderRows() {
             return;
         }
         document.getElementById('rows').innerHTML = '<div class="empty">' + T('w.noMatch') + '</div>';
+        document.getElementById('rows').style.minWidth = '';
+        removeGraphCanvas();
         return;
     }
     
@@ -572,11 +581,27 @@ function renderRows() {
     var lanes = [];
     var laneLastRow = [];
     var commitLane = {};
-    function slotLane() {
-        for (var i = 0; i < lanes.length; i++) if (!lanes[i].pending) return i;
+    // Lane columns are capped on purpose: past ~20 concurrent branches the graph is
+    // unreadable anyway, and an uncapped column pushes the commit messages out of view.
+    // The last column is reserved as an overflow lane that extra chains share.
+    var MAX_LANES = 24;
+    var OVERFLOW_LANE = MAX_LANES - 1;
+    var graphOverflow = false;
+    function chainContinues(hash, i) {
+        var j = rowOf[hash];
+        return j !== undefined && j > i;
+    }
+    function newLane() {
         lanes.push({ pending: null, color: null });
         laneLastRow.push(undefined);
         return lanes.length - 1;
+    }
+    function slotLane() {
+        for (var i = 0; i < lanes.length; i++) { if (i < OVERFLOW_LANE && !lanes[i].pending) return i; }
+        if (lanes.length < OVERFLOW_LANE) {return newLane();}
+        graphOverflow = true;
+        while (lanes.length <= OVERFLOW_LANE) {newLane();}
+        return OVERFLOW_LANE;
     }
     list.forEach(function (c, i) {
         var expecting = [];
@@ -587,18 +612,22 @@ function renderRows() {
         commitLane[c.hash] = li;
         laneLastRow[li] = i;
         for (var e = 1; e < expecting.length; e++) lanes[expecting[e]].pending = null;
-        lanes[li].pending = c.parents[0] || null;
+        // Hold the lane only while the first parent is actually in this page — a chain
+        // that leaves the loaded window can never be drawn and would leak the column.
+        var p0 = c.parents[0];
+        lanes[li].pending = (li !== OVERFLOW_LANE && p0 && chainContinues(p0, i)) ? p0 : null;
         for (var pi = 1; pi < c.parents.length; pi++) {
             var ph = c.parents[pi];
-            if (rowOf[ph] === undefined || rowOf[ph] <= i) continue;
+            if (!chainContinues(ph, i)) {continue;}
             var nl = slotLane();
             if (!lanes[nl].color) lanes[nl].color = laneColor('merge' + i + '_' + pi);
-            lanes[nl].pending = ph;
+            if (nl !== OVERFLOW_LANE) lanes[nl].pending = ph;
         }
     });
 
     var laneW = 12;
-    var graphW = Math.max(lanes.length, 1) * laneW + 8;
+    state.graphOverflow = graphOverflow;
+    var graphW = state.graphVisible === false ? 0 : Math.max(lanes.length, 1) * laneW + 8;
     var totalH = list.length * ROW_H;
 
     // Build HTML rows (without dots)
@@ -695,6 +724,7 @@ function renderRows() {
 
     // Draw graph on canvas overlay
     drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, totalH, rowOf);
+    updateGraphToggleUi();
 }
 
 /**
@@ -768,8 +798,29 @@ function renderMultiCommitDetail(info, filesBox) {
 /**
  * Draw the commit graph using Canvas API for pixel-perfect alignment.
  */
+function removeGraphCanvas() {
+    var canvas = document.querySelector('#rows canvas.graph-canvas');
+    if (canvas && canvas.parentNode) {canvas.parentNode.removeChild(canvas);}
+}
+
+/** Reflect the graph column state on the toolbar toggle (label + overflow hint). */
+function updateGraphToggleUi() {
+    var btn = document.getElementById('tg-graph');
+    if (!btn) {return;}
+    var hidden = state.graphVisible === false;
+    var label = T(hidden ? 'ui.showGraph' : 'ui.hideGraph');
+    if (!hidden && state.graphOverflow) {label += ' · ' + T('ui.graphOverflow');}
+    btn.setAttribute('data-title', label);
+    btn.classList.toggle('off', hidden);
+    btn.classList.toggle('warn', !hidden && !!state.graphOverflow);
+}
+
 function drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, totalH, rowOf) {
     var wrap = document.getElementById('rows');
+    if (graphW <= 0) {
+        removeGraphCanvas();
+        return;
+    }
     var firstGarea = wrap.querySelector('.garea');
     if (!firstGarea) return;
 
@@ -1162,6 +1213,11 @@ document.getElementById('f-to').addEventListener('keydown', function(e) {
 });
 document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
+});
+document.getElementById('tg-graph').addEventListener('click', function () {
+    state.graphVisible = state.graphVisible === false;
+    renderRows();
+    saveViewState();
 });
 document.getElementById('f-bfilter').addEventListener('input', function (e) {
     state.bfilter = e.target.value.trim();

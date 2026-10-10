@@ -25,6 +25,8 @@ export interface PersistedViewState {
     expandedFolder?: Record<string, boolean>;
     /** 'tree' (default) or 'flat' — how the detail panel lists changed files. */
     fileViewMode?: 'tree' | 'flat';
+    /** false hides the commit graph column entirely (useful in branch-heavy repos). */
+    graphVisible?: boolean;
     /** Epoch ms stamped by the host when the snapshot is flushed; drives the session-restore TTL window. */
     savedAt?: number;
 }

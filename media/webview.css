@@ -264,7 +264,7 @@ svg { flex: none; }
     color: var(--vscode-foreground);
     transform: scale(1.1);
 }
-#btn-refresh {
+#btn-refresh, #tg-graph {
     flex: none;
     width: 30px;
     height: 26px;
@@ -281,6 +281,21 @@ svg { flex: none; }
 #btn-refresh:hover { 
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
     transform: rotate(90deg);
+}
+#tg-graph:hover {
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+    transform: scale(1.06);
+}
+/* Graph column currently hidden */
+#tg-graph.off {
+    color: var(--vscode-descriptionForeground, #888);
+    opacity: 0.65;
+}
+/* Lane cap reached: some branches share the overflow column */
+#tg-graph.warn {
+    border-color: #d9a13c;
+    color: #d9a13c;
+    opacity: 1;
 }
 
 /* ---- three columns ---- */
