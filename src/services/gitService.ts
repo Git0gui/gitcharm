@@ -419,9 +419,11 @@ export class GitService {
 
         // NUL-delimited plumbing output: stable across versions and safe for
         // paths containing spaces or newlines.
+        // --root is required for the initial commit: diff-tree diffs against the
+        // first parent, so a parentless commit would otherwise report no files.
         const [nameStatus, numStat] = await Promise.all([
-            this.executeGitArgs(['diff-tree', '--no-commit-id', '-r', '-M', '--name-status', '-z', hash]).catch(() => ''),
-            this.executeGitArgs(['diff-tree', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
+            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--name-status', '-z', hash]).catch(() => ''),
+            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
         ]);
 
         // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
