@@ -105,6 +105,8 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 分支刷新按钮只刷分支树，不动中间提交列表；拉取其他分支时不触发 `_reload()`。
 - 外部分支变更检测：**`fs.watch` 监听 git 目录本身**（用 `resolveGitDir()` 定位）并按 `filename === 'HEAD'` 过滤 + 300ms 防抖，**不要监听 HEAD 文件本身**——git 以 `HEAD.lock` + rename 覆写 HEAD，Windows 上文件级 watcher 仍可靠（实测三次 checkout 都收到事件），但 macOS/Linux 的 inotify 绑的是 inode，rename 覆盖后就成了孤儿监听，不可移植。轮询（2s，读 HEAD 零子进程）**常开**作兜底，不能只在 watcher `error` 时启用（孤儿监听不会报错，只是从此静默无事件）。仅 webview 可见时启用；`pauseBranchCheck` 冷却语义保留。
 - 同一目录级 watcher 上还须按 `isOperationStateFile()` 分流到**进行中操作复检**（`MERGE_HEAD`/`CHERRY_PICK_HEAD`/`rebase-merge`/`rebase-apply`），否则外部解决冲突后分支上方的"继续/终止"不会自动收起。判定以**状态文件被清掉**为准：`git add` 全部解决但还没 commit 时 `MERGE_HEAD` 仍在，状态栏必须保留；`rebase-*` 优先级高于 `CHERRY_PICK_HEAD` 高于 `MERGE_HEAD`（rebase 内部就是 cherry-pick）。空闲态只准用 `detectOperationFromFiles()`（纯 `fs.existsSync`，零子进程），只有"已知在进行中"才调 `getInProgressOperation()`——它会 spawn `ls-files -u` 兜住无状态文件的未合并索引。任何走 `setData` 的刷新都要把 `_lastInProgress` 与新算出的值同步，否则复检会把刚投递下去的状态当成"变化"再发一次。
+- 外部**历史**变更检测：在同一条 2s 轮询里比较"当前展示 rev 的 tip"——选中了分支就走 `getBranchTipHash()`（RefsReader，纯 fs），没选中就走 `getHeadHash()`；tip 变了才 `_reload(true, true)`，禁止无条件刷新（一次 `git log` 不便宜）。`_collect` 取完数据必须用**同一表达式**同步 `_lastKnownTip`，否则自己触发的刷新会被下一轮轮询误判成外部变化、再刷一次。RefsReader 有 5s TTL，外部提交的可见性靠 `.git` 目录监听触发 `invalidateVolatile()`（实测不 invalidate 时读到的是旧 tip），最坏 5s 后自愈。
+- 自动刷新必须带 `preserveSelection`：webview 只在所选提交仍存在于新列表时保留选中项、详情、折叠态与滚动位置，否则退回全量重置——不带这个标志，用户在终端每提交一次面板就跳回顶部、第三栏清空。
 - 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
 

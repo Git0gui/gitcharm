@@ -62,6 +62,8 @@ export type ExtToWebviewMessage =
         hasMore: boolean;
         headHash: string;
         inProgress?: OperationKind;
+        /** External history change: re-render rows without clearing what is selected. */
+        preserveSelection?: boolean;
         searchContext?: { query?: string; resultCount?: number };
     }
     | { command: 'setBranches'; local: string[]; remote: string[]; currentBranch?: string }

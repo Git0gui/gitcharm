@@ -49,6 +49,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _headDebounce: NodeJS.Timeout | undefined;
     private _operationDebounce: NodeJS.Timeout | undefined;
     private _lastKnownBranch: string | undefined;
+    // Tip of the rev the middle list is showing; a change means history moved
+    // outside this extension and the commit rows have to follow.
+    private _lastKnownTip: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
     // Last known in-progress operation; also the value replayed on the 'ready'
@@ -866,8 +869,39 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     void this._reloadBranchesOnly();
                 }
             }
+
+            // A moved tip means history changed outside this extension — a terminal
+            // commit, the merge commit that lands once conflicts are resolved, an
+            // amend/rebase/reset. Reloading here is what makes the list follow suit
+            // instead of waiting for a manual refresh. Both reads are file-based.
+            const tip = await this._tipOfDisplayedRev();
+            if (tip) {
+                if (this._lastKnownTip && tip !== this._lastKnownTip) {
+                    logger.info(`[GitCharm] History changed externally: ${this._lastKnownTip.slice(0, 8)} -> ${tip.slice(0, 8)}`);
+                    this._lastKnownTip = tip;
+                    void this._reload(true, true);
+                } else {
+                    this._lastKnownTip = tip;
+                }
+            }
         } catch (err) {
             // Ignore errors during branch check
+        }
+    }
+
+    /**
+     * Tip of whatever the commit list is showing: the selected branch when one is
+     * picked in the tree, otherwise HEAD (the "all refs" view is anchored there too).
+     */
+    private async _tipOfDisplayedRev(): Promise<string | undefined> {
+        if (this._branch) {
+            const tip = this._gitService.getBranchTipHash(this._branch);
+            if (tip) {return tip;}
+        }
+        try {
+            return (await this._gitService.getHeadHash()) || undefined;
+        } catch {
+            return undefined;
         }
     }
 
@@ -1140,6 +1174,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // setData carries the same field: keep the baseline in sync so the
         // auto re-check does not report a change that was just delivered.
         this._lastInProgress = inProgress ?? null;
+        // Same reason for the tip: our own commands reload here, so the poll must
+        // not treat the history it just fetched as an external change.
+        this._lastKnownTip = await this._tipOfDisplayedRev();
         
         this._loaded = graphData.commits.length;
         this._hasMore = graphData.commits.length >= GraphViewProvider.PAGE_FIRST;
@@ -1182,7 +1219,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _reload(force: boolean = false) {
+    private async _reload(force: boolean = false, preserveSelection = false) {
         if (!this._view) {return;}
         if (this._repoState !== 'ready') {
             // Guidance page is showing; history queries would fail here
@@ -1200,6 +1237,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._post({
                 command: 'setData',
                 ...payload,
+                preserveSelection,
                 searchContext: hasSearchFilter ? {
                     query: this._filters.text,
                     resultCount: payload.commits.length

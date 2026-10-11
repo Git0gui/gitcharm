@@ -1856,6 +1856,14 @@ export class GitService {
     }
 
     /**
+     * Resolve a branch tip straight from the refs on disk (no subprocess).
+     * Undefined when the ref is unknown — callers fall back to HEAD.
+     */
+    getBranchTipHash(branch: string): string | undefined {
+        return this._refsReader.readBranchRefs().get(branch);
+    }
+
+    /**
      * Full commit message body for a given hash.
      */
     async getCommitMessage(hash: string): Promise<string> {

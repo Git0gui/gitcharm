@@ -1792,12 +1792,24 @@ window.addEventListener('message', function (ev) {
             loadState.initialLoad = false;
             hideInitialLoading();
         }
-        state.selectedHash = null;
-        state.selectedHashes = []; // Clear multi-select on full data refresh
-        state.lastClickedIndex = -1;
-        state.multiCommits = null;
-        state.multiFiles = null;
-        state.detail = null;
+        // An external history change (terminal commit, merge landing after conflicts
+        // were resolved) reloads the rows underneath the user. Keep their selection
+        // when the commit is still in the new list — otherwise the detail panel would
+        // vanish every time git moved on its own.
+        var keepSelected = !!m.preserveSelection && !!state.selectedHash
+            && (m.commits || []).some(function (c) { return c.hash === state.selectedHash; });
+        if (keepSelected) {
+            state.selectedHashes = [];
+            state.multiCommits = null;
+            state.multiFiles = null;
+        } else {
+            state.selectedHash = null;
+            state.selectedHashes = []; // Clear multi-select on full data refresh
+            state.lastClickedIndex = -1;
+            state.multiCommits = null;
+            state.multiFiles = null;
+            state.detail = null;
+        }
         
         // Render operation status bar immediately after setting inProgress state
         renderOperationStatus();
@@ -1822,10 +1834,14 @@ window.addEventListener('message', function (ev) {
         
         // Update author dropdown with unique authors from commits
         updateAuthorDropdown(m.commits || []);
-        state.collapsed = {};
-        state.collapsedSec = {};
+        if (!keepSelected) {
+            state.collapsed = {};
+            state.collapsedSec = {};
+        }
         setLoader(false);
-        document.getElementById('scroll').scrollTop = 0;
+        if (!keepSelected) {
+            document.getElementById('scroll').scrollTop = 0;
+        }
         renderOperationStatus();
         renderTree();
         renderRows();
