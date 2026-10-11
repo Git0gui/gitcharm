@@ -71,6 +71,7 @@ GitCharm provides a three-panel Git log view:
 - **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges
 - **Pre-rebase check**: detects uncommitted changes before rebasing to avoid failures
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts are detected in one place, a persistent top status bar offers Continue / Abort, and the conflicted files are opened directly in the editor (up to 10 tabs) so the built-in merge-conflict code lenses can be used — the panel never switches you into another view
+- **The panel follows real git state**: resolve the conflicts and commit in your own terminal and the operation bar retracts on its own once git's state files are gone, while the commit list reloads as soon as the displayed branch tip moves — keeping your selection, detail panel, folds and scroll position instead of jumping back to the top
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
 - **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
 
@@ -222,6 +223,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **IDEA 风格视觉**：圆角 6–12px、平滑过渡、悬停微动效、tag 黄色徽章
 - **变基前检查**：自动检测未提交更改，避免变基失败
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部常驻状态栏提供"继续 / 终止"，冲突文件直接在编辑器打开（上限 10 个 tab）用内置 merge-conflict 代码透镜解决，面板不会把用户切去其他视图
+- **面板跟着真实 git 状态走**：在自己终端里解决冲突并提交，操作状态栏会在 git 状态文件清掉后自动收起；提交列表也在所选分支 tip 移动时自动重载，并保留当前选中项、第三栏详情、折叠状态与滚动位置，不再跳回顶部
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
 - **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
 
