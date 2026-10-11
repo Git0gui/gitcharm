@@ -148,11 +148,6 @@ export class GitService {
     private _watchRequested = false;
     private readonly _watchTokens = new Set<symbol>();
 
-    // State change event: fired whenever volatile caches drop, so UI that reads
-    // git state (the SCM provider) can refresh without polling on its own.
-    private readonly _onDidChangeState = new vscode.EventEmitter<void>();
-    readonly onDidChangeState: vscode.Event<void> = this._onDidChangeState.event;
-
     // Credential prompts for remotes; absent when the host provides no askpass
     private readonly _askpass: GitAskpass | undefined;
 
@@ -745,7 +740,6 @@ export class GitService {
         // Don't clear branch cache - it's now persistent
         // Only clear persisted cache file if needed (but we're keeping it persistent now)
         // this._persistedCache.clear();
-        this._onDidChangeState.fire();
     }
 
     /**
@@ -2071,10 +2065,9 @@ export class GitService {
         return parts.slice(1); // Skip the commit hash itself
     }
 
-    /** Stop watching and close the state event; called on deactivate. */
+    /** Release the repository watcher and every outstanding watch token. */
     dispose(): void {
         this._watchTokens.clear();
         this._stopRepositoryWatch();
-        this._onDidChangeState.dispose();
     }
 }
