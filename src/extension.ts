@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitService } from './services/gitService';
+import { GitAskpass } from './services/askpass';
 import { logger } from './services/logger';
 import { GraphViewProvider } from './views/graphView';
 import { BlameProvider } from './services/blameProvider';
@@ -19,8 +20,13 @@ export function activate(ctx: vscode.ExtensionContext) {
     ));
     applyLocale();
 
+    // Credential prompts for push/pull/fetch: git's GIT_ASKPASS points at a
+    // script in this extension which talks back to a loopback-only server here.
+    const askpass = new GitAskpass(ctx.extensionPath);
+    ctx.subscriptions.push(askpass);
+
     // Single shared GitService for the webview and all commands
-    const gitService = new GitService(ctx.workspaceState);
+    const gitService = new GitService(ctx.workspaceState, askpass);
 
     // Check if current workspace has a git repository
     const hasGitRepo = gitService.repositoryPath !== undefined;

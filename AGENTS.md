@@ -46,6 +46,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **原因**：激活 vscode.git 是多 spawn 的仓库扫描（大仓库秒级），且它的 refs/HEAD 缓存滞后于真实变更；`repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定，踩坑成本高于收益。
 - **原本从 vscode.git 拿的数据一律走本地实现**：分支名 → `RefsReader`（读 refs 文件）；upstream/ahead/behind → `_getBranchTrackInfo()`（单条 `for-each-ref`）；当前分支 → 读 `HEAD`；工作区是否干净 → `getWorkingTreeSummary()`（`status --porcelain -z`）；缓存失效 → `GitService.watchRepositoryChanges()`（`fs.watch` git 目录）。
 - **暂存/提交/行内 diff 的 UI 由自有 SCM Provider 提供**（`src/scm/sourceControlProvider.ts`，只用稳定的 `vscode.scm` API；`idea-git.scm.enabled` 可关）。差异基线一律走 `idea-git-diff` 虚拟文档：索引内容用伪 ref `index` / `index:<stage>`（`showBlob` 翻译成 git 的 `:path` / `:1:path`）——**不要写 `0:path`**，实测 `git show 0:path` 直接 invalid object name，索引语法的前导冒号不能省。
+- **凭据提示由自有 `GIT_ASKPASS` 承担**（`src/services/askpass.ts` + `media/askpass/`）：git 直接 exec 那个 sh 脚本（实测 Git for Windows 会按 shebang 执行并把 prompt 作为 argv[1]），脚本用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 跑 `askpass-main.js`，把 prompt POST 回扩展宿主的 **127.0.0.1 + 随机 token** 一次性服务，答案来自 `showInputBox`。新增走远端的命令（push/pull/fetch 之外的一切网络调用）必须走 `GitService._execNetwork`，否则既没有 askpass 也没有 `timeoutMs: 0`。用户取消 → 204 → git 退出 128，`_explainAuthFailure` 负责补一句"配置凭据助手/改用 SSH"，不要把 `GIT_TERMINAL_PROMPT=0` 改成 1（会把提示词丢进不可见的宿主终端）。
 - git 目录一律用 `resolveGitDir()` / `resolveCommonDir()`（src/services/gitPaths.ts）定位：linked worktree 的 `.git` 是 `gitdir:` 指针文件，refs 还可能在 `commondir` 指向的公共目录，直接拼 `.git/refs` 会读空。
 
 ## 4. 缓存体系（性能的生命线）

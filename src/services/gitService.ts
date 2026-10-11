@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runGit, splitNul, GitRunOptions } from './gitRunner';
 import { RefsReader } from './refsReader';
+import { GitAskpass } from './askpass';
 import { PersistedBranchCache } from './persistedBranchCache';
 import { resolveCommonDir, resolveGitDir } from './gitPaths';
 import { logger } from './logger';
@@ -152,7 +153,11 @@ export class GitService {
     private readonly _onDidChangeState = new vscode.EventEmitter<void>();
     readonly onDidChangeState: vscode.Event<void> = this._onDidChangeState.event;
 
-    constructor(memento: vscode.Memento) {
+    // Credential prompts for remotes; absent when the host provides no askpass
+    private readonly _askpass: GitAskpass | undefined;
+
+    constructor(memento: vscode.Memento, askpass?: GitAskpass) {
+        this._askpass = askpass;
         this._persistedCache = new PersistedBranchCache(memento, () => this._repositoryPath);
         this._repositoryPath = this._resolveRoot();
 
@@ -657,6 +662,38 @@ export class GitService {
         const out = await this.executeGitArgs(args, { env: extraEnv, timeoutMs: 0 });
         this.invalidateVolatile();
         return out.trim();
+    }
+
+    /**
+     * Run a command that talks to a remote: never timed out (authentication plus
+     * transfer), and with our own GIT_ASKPASS attached so HTTPS credentials and
+     * SSH passphrases can be entered in the editor.
+     */
+    private async _execNetwork(args: string[]): Promise<string> {
+        const env = this._askpass ? await this._askpass.prepare() : {};
+        try {
+            const out = await this.executeGitArgs(args, { env, timeoutMs: 0 });
+            this.invalidateVolatile();
+            return out.trim();
+        } catch (error) {
+            throw this._explainAuthFailure(error);
+        }
+    }
+
+    /**
+     * `GIT_TERMINAL_PROMPT=0` makes git refuse to ask on a hidden terminal, so an
+     * authentication failure otherwise reads as an opaque one-liner. Say what to
+     * do about it instead.
+     */
+    private _explainAuthFailure(error: unknown): Error {
+        const e = error as { message?: string; stderr?: string; stdout?: string };
+        const text = [e?.message, e?.stderr, e?.stdout]
+            .filter((s): s is string => typeof s === 'string' && s.length > 0)
+            .join('\n');
+        const looksAuth = /terminal prompts disabled|could not read (username|password)|authentication failed|invalid credentials|permission denied \(publickey\)/i
+            .test(text);
+        return looksAuth ? new Error(`${text}\n${t('auth.failedHint')}`)
+            : (error instanceof Error ? error : new Error(text));
     }
 
     /**
@@ -1305,7 +1342,7 @@ export class GitService {
         assertRef(remote, t('label.remote'));
         if (branchName) {assertRef(branchName);}
         const args = ['push', ...(force ? ['--force-with-lease'] : []), remote, ...(branchName ? [branchName] : [])];
-        const output = await this._execMutate(args, { timeoutMs: 0 });
+        const output = await this._execNetwork(args);
         return output || t('push.pushedTo', { remote, branch: branchName ? ' ' + branchName : '' });
     }
 
@@ -1316,7 +1353,7 @@ export class GitService {
         assertRef(remote, t('label.remote'));
         if (branchName) {assertRef(branchName);}
         const args = ['pull', ...(useRebase ? ['--rebase'] : []), remote, ...(branchName ? [branchName] : [])];
-        const output = await this._execMutate(args, { timeoutMs: 0 });
+        const output = await this._execNetwork(args);
         return output || t('pull.pulledFrom', { remote });
     }
 
@@ -1325,7 +1362,7 @@ export class GitService {
      */
     async fetch(remote: string = 'origin'): Promise<string> {
         assertRef(remote, t('label.remote'));
-        const output = await this._execMutate(['fetch', remote], { timeoutMs: 0 });
+        const output = await this._execNetwork(['fetch', remote]);
         return output || t('fetch.fetchedFrom', { remote });
     }
 
