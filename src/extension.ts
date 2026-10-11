@@ -5,6 +5,7 @@ import { logger } from './services/logger';
 import { GraphViewProvider } from './views/graphView';
 import { BlameProvider } from './services/blameProvider';
 import { gitBlobUri } from './commands/helpers';
+import { GitSourceControlProvider } from './scm/sourceControlProvider';
 import { registerBranchCommands } from './commands/branchCommands';
 import { registerCommitCommands } from './commands/commitCommands';
 import { registerOperationCommands } from './commands/operationCommands';
@@ -105,6 +106,11 @@ export function activate(ctx: vscode.ExtensionContext) {
     // made outside this extension (CLI, other tools) are picked up without polling
     // and without depending on the built-in git extension being enabled.
     ctx.subscriptions.push(gitService.watchRepositoryChanges());
+
+    // Our own SCM provider (staging tree, commit box, gutter quick-diff) so the
+    // Source Control view works without the built-in git extension.
+    const scmProvider = new GitSourceControlProvider(gitService, () => graphView.refresh());
+    ctx.subscriptions.push(scmProvider);
 
     // Command to focus the Git Log panel
     ctx.subscriptions.push(
@@ -226,6 +232,7 @@ export function activate(ctx: vscode.ExtensionContext) {
         dispose: () => {
             graphView.dispose();
             gitService.clearAllCaches();
+            gitService.dispose();
         }
     });
 }

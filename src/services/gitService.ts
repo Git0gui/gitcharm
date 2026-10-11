@@ -147,6 +147,11 @@ export class GitService {
     private _watchRequested = false;
     private readonly _watchTokens = new Set<symbol>();
 
+    // State change event: fired whenever volatile caches drop, so UI that reads
+    // git state (the SCM provider) can refresh without polling on its own.
+    private readonly _onDidChangeState = new vscode.EventEmitter<void>();
+    readonly onDidChangeState: vscode.Event<void> = this._onDidChangeState.event;
+
     constructor(memento: vscode.Memento) {
         this._persistedCache = new PersistedBranchCache(memento, () => this._repositoryPath);
         this._repositoryPath = this._resolveRoot();
@@ -478,7 +483,7 @@ export class GitService {
         assertShellSafe(ref, t('label.ref'));
         assertShellSafe(filePath, t('label.filePath'));
         try {
-            await this.executeGitArgs(['cat-file', '-e', `${ref}:${filePath}`]);
+            await this.executeGitArgs(['cat-file', '-e', this._objectSpec(ref, filePath)]);
             return true;
         } catch {
             return false;
@@ -703,6 +708,7 @@ export class GitService {
         // Don't clear branch cache - it's now persistent
         // Only clear persisted cache file if needed (but we're keeping it persistent now)
         // this._persistedCache.clear();
+        this._onDidChangeState.fire();
     }
 
     /**
@@ -980,7 +986,21 @@ export class GitService {
     async showBlob(ref: string, filePath: string): Promise<string> {
         assertShellSafe(ref, t('label.ref'));
         assertShellSafe(filePath, t('label.filePath'));
-        return (await this.executeGitArgs(['show', `${ref}:${filePath}`])).trim();
+        return (await this.executeGitArgs(['show', this._objectSpec(ref, filePath)])).trim();
+    }
+
+    /**
+     * Build the object expression for `show`/`cat-file`. The pseudo-ref `index`
+     * (or `index:<stage>` for a merge stage) addresses staged content, which git
+     * spells `:path` / `:<stage>:path` with no rev part in front.
+     */
+    private _objectSpec(ref: string, filePath: string): string {
+        if (ref === 'index') {return `:${filePath}`;}
+        if (ref.startsWith('index:')) {
+            const stage = Number.parseInt(ref.substring('index:'.length), 10);
+            return `:${Number.isNaN(stage) ? 0 : stage}:${filePath}`;
+        }
+        return `${ref}:${filePath}`;
     }
 
     /**
@@ -1119,20 +1139,14 @@ export class GitService {
 
     /**
      * Drop paths from the index, leaving the files on disk untouched.
-     * `reset HEAD` restores the index entry from the commit, which also covers
-     * files that were newly added (they become untracked again).
+     * `reset HEAD` also covers files that exist only in the index (they become
+     * untracked again) and works on an unborn branch, where HEAD resolves to the
+     * empty tree.
      */
     async unstage(paths: string[]): Promise<void> {
         if (paths.length === 0) {return;}
         const safe = paths.map(p => assertShellSafe(p, t('label.filePath')));
-        try {
-            await this._execMutate(['reset', '--quiet', 'HEAD', '--', ...safe]);
-        } catch (error) {
-            // Before the very first commit there is no HEAD to reset back to;
-            // removing the index entries is the equivalent operation there.
-            if (await this.hasAnyCommit()) {throw error;}
-            await this._execMutate(['rm', '--cached', '--quiet', '--force', '--', ...safe]);
-        }
+        await this._execMutate(['reset', '--quiet', 'HEAD', '--', ...safe]);
     }
 
     /**
@@ -2018,5 +2032,12 @@ export class GitService {
         const output = await this.executeGitArgs(['rev-list', '--parents', '-n', '1', hash]);
         const parts = output.trim().split(/\s+/);
         return parts.slice(1); // Skip the commit hash itself
+    }
+
+    /** Stop watching and close the state event; called on deactivate. */
+    dispose(): void {
+        this._watchTokens.clear();
+        this._stopRepositoryWatch();
+        this._onDidChangeState.dispose();
     }
 }
