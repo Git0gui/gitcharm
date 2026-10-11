@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
 import { GraphViewProvider } from '../views/graphView';
-import { isConflictError, combineErrorText } from './helpers';
+import { isConflictError, combineErrorText, openConflictFiles } from './helpers';
 import { t } from '../i18n';
 
 type OpKind = 'rebase' | 'merge' | 'cherry-pick';
@@ -55,10 +55,8 @@ export function registerOperationCommands(
             } catch (error: any) {
                 const errMsg = combineErrorText(error) || String(error);
                 if (isConflictError(errMsg)) {
-                    // Still has conflicts, show simplified dialog
-                    try {
-                        await vscode.commands.executeCommand('workbench.view.scm');
-                    } catch {}
+                    // Still has conflicts: bring the files up, then offer the way out
+                    await openConflictFiles(gitService);
 
                     const choice = await graphView.showDialog(
                         t('conflict.stillUnresolved'),

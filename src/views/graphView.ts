@@ -5,6 +5,7 @@ import { GitService, GraphCommit, LogFilters } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
+import { resolveGitDir } from '../services/gitPaths';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -23,6 +24,8 @@ interface GraphPayload {
 const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
 const ALL_COMMITS_ROW = '__all__';
+/** How often to re-read HEAD while the panel is visible (watcher backstop). */
+const BRANCH_POLL_MS = 2000;
 
 export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly PAGE_FIRST = 20;
@@ -640,24 +643,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         // Restore cherry-pick resume state if valid and conflicts are resolved
                         const resumeState = this._gitService.loadCherryPickResume(this._memento);
                         if (resumeState && resumeState.remainingHashes.length > 0) {
-                            // Verify cherry-pick conflicts have been resolved (CHERRY_PICK_HEAD removed)
-                            const repoPath = this._gitService.repositoryPath;
-                            if (repoPath) {
-                                const fs = require('fs');
-                                const path = require('path');
-                                const hasCherryPickHead = fs.existsSync(path.join(repoPath, '.git', 'CHERRY_PICK_HEAD'));
-                                
-                                // Only show resume button when conflicts are resolved (no CHERRY_PICK_HEAD)
-                                if (!hasCherryPickHead) {
-                                    this._post({ 
-                                        command: 'showCherryPickResume', 
-                                        remainingHashes: resumeState.remainingHashes, 
-                                        conflictHash: resumeState.conflictHash 
-                                    });
-                                } else {
-                                    // Conflicts still exist - don't show resume button yet
-                                    // User needs to resolve in SCM first
-                                }
+                            // Only show resume button when conflicts are resolved (no CHERRY_PICK_HEAD)
+                            if (!this._gitService.hasCherryPickHead()) {
+                                this._post({
+                                    command: 'showCherryPickResume',
+                                    remainingHashes: resumeState.remainingHashes,
+                                    conflictHash: resumeState.conflictHash
+                                });
                             }
                         }
                     }
@@ -794,8 +786,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Watch .git/HEAD for external branch switches (CLI, other tools).
-     * Falls back to 2s polling when the watcher cannot be set up.
+     * Watch for external branch switches (VS Code's own Git UI, CLI, other tools).
+     *
+     * The watch is on the git *directory* with a HEAD filter rather than on HEAD
+     * itself: git rewrites HEAD as HEAD.lock + rename, which orphans a file-level
+     * watcher after the first switch. The interval runs alongside the watcher for
+     * the same reason — a silently dead watcher would otherwise never be noticed,
+     * and reading HEAD is a plain file read, so polling costs no subprocess.
      */
     private _startBranchCheck(): void {
         this._stopBranchCheck(); // Clear any existing watcher/timer
@@ -806,17 +803,22 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         });
 
         const repoPath = this._gitService.repositoryPath;
-        const headFile = repoPath ? path.join(repoPath, '.git', 'HEAD') : undefined;
-        if (headFile && fs.existsSync(headFile)) {
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (gitDir) {
             try {
-                this._headWatcher = fs.watch(headFile, () => {
+                const watcher = fs.watch(gitDir, (_event, filename) => {
+                    // An unknown filename is treated as HEAD: some platforms omit it.
+                    if (filename && filename.toString() !== 'HEAD') {return;}
                     if (this._headDebounce) {clearTimeout(this._headDebounce);}
                     this._headDebounce = setTimeout(() => void this._checkBranchNow(), 300);
                 });
-                this._headWatcher.on('error', () => this._startBranchPolling());
-                return;
+                this._headWatcher = watcher;
+                watcher.on('error', () => {
+                    if (this._headWatcher === watcher) {this._headWatcher = undefined;}
+                    try { watcher.close(); } catch { /* already closed */ }
+                });
             } catch {
-                // Fall through to polling
+                // No watch support on this platform: polling only
             }
         }
         this._startBranchPolling();
@@ -824,7 +826,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     private _startBranchPolling(): void {
         if (this._branchCheckTimer) {return;} // Already polling
-        this._branchCheckTimer = setInterval(() => void this._checkBranchNow(), 2000);
+        this._branchCheckTimer = setInterval(() => void this._checkBranchNow(), BRANCH_POLL_MS);
     }
 
     private async _checkBranchNow(): Promise<void> {
@@ -854,7 +856,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     /**
      * Pause branch checking for a specified duration (ms).
-     * Used after operations like rename that temporarily confuse vscode.git state.
+     * Used after operations like rename, while our own optimistic update is still
+     * the freshest view of the branch tree.
      */
     pauseBranchCheck(durationMs: number): void {
         this._skipBranchCheckUntil = Date.now() + durationMs;
@@ -993,21 +996,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // Resume cherry-pick after conflict resolution
                     const remainingHashes = message.remainingHashes || [];
                     if (remainingHashes.length > 0) {
-                        // Verify conflicts have been resolved (CHERRY_PICK_HEAD should not exist)
                         try {
-                            const repoPath = this._gitService.repositoryPath;
-                            if (repoPath) {
-                                const fs = require('fs');
-                                const path = require('path');
-                                const hasCherryPickHead = fs.existsSync(path.join(repoPath, '.git', 'CHERRY_PICK_HEAD'));
-                                
-                                if (hasCherryPickHead) {
-                                    // Conflicts still exist - user needs to resolve them first
-                                    vscode.window.showWarningMessage(t('cherryPick.resolveConflictsFirst'));
-                                    return;
-                                }
+                            // Conflicts still exist (CHERRY_PICK_HEAD present) - resolve in SCM first
+                            if (this._gitService.hasCherryPickHead()) {
+                                vscode.window.showWarningMessage(t('cherryPick.resolveConflictsFirst'));
+                                return;
                             }
-                            
+
                             await vscode.commands.executeCommand('idea-git.cherryPick', { hashes: remainingHashes });
                             forceReload = true;
                         } catch (error: any) {

@@ -4,11 +4,11 @@ import { parseLogLine } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
-    getBranchesFromVscodeGit,
     getBranchName,
     combineErrorText,
     tryHandleConflict,
     handleConflictLoop,
+    openConflictFiles,
     extractWorktreePath
 } from './helpers';
 import { t } from '../i18n';
@@ -73,24 +73,9 @@ export function registerBranchCommands(
                         );
                         if (choice !== t('checkout.resolveBtn')) {return;}
 
-                        // Open SCM view and show the conflict dialog
-                        await vscode.commands.executeCommand('workbench.view.scm');
-                        const currentBranch = await gitService.getCurrentBranch().catch(() => undefined);
-                        if (inProgress === 'rebase') {
-                            await handleConflictLoop(
-                                gitService, graphView, t('op.rebase'),
-                                () => gitService.rebaseContinue(),
-                                () => gitService.rebaseAbort(),
-                                currentBranch, undefined, 'rebase'
-                            );
-                        } else {
-                            await handleConflictLoop(
-                                gitService, graphView, t('op.merge'),
-                                () => gitService.mergeContinue(),
-                                () => gitService.mergeAbort(),
-                                currentBranch, undefined, 'merge'
-                            );
-                        }
+                        // Open the conflicted files: resolution happens in the editor,
+                        // continue/abort stays in the panel's operation bar.
+                        await handleConflictLoop(gitService, graphView, opLabel);
                         // After resolving, try checkout again
                         return;
                     }
@@ -158,7 +143,7 @@ export function registerBranchCommands(
                         graphView.pauseBranchCheck(5000);
 
                         vscode.window.showInformationMessage(t('branch.deleted', { name: branchName }));
-                        // Don't refresh - optimistic update is sufficient and avoids vscode.git state delay issues
+                        // Don't refresh - the optimistic update already matches git's state
                     } catch (error: any) {
                         // Rollback on failure
                         graphView.addBranchOptimistically(branchName, false);
@@ -209,7 +194,8 @@ export function registerBranchCommands(
                         // Invalidate caches after successful rename
                         gitService.invalidateVolatile();
 
-                        // Pause branch checking for 5 seconds to let vscode.git update its state
+                        // Cool down branch detection so our own git-dir watch does not
+                        // race the optimistic update already applied to the tree
                         // This prevents the periodic check from overwriting the optimistic update with stale data
                         graphView.pauseBranchCheck(5000);
 
@@ -264,12 +250,7 @@ export function registerBranchCommands(
                         error,
                         gitService,
                         graphView,
-                        t('merge.conflictTitle', { name: branchName }),
-                        () => gitService.mergeContinue(),
-                        () => gitService.mergeAbort(),
-                        currentBranch,
-                        branchName,
-                        'merge'
+                        t('merge.conflictTitle', { name: branchName })
                     );
                     if (!handled) {
                         vscode.window.showErrorMessage(t('merge.failed', { error: error?.message ?? String(error) }));
@@ -327,12 +308,7 @@ export function registerBranchCommands(
                         error,
                         gitService,
                         graphView,
-                        t('rebase.conflictTitle', { name: branchName }),
-                        () => gitService.rebaseContinue(),
-                        () => gitService.rebaseAbort(),
-                        currentBranch,
-                        branchName,
-                        'rebase'
+                        t('rebase.conflictTitle', { name: branchName })
                     );
                     if (!handled) {
                         vscode.window.showErrorMessage(t('rebase.failed', { error: error?.message ?? String(error) }));
@@ -349,34 +325,13 @@ export function registerBranchCommands(
             }
 
             try {
-                // Try to get branch data from VSCode's built-in Git extension first (fastest)
-                const repoPath = gitService.repositoryPath;
-                let remoteExists: boolean;
-
-                if (repoPath) {
-                    const vscodeBranches = await getBranchesFromVscodeGit(repoPath);
-                    if (vscodeBranches) {
-                        // Got branches from vscode.git - use them!
-                        // Note: vscodeBranches.remote already contains full names like "origin/main"
-                        const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
-                        remoteExists = vscodeBranches.remote.includes(searchName);
-                        logger.debug(`[GitCharm] Using vscode.git cache for push check. Looking for: ${searchName}, Found: ${remoteExists}`);
-                        logger.debug(`[GitCharm] Remote branches: ${vscodeBranches.remote.join(', ')}`);
-                    } else {
-                        // Fallback to our own cache
-                        const branchDetails = await gitService.getBranchesWithDetails(false);
-                        const remoteNames = branchDetails.remote.map(b => b.name);
-                        const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
-                        remoteExists = remoteNames.includes(searchName);
-                        logger.debug(`[GitCharm] Using internal cache for push check. Looking for: ${searchName}, Found: ${remoteExists}`);
-                    }
-                } else {
-                    // No repo path, use internal cache
-                    const branchDetails = await gitService.getBranchesWithDetails(false);
-                    const remoteNames = branchDetails.remote.map(b => b.name);
-                    const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
-                    remoteExists = remoteNames.includes(searchName);
-                }
+                // Remote-tracking branch names come from our refs cache (loose refs +
+                // packed-refs on disk), so this never waits on another extension.
+                const branchDetails = await gitService.getBranchesWithDetails(false);
+                const remoteNames = branchDetails.remote.map(b => b.name);
+                const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
+                const remoteExists = remoteNames.includes(searchName);
+                logger.debug(`[GitCharm] Push check: looking for ${searchName}, found: ${remoteExists}`);
 
                 // For existing branches, get commits for display
                 // For new branches, skip commit fetching (show empty list)
@@ -536,12 +491,8 @@ export function registerBranchCommands(
                     // Refresh webview to show operation status bar immediately
                     graphView.refresh();
 
-                    // Open SCM view for conflict resolution
-                    try {
-                        await vscode.commands.executeCommand('workbench.view.scm');
-                    } catch {
-                        // Ignore if SCM view cannot be opened
-                    }
+                    // Conflict resolution happens in the conflicted files themselves
+                    await openConflictFiles(gitService);
                     return;
                 }
 
@@ -551,11 +502,7 @@ export function registerBranchCommands(
                     error,
                     gitService,
                     graphView,
-                    t('pull.conflictTitle', { name: branchName }),
-                    () => Promise.resolve(''), // Pull doesn't have a continue operation like merge --continue
-                    () => gitService.executeGitArgs(['reset', '--merge']).then(() => ''), // Abort by resetting merge state
-                    currentBranch,
-                    branchName
+                    t('pull.conflictTitle', { name: branchName })
                 );
 
                 if (!handled) {
@@ -634,12 +581,8 @@ export function registerBranchCommands(
                     // Refresh webview to show operation status bar immediately
                     graphView.refresh();
 
-                    // Open SCM view for conflict resolution
-                    try {
-                        await vscode.commands.executeCommand('workbench.view.scm');
-                    } catch {
-                        // Ignore if SCM view cannot be opened
-                    }
+                    // Conflict resolution happens in the conflicted files themselves
+                    await openConflictFiles(gitService);
                     return;
                 }
 
@@ -649,11 +592,7 @@ export function registerBranchCommands(
                     error,
                     gitService,
                     graphView,
-                    t('branch.updateConflictTitle', { name: branchName }),
-                    () => Promise.resolve(''), // Pull doesn't have a continue operation like merge --continue
-                    () => gitService.executeGitArgs(['reset', '--merge']).then(() => ''), // Abort by resetting merge state
-                    currentBranch,
-                    branchName
+                    t('branch.updateConflictTitle', { name: branchName })
                 );
 
                 if (!handled) {

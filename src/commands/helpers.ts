@@ -1,136 +1,8 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { GitService } from '../services/gitService';
-import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import { t } from '../i18n';
-
-/**
- * Get VSCode's built-in Git extension API for accessing cached branch data.
- * Returns undefined if the Git extension is not available or not activated.
- */
-export async function getVscodeGitApi(): Promise<any> {
-    try {
-        const gitExt = vscode.extensions.getExtension('vscode.git');
-        if (!gitExt) {
-            logger.debug('[GitCharm] vscode.git extension not found');
-            return undefined;
-        }
-
-        // Activate the extension if not already activated
-        if (!gitExt.isActive) {
-            await gitExt.activate();
-        }
-
-        // Get the exported API
-        const api = gitExt.exports.getAPI(1);
-        return api;
-    } catch (error) {
-        logger.debug('[GitCharm] Failed to get vscode.git API:', error);
-        return undefined;
-    }
-}
-
-/**
- * Get branch list from VSCode's built-in Git extension cache (if available).
- * Falls back to null if the API is not accessible.
- */
-export async function getBranchesFromVscodeGit(repoPath: string): Promise<{ local: string[]; remote: string[]; current: string } | null> {
-    const api = await getVscodeGitApi();
-    if (!api) {
-        logger.debug('[GitCharm] vscode.git API not available');
-        return null;
-    }
-
-    try {
-        // Find the repository matching our workspace
-        const repositories = api.repositories || [];
-
-        const repo = repositories.find((r: any) => r.rootUri && r.rootUri.fsPath === repoPath);
-
-        if (!repo) {
-            logger.debug(`[GitCharm] Repository not found in vscode.git. Looking for: ${repoPath}`);
-            return null;
-        }
-
-        // Access cached state from the repository
-        const state = repo.state;
-        if (!state) {
-            logger.debug('[GitCharm] Repository state is null/undefined');
-            return null;
-        }
-
-        // Get HEAD (current branch)
-        const head = state.HEAD;
-        const currentBranch = head?.name || '';
-
-        // Try to get refs using the new API: repo.getRefs()
-        let refs: any[] = [];
-
-        if (typeof repo.getRefs === 'function') {
-            try {
-                // New API: getRefs() returns a Promise<Ref[]>
-                refs = await repo.getRefs();
-                logger.debug(`[GitCharm] Got ${refs.length} refs via repo.getRefs()`);
-            } catch (e) {
-                logger.debug('[GitCharm] repo.getRefs() failed:', e);
-                // Fallback to state.refs if getRefs fails
-                refs = state.refs || [];
-            }
-        } else {
-            // Old API: direct access to state.refs
-            refs = state.refs || [];
-            logger.debug(`[GitCharm] Using legacy state.refs (${refs.length} refs)`);
-        }
-
-        const local: string[] = [];
-        const remote: string[] = [];
-
-        for (const ref of refs) {
-            if (ref.type === 0) { // RefType.Head - local branch
-                if (ref.name) {local.push(ref.name);}
-            } else if (ref.type === 1) { // RefType.RemoteHead - remote branch
-                if (ref.name) {
-                    // Normalize remote branch name: strip "refs/remotes/" prefix if present
-                    let remoteName = ref.name;
-                    if (remoteName.startsWith('refs/remotes/')) {
-                        remoteName = remoteName.substring('refs/remotes/'.length);
-                    }
-                    remote.push(remoteName);
-                }
-            }
-        }
-
-        logger.debug(`[GitCharm] Processed branches: ${local.length} local, ${remote.length} remote (from ${refs.length} total refs)`);
-        if (remote.length > 0) {
-            logger.debug(`[GitCharm] Sample remote branches: ${remote.slice(0, 5).join(', ')}`);
-        } else if (refs.length === 0) {
-            logger.debug('[GitCharm] WARNING: No refs returned from repo.getRefs()');
-        }
-
-        return { local, remote, current: currentBranch };
-    } catch (error) {
-        logger.debug('[GitCharm] Failed to get branches from vscode.git:', error);
-        return null;
-    }
-}
-
-/**
- * Get VSCode Git repository instance for a given path.
- * Returns the repository object which provides access to cached state and methods.
- */
-export async function getVscodeGitRepository(repoPath: string): Promise<any> {
-    const api = await getVscodeGitApi();
-    if (!api) {return null;}
-
-    try {
-        const repositories = api.repositories || [];
-        const repo = repositories.find((r: any) => r.rootUri && r.rootUri.fsPath === repoPath);
-        return repo || null;
-    } catch (error) {
-        logger.debug('[GitCharm] Failed to get repository from vscode.git:', error);
-        return null;
-    }
-}
 
 /**
  * Build a virtual-document URI whose content is the file blob at a given git ref.
@@ -208,25 +80,46 @@ export async function tryHandleConflict(
     error: any,
     gitService: GitService,
     graphView: GraphViewProvider,
-    operationLabel: string,
-    continueOperation: () => Promise<string>,
-    abortOperation: () => Promise<string>,
-    currentBranch?: string,
-    targetBranch?: string,
-    kind?: 'rebase' | 'merge'
+    operationLabel: string
 ): Promise<boolean> {
     if (isConflictError(combineErrorText(error))) {
-        await handleConflictLoop(gitService, graphView, operationLabel, continueOperation, abortOperation, currentBranch, targetBranch, kind);
+        await handleConflictLoop(gitService, graphView, operationLabel);
         return true;
     }
 
     const conflictFiles = await gitService.getConflictFiles();
     if (conflictFiles.length > 0) {
-        await handleConflictLoop(gitService, graphView, operationLabel, continueOperation, abortOperation, currentBranch, targetBranch, kind);
+        await handleConflictLoop(gitService, graphView, operationLabel);
         return true;
     }
 
     return false;
+}
+
+/** Cap so a rebase over a wide conflict set doesn't flood the editor with tabs. */
+const MAX_CONFLICT_FILES_OPENED = 10;
+
+/**
+ * Open the unmerged files in editors and return their repo-relative paths.
+ * A path may be missing on disk ("deleted by us" side of a conflict), which is
+ * skipped rather than reported.
+ */
+export async function openConflictFiles(gitService: GitService): Promise<string[]> {
+    const files = await gitService.getConflictFiles();
+    const root = gitService.repositoryPath;
+    if (!root) {return files;}
+
+    for (const relative of files.slice(0, MAX_CONFLICT_FILES_OPENED)) {
+        try {
+            const doc = await vscode.workspace.openTextDocument(
+                vscode.Uri.file(path.join(root, relative.split('/').join(path.sep)))
+            );
+            await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: true });
+        } catch {
+            // nothing to open for this side of the conflict
+        }
+    }
+    return files;
 }
 
 /**
@@ -238,31 +131,26 @@ export function extractWorktreePath(message: string): string | undefined {
 }
 
 /**
- * Open files with unresolved merge conflicts in the editor and let the user
- * choose to abort the operation. VSCode's built-in SCM view handles conflict resolution.
+ * Surface merge conflicts where they are actually resolved: the conflicted files
+ * themselves. The workbench's core merge-conflict editor contributes the
+ * "Accept Current / Incoming Change" actions, so opening the file is enough —
+ * no built-in git extension involved. The panel keeps its continue/abort bar
+ * because `graphView.refresh()` republishes the in-progress state.
  */
 export async function handleConflictLoop(
     gitService: GitService,
     graphView: GraphViewProvider,
-    operationLabel: string,
-    continueOperation: () => Promise<string>,
-    abortOperation: () => Promise<string>,
-    currentBranch?: string,
-    targetBranch?: string,
-    kind?: 'rebase' | 'merge'
+    operationLabel: string
 ): Promise<void> {
-    const conflictFiles = await gitService.getConflictFiles();
+    const conflictFiles = await openConflictFiles(gitService);
     if (conflictFiles.length === 0) {
         vscode.window.showInformationMessage(t('conflict.noneDetected'));
         return;
     }
 
-    // Refresh webview immediately to show operation status bar
     graphView.refresh();
-
-    // Show warning with conflict count and operation context
-    vscode.window.showWarningMessage(t('conflict.hasConflicts', { 
-        operation: operationLabel, 
-        count: conflictFiles.length 
+    vscode.window.showWarningMessage(t('conflict.hasConflicts', {
+        operation: operationLabel,
+        count: conflictFiles.length
     }));
 }

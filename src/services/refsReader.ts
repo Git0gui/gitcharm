@@ -1,9 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from './logger';
+import { resolveCommonDir, resolveGitDir } from './gitPaths';
 
 /**
- * Reads branch/tag -> commit-hash mappings straight from the .git filesystem
+ * Reads branch/tag -> commit-hash mappings straight from the git directory
  * (loose refs + packed-refs), avoiding a subprocess per query. Results are
  * cached with a short TTL and must be invalidated after ref-mutating operations.
  */
@@ -23,7 +24,7 @@ export class RefsReader {
         return new Map(this._branchCache ?? new Map());
     }
 
-    /** Branch names split by locality; empty lists on unusual layouts (e.g. worktrees). */
+    /** Branch names split by locality; empty lists when the repository has none. */
     readBranchNames(): { local: string[]; remote: string[] } {
         this._ensureBranchData();
         const names = this._branchNames ?? { local: [], remote: [] };
@@ -40,11 +41,11 @@ export class RefsReader {
         const localMap = new Map<string, string>();
         const remoteMap = new Map<string, string>();
         try {
-            const gitDir = path.join(this._getRepoPath() || '', '.git');
-            this._readRefDir(path.join(gitDir, 'refs', 'heads'), '', localMap);
-            this._readRefDir(path.join(gitDir, 'refs', 'remotes'), '', remoteMap);
+            const dirs = this._resolveDirs();
+            this._readRefDir(path.join(dirs.refsDir, 'heads'), '', localMap);
+            this._readRefDir(path.join(dirs.refsDir, 'remotes'), '', remoteMap);
 
-            for (const [refName, hash] of this._readPackedRefs(gitDir)) {
+            for (const [refName, hash] of this._readPackedRefs(dirs.packedRefsPath)) {
                 if (refName.startsWith('refs/heads/')) {
                     localMap.set(refName.substring(11), hash);
                 } else if (refName.startsWith('refs/remotes/')) {
@@ -72,10 +73,10 @@ export class RefsReader {
 
         const tagMap = new Map<string, string>();
         try {
-            const gitDir = path.join(this._getRepoPath() || '', '.git');
-            this._readRefDir(path.join(gitDir, 'refs', 'tags'), '', tagMap);
+            const dirs = this._resolveDirs();
+            this._readRefDir(path.join(dirs.refsDir, 'tags'), '', tagMap);
 
-            for (const [refName, hash] of this._readPackedRefs(gitDir)) {
+            for (const [refName, hash] of this._readPackedRefs(dirs.packedRefsPath)) {
                 if (refName.startsWith('refs/tags/')) {
                     tagMap.set(refName.substring(10), hash);
                 }
@@ -97,8 +98,28 @@ export class RefsReader {
         this._timestamp = 0;
     }
 
-    private _readPackedRefs(gitDir: string): Array<[string, string]> {
-        const packedPath = path.join(gitDir, 'packed-refs');
+    /**
+     * Refs of a linked worktree live in the shared common dir, and a worktree's
+     * `.git` is a pointer file rather than a directory, so a naive `.git/refs`
+     * read would come up empty.
+     */
+    private _resolveDirs(): { refsDir: string; packedRefsPath: string } {
+        const repoPath = this._getRepoPath() || '';
+        const gitDir = resolveGitDir(repoPath);
+        if (!gitDir) {
+            return {
+                refsDir: path.join(repoPath, '.git', 'refs'),
+                packedRefsPath: path.join(repoPath, '.git', 'packed-refs')
+            };
+        }
+        const refsBase = resolveCommonDir(gitDir);
+        return {
+            refsDir: path.join(refsBase, 'refs'),
+            packedRefsPath: path.join(refsBase, 'packed-refs')
+        };
+    }
+
+    private _readPackedRefs(packedPath: string): Array<[string, string]> {
         const out: Array<[string, string]> = [];
         if (!fs.existsSync(packedPath)) {return out;}
         const content = fs.readFileSync(packedPath, 'utf-8');

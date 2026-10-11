@@ -1,0 +1,3 @@
+# git executes the shebang script directly; a CRLF copy breaks `#!/bin/sh`.
+media/askpass/git-askpass.sh text eol=lf
+media/askpass/askpass-main.js text eol=lf

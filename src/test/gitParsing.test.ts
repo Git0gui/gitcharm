@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseWorkingTreeSummary } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries } from '../services/gitUtils';
 
 describe('parseTrackInfo', () => {
     it('parses ahead and behind counts', () => {
@@ -41,6 +41,22 @@ describe('parseSymbolicRef', () => {
 
     it('returns undefined for non-branch refs', () => {
         assert.equal(parseSymbolicRef('ref: refs/remotes/origin/main'), undefined);
+    });
+});
+
+describe('parseRefPath', () => {
+    it('accepts both HEAD and head-name spellings', () => {
+        assert.equal(parseRefPath('ref: refs/heads/main'), 'main');
+        assert.equal(parseRefPath('refs/heads/feature_x\n'), 'feature_x');
+    });
+
+    it('keeps nested branch paths', () => {
+        assert.equal(parseRefPath('refs/heads/v0.0.5/no-vscode-git'), 'v0.0.5/no-vscode-git');
+    });
+
+    it('returns undefined for SHAs and non-branch refs', () => {
+        assert.equal(parseRefPath('8e9cf03f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d'), undefined);
+        assert.equal(parseRefPath('refs/tags/v1.0.0'), undefined);
     });
 });
 
@@ -119,5 +135,61 @@ describe('parseWorkingTreeSummary', () => {
     it('does not double-count the rename source field', () => {
         const raw = 'R  renamed_a.txt\0a.txt\0?? new.txt\0';
         assert.deepEqual(parseWorkingTreeSummary(raw), { files: 2, untracked: 1 });
+    });
+});
+
+describe('parseStatusEntries', () => {
+    it('returns no entries for a clean working tree', () => {
+        assert.deepEqual(parseStatusEntries(''), []);
+        assert.deepEqual(parseStatusEntries('\0'), []);
+    });
+
+    it('splits index and worktree status letters', () => {
+        const [staged, modified] = parseStatusEntries('M  a.txt\0 M b.txt\0');
+        assert.equal(staged.path, 'a.txt');
+        assert.equal(staged.indexStatus, 'M');
+        assert.equal(staged.worktreeStatus, ' ');
+        assert.equal(modified.path, 'b.txt');
+        assert.equal(modified.indexStatus, ' ');
+        assert.equal(modified.worktreeStatus, 'M');
+    });
+
+    it('keeps both stages for an MM entry', () => {
+        const [entry] = parseStatusEntries('MM c.txt\0');
+        assert.equal(entry.indexStatus, 'M');
+        assert.equal(entry.worktreeStatus, 'M');
+        assert.equal(entry.conflicted, false);
+    });
+
+    it('marks untracked entries', () => {
+        const [entry] = parseStatusEntries('?? new/dir.txt\0');
+        assert.equal(entry.untracked, true);
+        assert.equal(entry.conflicted, false);
+    });
+
+    it('consumes the rename source field as fromPath', () => {
+        const entries = parseStatusEntries('R  b.txt\0a.txt\0?? c.txt\0');
+        assert.equal(entries.length, 2);
+        assert.equal(entries[0].path, 'b.txt');
+        assert.equal(entries[0].fromPath, 'a.txt');
+        assert.equal(entries[1].path, 'c.txt');
+    });
+
+    it('flags every unmerged status code as conflicted', () => {
+        const entries = parseStatusEntries('AA a\0DD b\0AU c\0UA d\0DU e\0UD f\0');
+        assert.equal(entries.length, 6);
+        for (const entry of entries) {
+            assert.equal(entry.conflicted, true);
+        }
+    });
+
+    it('flags ignored entries', () => {
+        const [entry] = parseStatusEntries('!! build/out.js\0');
+        assert.equal(entry.ignored, true);
+    });
+
+    it('keeps quoted-looking and unicode paths verbatim (no shell involved)', () => {
+        const [entry] = parseStatusEntries(' M 中文 "quoted".txt\0');
+        assert.equal(entry.path, '中文 "quoted".txt');
     });
 });

@@ -14,6 +14,9 @@ npm run package   # vsce package --no-yarn --allow-missing-repository
 - 每次改动后必须依次通过 compile、lint（0 error）、test（全绿），然后才允许提交。
 - Windows 本机 PowerShell 为 Constrained Language Mode：在 PowerShell 里必须调用 `npm.cmd`（`npm.ps1` 会报 MethodInvocationNotSupported）；Git Bash 里直接用 `npm` 即可。
 - 改了 `out/` 或 `media/` 后调试宿主（Extension Development Host）跑的是旧代码，必须完全重启宿主再验证，必要时 bump 版本号使缓存失效——避免"改了还是一样"的误判。
+- `engines.vscode` 不得低于 `@types/vscode` 的声明下限，否则 `vsce package` 直接报 `ERROR @types/vscode ... greater than engines.vscode ...` 且无 flag 可绕过。本仓库**实测代码下限是 1.66**（唯一卡点是 `src/services/fileIcons.ts` 用的 `ColorThemeKind.HighContrastLight`，1.65 typings 编译报 1 错、1.66 起 0 错；webview 视图与 `new RelativePattern(uri, …)` 在更早的 typings 里就有，不是卡点），所以 `engines.vscode` 与 `@types/vscode` 一起定为 `1.66`。
+- `@types/vscode` 必须写 `~x.y`（现在是 `~1.66.0`）不能写 `^`：`^1.85.0` 会被 npm 装成最新 1.x（实测 1.137.0），tsc 于是完全不校验版本下限，将来能静默引入不兼容 API 并发出去。想知道真实下限就把对应版本 `@types/vscode` 的 `index.d.ts` 拉下来，用 tsconfig `paths` 把 `'vscode'` 指过去跑 `tsc --noEmit` 数错误。
+- 降/改版本下限要四处同步：`package.json` 的 engines、`package-lock.json` 根节点 engines、`@types/vscode`（package.json + lock）、README 的"环境要求/Requirements"中英两处。
 
 ## 2. 架构分层
 
@@ -40,19 +43,19 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 写提交消息类内容用 `-F`（文件）或 stdin，**禁止拼进命令行**（注入风险 + 编码问题）。
 - rebase/squash 等需要编辑器的操作：用 `env` + `cp` 作为 GIT_EDITOR/GIT_SEQUENCE_EDITOR，不要依赖交互式编辑器。
 
-### vscode.git API 使用边界
+### 禁止依赖 vscode.git（已彻底移除）
 
-- **冷路径禁止 await vscode.git 激活**：`_loadGraphData` / `_loadBranchDetails` / `getDivergenceInfo` / `getHeadHash` 不得触发 `gitExt.activate()`（其内部仓库扫描是多 spawn，大仓库秒级）。
-- **热路径可以用**：push / compareFileWithBranch 的分支存在性检查（`getBranchesFromVscodeGit()`），以及 `onDidChangeState` 事件驱动缓存失效。
-- 优先使用 `repo.getRefs()`；VS Code 1.50 起的兼容范围内若该方法不可用，回退读取 `state.refs`。扩展最低支持 VS Code 1.50.0。
-- **已知缺陷，禁止踩**：
-  - `repo.log(branch)` 忽略分支参数、返回共享缓存的相同对象引用，且 `repo.log()` 忽略 since/until——提交日志一律走 git 命令。
-  - `Commit.parents` 可能是 `string[]` 或 `object[].hash`，必须做类型归一化（`typeof p === 'string' ? p : p.hash`）。
-  - vscode.git 的 refs/HEAD 变更事件有延迟：需要权威数据时读 `.git/HEAD` 文件 + `for-each-ref` 校准，不要信事件到达时的 state 快照。
+- **不得再调用内置 git 扩展的任何 API**：`extensions.getExtension('vscode.git')`、`gitExt.activate()`、`getAPI(1)`、`repo.state` / `repo.getRefs()` / `repo.log()`，全部禁止；`package.json` 也不再有 `extensionDependencies`。回归测试 `src/test/noVscodeGit.test.ts` 会扫 `src/**` 拦住这类用法。
+- **原因**：激活 vscode.git 是多 spawn 的仓库扫描（大仓库秒级），且它的 refs/HEAD 缓存滞后于真实变更；`repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定，踩坑成本高于收益。
+- **原本从 vscode.git 拿的数据一律走本地实现**：分支名 → `RefsReader`（读 refs 文件）；upstream/ahead/behind → `_getBranchTrackInfo()`（单条 `for-each-ref`）；当前分支 → 读 `HEAD`；工作区是否干净 → `getWorkingTreeSummary()`（`status --porcelain -z`）；缓存失效 → `GitService.watchRepositoryChanges()`（`fs.watch` git 目录）。
+- **不再注册自有 SCM Provider**：源代码管理面板完全交回内置 Git 扩展，GitCharm 不在那里出现（曾实现过 `src/scm/sourceControlProvider.ts`，已按用户要求整体移除，不要复活）。暂存/取消暂存/丢弃/状态条目只作为**服务层能力**保留：`GitService.add/stage/unstage/discard/getStatusEntries`（`src/services/gitService.ts`），由冲突处理等命令层调用。差异基线一律走 `idea-git-diff` 虚拟文档：索引内容用伪 ref `index` / `index:<stage>`（`_objectSpec` 翻译成 git 的 `:path` / `:1:path`）——**不要写 `0:path`**，实测 `git show 0:path` 直接 invalid object name，索引语法的前导冒号不能省。
+- **凭据提示由自有 `GIT_ASKPASS` 承担**（`src/services/askpass.ts` + `media/askpass/`）：git 直接 exec 那个 sh 脚本（实测 Git for Windows 会按 shebang 执行并把 prompt 作为 argv[1]），脚本用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 跑 `askpass-main.js`，把 prompt POST 回扩展宿主的 **127.0.0.1 + 随机 token** 一次性服务，答案来自 `showInputBox`。新增走远端的命令（push/pull/fetch 之外的一切网络调用）必须走 `GitService._execNetwork`，否则既没有 askpass 也没有 `timeoutMs: 0`。用户取消 → 204 → git 退出 128，`_explainAuthFailure` 负责补一句"配置凭据助手/改用 SSH"，不要把 `GIT_TERMINAL_PROMPT=0` 改成 1（会把提示词丢进不可见的宿主终端）。
+- git 目录一律用 `resolveGitDir()` / `resolveCommonDir()`（src/services/gitPaths.ts）定位：linked worktree 的 `.git` 是 `gitdir:` 指针文件，refs 还可能在 `commondir` 指向的公共目录，直接拼 `.git/refs` 会读空。
 
 ## 4. 缓存体系（性能的生命线）
 
-- **分支/tag 映射走 `RefsReader`**：直接读 `.git/refs`（loose + packed-refs），5s TTL；ref 变更操作后必须 `invalidate()`。禁止为取分支列表 spawn `git branch`。
+- **分支/tag 映射走 `RefsReader`**：直接读 git 目录下的 refs（`resolveGitDir()` + `commondir`，loose + packed-refs），5s TTL；ref 变更操作后必须 `invalidate()`。禁止为取分支列表 spawn `git branch`。
+- **外部变更靠 `watchRepositoryChanges()`**：`fs.watch` git 目录（HEAD/index/packed-refs + refs 递归），250ms 防抖后 `invalidateVolatile()`。这是 vscode.git `onDidChangeState` 删除后的唯一事件驱动失效来源；订阅者用 `Disposable` 归还，最后一个 token 释放时才真正关监听。
 - **ahead/behind 走 `_getBranchTrackInfo()`**：单次 `for-each-ref refs/heads/ --format=%(refname:short)|%(upstream:short)|%(upstream:track)`，3s TTL + in-flight Promise 去重；格式化的 track 字符串要剥字面引号。
 - **divergence 箭头展示必须实时**：`_refreshDivergence` 用 `force=true` 绕过 TTL。
 - **持久化一律用 `ExtensionContext.workspaceState`（Memento）**，禁止往工作区写缓存文件（`.vscode/.qoder` 下的旧缓存文件机制已删除，`PersistedBranchCache` 负责一次性迁移）。
@@ -94,14 +97,14 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 ## 8. Git 操作行为约定
 
 - **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。
-- **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防 vscode.git 延迟覆盖）；删除时若正在查看该分支的提交则切回当前分支。
+- **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防止乐观结果被过期快照盖掉）；删除时若正在查看该分支的提交则切回当前分支。
 - 重命名/删除后必须同步内部状态（`_branch`、`selectedBranch`），否则后续命令报 `unknown revision`。
 - push 允许无 upstream 分支：`getUpstream` 包 try-catch；无 upstream 时用 `git log remote..local` 取待推送提交；推送对话框提交列表与箭头共用 `getBranchesWithDetails` 同一数据源，区分首次推送/已最新/有待推送三态，提交分页（首屏 20 条 + 加载更多）。
 - `updateBranch`：远程存在同名分支时自动建立跟踪。
-- **冲突处理（merge/rebase/cherry-pick）一律交 VSCode 原生 SCM 视图**，插件只提供继续/终止入口和顶部持久化状态栏；冲突检测合并 stderr+stdout，扫 `unmerged files`、cherry-pick failed 等关键词，`isConflictError` 入参必须是字符串。
+- **冲突处理（merge/rebase/cherry-pick）直接打开冲突文件**（`openConflictFiles`，上限 10 个 tab），解决靠核心 merge-conflict 扩展的 Accept Current/Incoming 代码透镜——它不依赖 vscode.git；插件只提供继续/终止入口和顶部持久化状态栏，**不再 `executeCommand('workbench.view.scm')` 把用户踢去内置 Git 的 SCM 视图**。冲突检测合并 stderr+stdout，扫 `unmerged files`、cherry-pick failed 等关键词，`isConflictError` 入参必须是字符串。
 - 分支刷新按钮只刷分支树，不动中间提交列表；拉取其他分支时不触发 `_reload()`。
-- 外部分支变更检测：`fs.watch` `.git/HEAD` + 300ms 防抖，仅 webview 可见时启用，轮询（2s）作兜底；`pauseBranchCheck` 冷却语义保留。
-- 日期筛选：`--since/--until` 与 vscode.git 均不认 ISO 8601 的 `T`，转换为空格分隔格式。
+- 外部分支变更检测：**`fs.watch` 监听 git 目录本身**（用 `resolveGitDir()` 定位）并按 `filename === 'HEAD'` 过滤 + 300ms 防抖，**不要监听 HEAD 文件本身**——git 以 `HEAD.lock` + rename 覆写 HEAD，Windows 上文件级 watcher 仍可靠（实测三次 checkout 都收到事件），但 macOS/Linux 的 inotify 绑的是 inode，rename 覆盖后就成了孤儿监听，不可移植。轮询（2s，读 HEAD 零子进程）**常开**作兜底，不能只在 watcher `error` 时启用（孤儿监听不会报错，只是从此静默无事件）。仅 webview 可见时启用；`pauseBranchCheck` 冷却语义保留。
+- 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
 
 ## 9. Git 工作流约束（AI 协作红线）

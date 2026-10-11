@@ -6,7 +6,8 @@ import { GraphViewProvider } from '../views/graphView';
 import {
     isConflictError,
     combineErrorText,
-    tryHandleConflict
+    tryHandleConflict,
+    openConflictFiles
 } from './helpers';
 import { t } from '../i18n';
 
@@ -157,13 +158,9 @@ export function registerCommitCommands(
                             // Save resume state to workspace cache (with 24h TTL to prevent infinite loops)
                             await gitService.saveCherryPickResume(remainingHashes, hash.substring(0, 7), ctx.workspaceState);
                             
-                            // Open SCM view and notify user
+                            // Open the conflicted files so they can be resolved inline
                             graphView.refresh();
-                            try {
-                                await vscode.commands.executeCommand('workbench.view.scm');
-                            } catch {
-                                // Ignore error - SCM view may not be available
-                            }
+                            await openConflictFiles(gitService);
                             
                             // Send message to webview to show resume button on current branch
                             graphView.showCherryPickResume(remainingHashes, hash.substring(0, 7));
@@ -260,17 +257,11 @@ export function registerCommitCommands(
                     graphView.refresh();
                 }
             } catch (error: any) {
-                const currentBranch = await gitService.getCurrentBranch().catch(() => undefined);
                 const handled = await tryHandleConflict(
                     error,
                     gitService,
                     graphView,
-                    t('rebase.title', { hash: upstream }),
-                    () => gitService.rebaseContinue(),
-                    () => gitService.rebaseAbort(),
-                    currentBranch,
-                    upstream,
-                    'rebase'
+                    t('rebase.title', { hash: upstream })
                 );
                 if (!handled) {
                     vscode.window.showErrorMessage(t('rebase.interactiveFailed', { error: error?.message ?? String(error) }));

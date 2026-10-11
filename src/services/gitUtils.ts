@@ -27,7 +27,9 @@ export function assertShellSafe(value: string, label: string): string {
 
 export function assertRef(value: string, label = t('label.branch')): string {
     assertShellSafe(value, label);
-    if (REF_ILLEGAL.test(value) || value.includes('..') || value.includes('@{') || value.startsWith('/') || value.endsWith('/')) {
+    // A ref that begins with '-' would be parsed as an option by git; check-ref-format
+    // forbids it for real refs anyway, so this only rejects hostile input.
+    if (REF_ILLEGAL.test(value) || value.includes('..') || value.includes('@{') || value.startsWith('-') || value.startsWith('/') || value.endsWith('/')) {
         throw new Error(t('err.invalidRef', { label, value }));
     }
     return value;
@@ -130,6 +132,67 @@ export function parseSymbolicRef(content: string): string | undefined {
     return m ? m[1] : undefined;
 }
 
+/**
+ * Extract a branch name from either a `ref: refs/heads/<branch>` line (HEAD) or a
+ * bare `refs/heads/<branch>` path (`rebase-merge/head-name`). Returns undefined for
+ * raw SHAs and for refs outside refs/heads.
+ */
+export function parseRefPath(content: string): string | undefined {
+    const trimmed = content.trim();
+    const symbolic = trimmed.match(/^(?:ref: )?refs\/heads\/(.+)$/);
+    return symbolic ? symbolic[1] : undefined;
+}
+
+/** One file from `git status --porcelain` (v1 format). */
+export interface StatusEntry {
+    /** Path relative to the repository root. */
+    path: string;
+    /** Source path, present only for rename/copy entries. */
+    fromPath?: string;
+    /** Index (staged) status letter; ' ' means nothing staged. */
+    indexStatus: string;
+    /** Worktree status letter; ' ' means the worktree matches the index. */
+    worktreeStatus: string;
+    /** The file is unmerged in the index, i.e. needs conflict resolution. */
+    conflicted: boolean;
+    untracked: boolean;
+    ignored: boolean;
+}
+
+/** The six porcelain-v1 XY codes git uses for unmerged index entries. */
+const UNMERGED_CODES = new Set(['AA', 'DD', 'AU', 'UA', 'DU', 'UD']);
+
+/**
+ * Parse `git status --porcelain -z` output into per-file entries.
+ * Rename/copy entries carry their source path in the following NUL field, which
+ * belongs to the same file and must not become a separate entry.
+ */
+export function parseStatusEntries(raw: string): StatusEntry[] {
+    const fields = raw.split('\0').filter(field => field.length > 0);
+    const entries: StatusEntry[] = [];
+    for (let i = 0; i < fields.length; i++) {
+        const field = fields[i];
+        const indexStatus = field.charAt(0);
+        const worktreeStatus = field.charAt(1);
+        const code = indexStatus + worktreeStatus;
+        const path = field.substring(3);
+        const entry: StatusEntry = {
+            path,
+            indexStatus,
+            worktreeStatus,
+            conflicted: UNMERGED_CODES.has(code),
+            untracked: code === '??',
+            ignored: code === '!!'
+        };
+        if (indexStatus === 'R' || indexStatus === 'C' || worktreeStatus === 'R' || worktreeStatus === 'C') {
+            const from = fields[++i];
+            if (from !== undefined) {entry.fromPath = from;}
+        }
+        entries.push(entry);
+    }
+    return entries;
+}
+
 /** Working-tree change counts used by the empty-repository guidance page. */
 export interface WorkingTreeSummary {
     files: number;
@@ -142,16 +205,9 @@ export interface WorkingTreeSummary {
  * which belongs to the same file and must not be counted again.
  */
 export function parseWorkingTreeSummary(raw: string): WorkingTreeSummary {
-    const summary: WorkingTreeSummary = { files: 0, untracked: 0 };
-    const fields = raw.split('\0').filter(entry => entry.length > 0);
-    for (let i = 0; i < fields.length; i++) {
-        const status = fields[i].substring(0, 2);
-        summary.files++;
-        if (status === '??') {
-            summary.untracked++;
-        } else if (status[0] === 'R' || status[0] === 'C') {
-            i++;
-        }
-    }
-    return summary;
+    const entries = parseStatusEntries(raw);
+    return {
+        files: entries.length,
+        untracked: entries.filter(entry => entry.untracked).length
+    };
 }

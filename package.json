@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -23,11 +23,8 @@
     "cherry-pick"
   ],
   "engines": {
-    "vscode": "^1.50.0"
+    "vscode": "^1.66.0"
   },
-  "extensionDependencies": [
-    "vscode.git"
-  ],
   "categories": [
     "SCM Providers",
     "Visualization"
@@ -321,7 +318,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "~1.66.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
     "@vscode/vsce": "^4.0.0",
