@@ -14,6 +14,7 @@ npm run package   # vsce package --no-yarn --allow-missing-repository
 - 每次改动后必须依次通过 compile、lint（0 error）、test（全绿），然后才允许提交。
 - Windows 本机 PowerShell 为 Constrained Language Mode：在 PowerShell 里必须调用 `npm.cmd`（`npm.ps1` 会报 MethodInvocationNotSupported）；Git Bash 里直接用 `npm` 即可。
 - 改了 `out/` 或 `media/` 后调试宿主（Extension Development Host）跑的是旧代码，必须完全重启宿主再验证，必要时 bump 版本号使缓存失效——避免"改了还是一样"的误判。
+- `engines.vscode` 不得低于 `@types/vscode` 的声明下限（当前 `^1.85.0`），否则 `vsce package` 直接报 `ERROR @types/vscode ... greater than engines.vscode ...` 且无 flag 可绕过。降兼容版本时三处要同步：`package.json`、`package-lock.json` 根节点的 engines、README 的"环境要求/Requirements"。另外 `contributes.views` 的 `type: "webview"` 与 `new RelativePattern(uri, …)` 都需要 1.57+ 宿主，声明低于 1.57 就是假承诺。
 
 ## 2. 架构分层
 
