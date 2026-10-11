@@ -20,6 +20,7 @@ import {
     parseRefPath,
     parseWorkingTreeSummary,
     parseStatusEntries,
+    operationFromStateFiles,
     StatusEntry,
     WorkingTreeSummary
 } from './gitUtils';
@@ -1269,36 +1270,29 @@ export class GitService {
     }
 
     /**
+     * Cheap, subprocess-free in-progress check: looks only at git's state files
+     * (`rebase-merge`/`rebase-apply`/`CHERRY_PICK_HEAD`/`MERGE_HEAD`). Use it to
+     * decide whether the authoritative `getInProgressOperation()` — which also
+     * spawns `ls-files -u` for the unmerged-index case — is worth running.
+     */
+    detectOperationFromFiles(): 'rebase' | 'merge' | 'cherry-pick' | undefined {
+        const gitDir = this._gitDir();
+        if (!gitDir) {return undefined;}
+        return operationFromStateFiles(name => fs.existsSync(path.join(gitDir, name)));
+    }
+
+    /**
      * Detect whether a rebase, merge, or cherry-pick is currently in progress.
      * Returns 'rebase' | 'merge' | 'cherry-pick' | undefined.
      */
     async getInProgressOperation(): Promise<'rebase' | 'merge' | 'cherry-pick' | undefined> {
-        const gitDir = this._gitDir();
-        if (!gitDir) {return undefined;}
+        const fromFiles = this.detectOperationFromFiles();
+        if (fromFiles) {return fromFiles;}
 
-        // Check for rebase in progress (including pull --rebase conflicts)
-        if (fs.existsSync(path.join(gitDir, 'rebase-merge')) || fs.existsSync(path.join(gitDir, 'rebase-apply'))) {
-            return 'rebase';
-        }
-
-        // Check for cherry-pick in progress
-        if (fs.existsSync(path.join(gitDir, 'CHERRY_PICK_HEAD'))) {
-            return 'cherry-pick';
-        }
-
-        // Check for merge in progress (including pull --no-rebase conflicts)
-        if (fs.existsSync(path.join(gitDir, 'MERGE_HEAD'))) {
-            return 'merge';
-        }
-
-        // Check for pull conflict (unmerged files without MERGE_HEAD means pull was interrupted)
-        // Treat as merge since it's a non-rebase conflict
+        // Unmerged index entries with no state file left behind (an interrupted
+        // pull): only `ls-files -u` can see them, so this is the one spawn path.
         const conflictFiles = await this.getConflictFiles();
-        if (conflictFiles.length > 0 && !fs.existsSync(path.join(gitDir, 'MERGE_HEAD'))) {
-            return 'merge';
-        }
-
-        return undefined;
+        return conflictFiles.length > 0 ? 'merge' : undefined;
     }
 
     /**

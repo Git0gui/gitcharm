@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile } from '../services/gitUtils';
 
 describe('parseTrackInfo', () => {
     it('parses ahead and behind counts', () => {
@@ -191,5 +191,45 @@ describe('parseStatusEntries', () => {
     it('keeps quoted-looking and unicode paths verbatim (no shell involved)', () => {
         const [entry] = parseStatusEntries(' M 中文 "quoted".txt\0');
         assert.equal(entry.path, '中文 "quoted".txt');
+    });
+});
+
+describe('operationFromStateFiles', () => {
+    const present = (...names: string[]) => (name: string) => names.includes(name);
+
+    it('reports undefined when no state file exists', () => {
+        assert.equal(operationFromStateFiles(present()), undefined);
+    });
+
+    it('maps each state file to its operation', () => {
+        assert.equal(operationFromStateFiles(present('MERGE_HEAD')), 'merge');
+        assert.equal(operationFromStateFiles(present('CHERRY_PICK_HEAD')), 'cherry-pick');
+        assert.equal(operationFromStateFiles(present('rebase-merge')), 'rebase');
+        assert.equal(operationFromStateFiles(present('rebase-apply')), 'rebase');
+    });
+
+    it('lets rebase win — a rebase drives cherry-pick internally and leaves its own head file', () => {
+        assert.equal(
+            operationFromStateFiles(present('CHERRY_PICK_HEAD', 'MERGE_HEAD', 'rebase-merge')),
+            'rebase'
+        );
+    });
+
+    it('lets cherry-pick win over merge', () => {
+        assert.equal(operationFromStateFiles(present('CHERRY_PICK_HEAD', 'MERGE_HEAD')), 'cherry-pick');
+    });
+});
+
+describe('isOperationStateFile', () => {
+    it('accepts exactly the four files git removes when an operation settles', () => {
+        for (const name of ['rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'MERGE_HEAD']) {
+            assert.equal(isOperationStateFile(name), true, name);
+        }
+    });
+
+    it('rejects ordinary git directory entries', () => {
+        for (const name of ['HEAD', 'index', 'packed-refs', 'ORIG_HEAD', 'COMMIT_EDITMSG']) {
+            assert.equal(isOperationStateFile(name), false, name);
+        }
     });
 });
