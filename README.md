@@ -70,8 +70,9 @@ GitCharm provides a three-panel Git log view:
 - **Works without a repository**: the panel and the status bar entry are always present; a folder without `.git` gets a guided page that can run `git init` for you
 - **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges
 - **Pre-rebase check**: detects uncommitted changes before rebasing to avoid failures
-- **Unified conflict handling**: merge / rebase / cherry-pick conflicts detected in one place, top status bar with Continue / Abort, conflicts delegated to the native SCM view
+- **Unified conflict handling**: merge / rebase / cherry-pick conflicts are detected in one place, a persistent top status bar offers Continue / Abort, and the conflicted files are opened directly in the editor (up to 10 tabs) so the built-in merge-conflict code lenses can be used — the panel never switches you into another view
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
+- **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
 
 ## Requirements
 
@@ -220,8 +221,9 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **无仓库也能用**：面板与状态栏入口常驻，没有 `.git` 的文件夹会给出引导页，并可一键执行 `git init`
 - **IDEA 风格视觉**：圆角 6–12px、平滑过渡、悬停微动效、tag 黄色徽章
 - **变基前检查**：自动检测未提交更改，避免变基失败
-- **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部状态栏提供"继续 / 终止"，冲突自动交原生 SCM 视图解决
+- **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部常驻状态栏提供"继续 / 终止"，冲突文件直接在编辑器打开（上限 10 个 tab）用内置 merge-conflict 代码透镜解决，面板不会把用户切去其他视图
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
+- **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
 
 ## 环境要求
 

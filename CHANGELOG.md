@@ -4,12 +4,19 @@
 
 ## [0.0.5] - 2026-10-11
 
+### 新增
+
+- **自有凭据输入（`GIT_ASKPASS`）**：远端要账号/密码/令牌时由扩展弹出输入框，不再依赖内置 Git 的 askpass。git 直接执行 `media/askpass/git-askpass.sh`，脚本用宿主自带的 Node 把提示词 POST 回扩展宿主的本地一次性服务（只绑 `127.0.0.1`、URL 含随机 token、请求体上限 4KB、120s 超时），密码类提示走掩码输入框且不入日志；取消即 204 → git 退出 128，并补一句"配置凭据助手或改用 SSH"的可执行提示。`push/pull/fetch` 统一走新的 `_execNetwork`（带 askpass 环境、不设超时，避免大仓库推送被 30s 掐断）
+- **工作区状态的完整解析与暂存服务层**：`parseStatusEntries` 解析 `status --porcelain -z` 的 XY 双状态（含 rename/copy 的源路径、六种冲突码、`!!` 忽略项），`GitService` 在其上提供 `add/stage/unstage/discard/getStatusEntries`，丢弃未跟踪文件前强制校验路径必须落在仓库内
+
 ### 优化
 
 - **彻底移除对内置 `vscode.git` 扩展的依赖**：分支列表、当前分支、upstream/ahead-behind、HEAD 哈希一律改由自有实现提供——refs（含 packed-refs）与 `HEAD` 直接读文件，track 信息用单条 `for-each-ref`，缓存失效改由 `fs.watch` git 目录驱动。`package.json` 不再声明 `extensionDependencies: ["vscode.git"]`，禁用内置 Git 扩展也能正常使用；面板首屏不再可能被内置扩展的仓库扫描（多子进程、大仓库秒级）拖慢
 - **缓存失效改为事件驱动**：`GitService.watchRepositoryChanges()` 监听 `HEAD`/`index`/`packed-refs` 与 `refs` 目录（递归），250ms 防抖后丢弃易失缓存；订阅方按 token 归还 Disposable，最后一个释放时才真正关监听。外部终端里的 checkout/commit 不再需要等缓存过期或轮询
 - **打包体积从 442KB 降到 156KB**：VSIX 内剔除 `resources/screenshots`（README 图片链接打包时会被 vsce 重写成 GitHub raw 绝对地址，市场不会请求包内副本）、`out/test`、`AGENTS.md`、`.tsbuildinfo`、`.eslintrc.json` 与上一版 `.vsix`；并删除冗余的 `onView` 激活事件（VS Code 会从 `contributes.views` 自动生成）
 - **能读文件就不启子进程**：`hasAnyCommit` 先看 refs 上有没有指针（零提交仓库才回落 `rev-list`），`dropLastCommit` 的脏工作区检查复用同一次 `status --porcelain -z` 解析（不再额外 `status`），`getHeadHash` 直接由 `HEAD` + refs 得出哈希
+- **冲突处理不再把用户踢走**：merge/rebase/cherry-pick 停在冲突时直接打开冲突文件（上限 10 个 tab），解决依旧用核心 merge-conflict 扩展的 Accept Current/Incoming 代码透镜；扩展只提供继续/终止入口和顶部持久化状态栏，不再 `executeCommand('workbench.view.scm')` 把人切进内置 Git 的源代码管理视图
+- **最低可安装宿主降到 VSCode 1.66**：逐个版本拉 `@types/vscode` 编译 `src` 实测出的真实下限（唯一卡点是文件图标用的 `ColorThemeKind.HighContrastLight`，1.65 报错、1.66 起干净），同时把 `@types/vscode` 从 `^1.85.0` 钉成 `~1.66.0`——caret 会把它装成最新 1.x（实测 1.137），等于版本下限没有任何编译期校验
 
 ### 修复
 
@@ -21,6 +28,9 @@
 
 - AGENTS.md 新增「禁止依赖 vscode.git」硬约束与数据替换对照表；README 中英特性清单同步（含"内置 Git 扩展可禁用"）
 - 新增回归测试 `noVscodeGit.test.ts`：扫描 `src/**` 拦住重新引用内置 git API 的写法，并校验 `package.json` 不再有 `extensionDependencies`
+- **AGENTS.md 三条新硬约束**：不再注册自有 SCM Provider（曾有的 `src/scm/sourceControlProvider.ts` 已整体移除，不要复活，但服务层的 `add/stage/unstage/discard/getStatusEntries` 与伪 ref `index`/`index:<stage>` 规则保留）；`engines.vscode` 不得低于 `@types/vscode` 声明下限否则 `vsce package` 直接报错且无 flag 可绕过；降宿主版本时 `package.json` engines、`package-lock.json` 根节点 engines、`@types/vscode`、README 中英环境要求四处必须同步
+- **实测宿主下限的方法写进文档**：从 npmmirror 拉指定版本 `@types/vscode` 的 tarball，用临时 tsconfig 的 `paths` 把 `vscode` 指到该份 typings 编译 `src/**`，报错即下限；同时记录 npm caret 的坑——`^1.66.0` 会被装成最新 1.x（实测 1.137），只有 `~` 才真正钉住并使版本下限具备编译期校验
+- **单测覆盖扩充**：`parseStatusEntries` 补 8 例（XY 双状态、rename/copy 源路径、六种冲突码、`!!` 忽略项、`-z` NUL 分隔），内置 git 解耦守卫 2 例；移除 SCM Provider 的 21 个 `scm.*` 双语 key 后，i18n 词典 zh/en key 集一致性（parity）用例照常通过。本批改动后 106 例全绿
 
 ## [0.0.4] - 2026-10-11
 
