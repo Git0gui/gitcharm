@@ -18,6 +18,8 @@ import {
     parseSymbolicRef,
     parseRefPath,
     parseWorkingTreeSummary,
+    parseStatusEntries,
+    StatusEntry,
     WorkingTreeSummary
 } from './gitUtils';
 import { t } from '../i18n';
@@ -299,6 +301,15 @@ export class GitService {
     async getWorkingTreeSummary(): Promise<WorkingTreeSummary> {
         const raw = await this.executeGitArgs(['status', '--porcelain', '-z'], { timeoutMs: 10000 });
         return parseWorkingTreeSummary(raw);
+    }
+
+    /**
+     * Per-file index/worktree status. Untracked directories are expanded to their
+     * files so callers can offer stage/discard on each entry.
+     */
+    async getStatusEntries(): Promise<StatusEntry[]> {
+        const raw = await this.executeGitArgs(['status', '--porcelain', '-z', '--untracked-files=all'], { timeoutMs: 10000 });
+        return parseStatusEntries(raw);
     }
 
     /**
@@ -1099,6 +1110,60 @@ export class GitService {
         if (paths.length === 0) {return;}
         const safe = paths.map(p => assertShellSafe(p, t('label.filePath')));
         await this._execMutate(['add', '--', ...safe]);
+    }
+
+    /** Stage changes into the index (same command as resolving a conflict). */
+    async stage(paths: string[]): Promise<void> {
+        await this.add(paths);
+    }
+
+    /**
+     * Drop paths from the index, leaving the files on disk untouched.
+     * `reset HEAD` restores the index entry from the commit, which also covers
+     * files that were newly added (they become untracked again).
+     */
+    async unstage(paths: string[]): Promise<void> {
+        if (paths.length === 0) {return;}
+        const safe = paths.map(p => assertShellSafe(p, t('label.filePath')));
+        try {
+            await this._execMutate(['reset', '--quiet', 'HEAD', '--', ...safe]);
+        } catch (error) {
+            // Before the very first commit there is no HEAD to reset back to;
+            // removing the index entries is the equivalent operation there.
+            if (await this.hasAnyCommit()) {throw error;}
+            await this._execMutate(['rm', '--cached', '--quiet', '--force', '--', ...safe]);
+        }
+    }
+
+    /**
+     * Throw away worktree changes. Tracked files are restored from the index;
+     * untracked files have no stored content to return to, so (like `git clean`)
+     * they are removed from disk. Unmerged paths are left to conflict resolution.
+     */
+    async discard(entries: StatusEntry[]): Promise<void> {
+        const tracked = entries.filter(e => !e.untracked && !e.conflicted).map(e => e.path);
+        const untracked = entries.filter(e => e.untracked).map(e => e.path);
+
+        if (tracked.length > 0) {
+            const safe = tracked.map(p => assertShellSafe(p, t('label.filePath')));
+            await this._execMutate(['checkout', '--', ...safe]);
+        }
+        if (untracked.length === 0) {return;}
+
+        const root = this._resolveRoot();
+        if (!root) {throw new Error(t('repo.noRepoTitle'));}
+        for (const rel of untracked) {
+            assertShellSafe(rel, t('label.filePath'));
+            const abs = path.resolve(root, rel);
+            // Git reports paths relative to the repo root; anything resolving
+            // outside it (or the root itself) must never be deleted.
+            const relative = path.relative(root, abs);
+            // empty relative === the repo root itself
+            if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+                throw new Error(t('err.pathOutsideRepo', { path: rel }));
+            }
+            fs.rmSync(abs, { force: true });
+        }
     }
 
     /**
