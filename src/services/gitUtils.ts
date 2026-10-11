@@ -211,3 +211,36 @@ export function parseWorkingTreeSummary(raw: string): WorkingTreeSummary {
         untracked: entries.filter(entry => entry.untracked).length
     };
 }
+
+/** The operation an in-progress merge/rebase/cherry-pick leaves behind. */
+export type InProgressOperation = 'rebase' | 'merge' | 'cherry-pick';
+
+/**
+ * Files git keeps in `.git` while an operation is unfinished. Their removal is
+ * what "resolved" means: `git commit` deletes MERGE_HEAD, `--continue` deletes
+ * CHERRY_PICK_HEAD, a finished/aborted rebase deletes rebase-merge|rebase-apply.
+ */
+export const OPERATION_STATE_FILES: readonly string[] = [
+    'rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'MERGE_HEAD'
+];
+
+/** True when `name` (a bare filename inside `.git`) is one of the state files. */
+export function isOperationStateFile(name: string): boolean {
+    return OPERATION_STATE_FILES.includes(name);
+}
+
+/**
+ * Decide the in-progress operation from the presence of git's state files alone —
+ * no subprocess, so it is cheap enough to run on every poll tick. Order matters:
+ * a rebase runs cherry-pick internally, so `rebase-*` must win over the head files.
+ * Returns undefined when nothing is in progress (the caller may still need the
+ * authoritative check for unmerged index entries without a state file).
+ */
+export function operationFromStateFiles(
+    exists: (name: string) => boolean
+): InProgressOperation | undefined {
+    if (exists('rebase-merge') || exists('rebase-apply')) {return 'rebase';}
+    if (exists('CHERRY_PICK_HEAD')) {return 'cherry-pick';}
+    if (exists('MERGE_HEAD')) {return 'merge';}
+    return undefined;
+}

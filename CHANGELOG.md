@@ -8,6 +8,8 @@
 
 - **自有凭据输入（`GIT_ASKPASS`）**：远端要账号/密码/令牌时由扩展弹出输入框，不再依赖内置 Git 的 askpass。git 直接执行 `media/askpass/git-askpass.sh`，脚本用宿主自带的 Node 把提示词 POST 回扩展宿主的本地一次性服务（只绑 `127.0.0.1`、URL 含随机 token、请求体上限 4KB、120s 超时），密码类提示走掩码输入框且不入日志；取消即 204 → git 退出 128，并补一句"配置凭据助手或改用 SSH"的可执行提示。`push/pull/fetch` 统一走新的 `_execNetwork`（带 askpass 环境、不设超时，避免大仓库推送被 30s 掐断）
 - **工作区状态的完整解析与暂存服务层**：`parseStatusEntries` 解析 `status --porcelain -z` 的 XY 双状态（含 rename/copy 的源路径、六种冲突码、`!!` 忽略项），`GitService` 在其上提供 `add/stage/unstage/discard/getStatusEntries`，丢弃未跟踪文件前强制校验路径必须落在仓库内
+- **冲突解决完，分支上方的"继续/终止"自动收起**：面板可见时在同一条 git 目录监听上分流状态文件（`MERGE_HEAD`/`CHERRY_PICK_HEAD`/`rebase-merge`/`rebase-apply`），2s 轮询常开作兜底。git 在操作真正结束时才删掉这些文件，所以判据取"状态文件消失"——在外部终端 commit、`--continue`、`--abort` 都能跟上；只 `git add` 还没 commit 时 `MERGE_HEAD` 仍在，状态栏保留才对（merge 还没结束）。空闲态只做四次 `existsSync`（零子进程），只有已知在进行中才走会 spawn `ls-files -u` 的权威检测
+- **外部提交落地后提交列表自动跟上**：同一条轮询里比对"当前展示 rev 的 tip"——在分支树选了分支就读它的 ref，没选就读 `HEAD`，全是纯文件读取；tip 变了才带 force 重载一次，不做无条件刷新。自动刷新携带 `preserveSelection`，只在所选提交仍存在于新列表时保留选中项、第三栏详情、折叠态与滚动位置，用户在终端每提交一次面板就跳回顶部、详情被清空的情况不再出现
 
 ### 优化
 
@@ -30,7 +32,8 @@
 - 新增回归测试 `noVscodeGit.test.ts`：扫描 `src/**` 拦住重新引用内置 git API 的写法，并校验 `package.json` 不再有 `extensionDependencies`
 - **AGENTS.md 三条新硬约束**：不再注册自有 SCM Provider（曾有的 `src/scm/sourceControlProvider.ts` 已整体移除，不要复活，但服务层的 `add/stage/unstage/discard/getStatusEntries` 与伪 ref `index`/`index:<stage>` 规则保留）；`engines.vscode` 不得低于 `@types/vscode` 声明下限否则 `vsce package` 直接报错且无 flag 可绕过；降宿主版本时 `package.json` engines、`package-lock.json` 根节点 engines、`@types/vscode`、README 中英环境要求四处必须同步
 - **实测宿主下限的方法写进文档**：从 npmmirror 拉指定版本 `@types/vscode` 的 tarball，用临时 tsconfig 的 `paths` 把 `vscode` 指到该份 typings 编译 `src/**`，报错即下限；同时记录 npm caret 的坑——`^1.66.0` 会被装成最新 1.x（实测 1.137），只有 `~` 才真正钉住并使版本下限具备编译期校验
-- **单测覆盖扩充**：`parseStatusEntries` 补 8 例（XY 双状态、rename/copy 源路径、六种冲突码、`!!` 忽略项、`-z` NUL 分隔），内置 git 解耦守卫 2 例；移除 SCM Provider 的 21 个 `scm.*` 双语 key 后，i18n 词典 zh/en key 集一致性（parity）用例照常通过。本批改动后 106 例全绿
+- **单测覆盖扩充**：`parseStatusEntries` 补 8 例（XY 双状态、rename/copy 源路径、六种冲突码、`!!` 忽略项、`-z` NUL 分隔），内置 git 解耦守卫 2 例；移除 SCM Provider 的 21 个 `scm.*` 双语 key 后，i18n 词典 zh/en key 集一致性（parity）用例照常通过。后又补 `operationFromStateFiles` 4 例（各状态文件对应操作、rebase 优先于 cherry-pick 优先于 merge）与 `isOperationStateFile` 2 例，合计 112 例全绿
+- **AGENTS.md 补三条检测硬约束**：进行中操作复检以状态文件被清掉为准、空闲态禁止为"有没有 merge"起子进程；外部历史变更以展示 rev 的 tip 比对为准，且 `_collect` 必须用同一表达式同步基线（否则自己触发的刷新会被下一轮轮询误判成外部变化而重复跑 `git log`）；自动刷新必须带 `preserveSelection`
 
 ## [0.0.4] - 2026-10-11
 

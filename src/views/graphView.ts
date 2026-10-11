@@ -6,6 +6,7 @@ import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, We
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
+import { isOperationStateFile } from '../services/gitUtils';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -46,10 +47,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _branchCheckTimer: NodeJS.Timeout | undefined;
     private _headWatcher: fs.FSWatcher | undefined;
     private _headDebounce: NodeJS.Timeout | undefined;
+    private _operationDebounce: NodeJS.Timeout | undefined;
     private _lastKnownBranch: string | undefined;
+    // Tip of the rev the middle list is showing; a change means history moved
+    // outside this extension and the commit rows have to follow.
+    private _lastKnownTip: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
-    private _initialInProgress: 'rebase' | 'merge' | 'cherry-pick' | null = null;
+    // Last known in-progress operation; also the value replayed on the 'ready'
+    // handshake, and the baseline the auto re-check compares against.
+    private _lastInProgress: OperationKind | null = null;
     // Last computed panel state; buffered until the webview reports 'ready'
     private _repoState: RepoUiState | undefined;
     private _repoPendingFiles: number | undefined;
@@ -629,8 +636,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'ready':
                     this._webviewReady = true;
                     this._postRepoState();
-                    if (this._initialInProgress) {
-                        this._post({ command: 'setInProgress', inProgress: this._initialInProgress });
+                    if (this._lastInProgress) {
+                        this._post({ command: 'setInProgress', inProgress: this._lastInProgress });
                     }
                     {
                         // Restore persisted view state (selection, scroll, folds) within the session TTL
@@ -712,9 +719,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // webview script loads can be dropped)
         this._gitService.getInProgressOperation()
             .then(op => {
-                this._initialInProgress = op || null;
+                this._lastInProgress = op || null;
                 if (this._view && this._webviewReady) {
-                    this._post({ command: 'setInProgress', inProgress: this._initialInProgress });
+                    this._post({ command: 'setInProgress', inProgress: this._lastInProgress });
                 }
             })
             .catch(() => {});
@@ -807,10 +814,20 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (gitDir) {
             try {
                 const watcher = fs.watch(gitDir, (_event, filename) => {
+                    const name = filename ? filename.toString() : undefined;
                     // An unknown filename is treated as HEAD: some platforms omit it.
-                    if (filename && filename.toString() !== 'HEAD') {return;}
-                    if (this._headDebounce) {clearTimeout(this._headDebounce);}
-                    this._headDebounce = setTimeout(() => void this._checkBranchNow(), 300);
+                    if (!name || name === 'HEAD') {
+                        if (this._headDebounce) {clearTimeout(this._headDebounce);}
+                        this._headDebounce = setTimeout(() => void this._checkBranchNow(), 300);
+                    }
+                    // git deletes MERGE_HEAD / CHERRY_PICK_HEAD / rebase-* when an
+                    // operation settles (commit, --continue, --abort) — including when
+                    // the user resolves everything in an external terminal. That is the
+                    // signal to retract the 继续/终止 row without waiting for a reload.
+                    if (name && isOperationStateFile(name)) {
+                        if (this._operationDebounce) {clearTimeout(this._operationDebounce);}
+                        this._operationDebounce = setTimeout(() => void this._checkOperationState(), 300);
+                    }
                 });
                 this._headWatcher = watcher;
                 watcher.on('error', () => {
@@ -826,7 +843,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     private _startBranchPolling(): void {
         if (this._branchCheckTimer) {return;} // Already polling
-        this._branchCheckTimer = setInterval(() => void this._checkBranchNow(), BRANCH_POLL_MS);
+        this._branchCheckTimer = setInterval(() => {
+            void this._checkBranchNow();
+            void this._checkOperationState();
+        }, BRANCH_POLL_MS);
     }
 
     private async _checkBranchNow(): Promise<void> {
@@ -849,8 +869,71 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     void this._reloadBranchesOnly();
                 }
             }
+
+            // A moved tip means history changed outside this extension — a terminal
+            // commit, the merge commit that lands once conflicts are resolved, an
+            // amend/rebase/reset. Reloading here is what makes the list follow suit
+            // instead of waiting for a manual refresh. Both reads are file-based.
+            const tip = await this._tipOfDisplayedRev();
+            if (tip) {
+                if (this._lastKnownTip && tip !== this._lastKnownTip) {
+                    logger.info(`[GitCharm] History changed externally: ${this._lastKnownTip.slice(0, 8)} -> ${tip.slice(0, 8)}`);
+                    this._lastKnownTip = tip;
+                    void this._reload(true, true);
+                } else {
+                    this._lastKnownTip = tip;
+                }
+            }
         } catch (err) {
             // Ignore errors during branch check
+        }
+    }
+
+    /**
+     * Tip of whatever the commit list is showing: the selected branch when one is
+     * picked in the tree, otherwise HEAD (the "all refs" view is anchored there too).
+     */
+    private async _tipOfDisplayedRev(): Promise<string | undefined> {
+        if (this._branch) {
+            const tip = this._gitService.getBranchTipHash(this._branch);
+            if (tip) {return tip;}
+        }
+        try {
+            return (await this._gitService.getHeadHash()) || undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Re-check whether a merge/rebase/cherry-pick is still in progress and push
+     * `setInProgress` when that changed, so the 继续/终止 row above the branch tree
+     * disappears on its own once the operation settles.
+     *
+     * While nothing is in progress the check is only a handful of `existsSync`
+     * calls — the authoritative `getInProgressOperation()` additionally spawns
+     * `ls-files -u`, so it runs just when an operation is known or just appeared.
+     */
+    private async _checkOperationState(): Promise<void> {
+        if (!this._lastInProgress && !this._gitService.detectOperationFromFiles()) {
+            return;
+        }
+
+        let current: OperationKind | null = null;
+        try {
+            current = (await this._gitService.getInProgressOperation()) ?? null;
+        } catch (error) {
+            logger.debug('[GitCharm] In-progress operation re-check failed:', error);
+            return;
+        }
+
+        if (current === this._lastInProgress) {return;}
+        this._lastInProgress = current;
+        logger.info(current
+            ? `[GitCharm] Operation started: ${current}`
+            : '[GitCharm] Operation settled, operation status bar hidden');
+        if (this._view) {
+            this._post({ command: 'setInProgress', inProgress: current });
         }
     }
 
@@ -874,6 +957,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (this._headDebounce) {
             clearTimeout(this._headDebounce);
             this._headDebounce = undefined;
+        }
+        if (this._operationDebounce) {
+            clearTimeout(this._operationDebounce);
+            this._operationDebounce = undefined;
         }
         if (this._branchCheckTimer) {
             clearInterval(this._branchCheckTimer);
@@ -1084,6 +1171,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         } catch (error) {
             // Ignore errors
         }
+        // setData carries the same field: keep the baseline in sync so the
+        // auto re-check does not report a change that was just delivered.
+        this._lastInProgress = inProgress ?? null;
+        // Same reason for the tip: our own commands reload here, so the poll must
+        // not treat the history it just fetched as an external change.
+        this._lastKnownTip = await this._tipOfDisplayedRev();
         
         this._loaded = graphData.commits.length;
         this._hasMore = graphData.commits.length >= GraphViewProvider.PAGE_FIRST;
@@ -1126,7 +1219,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _reload(force: boolean = false) {
+    private async _reload(force: boolean = false, preserveSelection = false) {
         if (!this._view) {return;}
         if (this._repoState !== 'ready') {
             // Guidance page is showing; history queries would fail here
@@ -1144,6 +1237,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._post({
                 command: 'setData',
                 ...payload,
+                preserveSelection,
                 searchContext: hasSearchFilter ? {
                     query: this._filters.text,
                     resultCount: payload.commits.length
