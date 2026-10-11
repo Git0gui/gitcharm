@@ -45,6 +45,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **不得再调用内置 git 扩展的任何 API**：`extensions.getExtension('vscode.git')`、`gitExt.activate()`、`getAPI(1)`、`repo.state` / `repo.getRefs()` / `repo.log()`，全部禁止；`package.json` 也不再有 `extensionDependencies`。回归测试 `src/test/noVscodeGit.test.ts` 会扫 `src/**` 拦住这类用法。
 - **原因**：激活 vscode.git 是多 spawn 的仓库扫描（大仓库秒级），且它的 refs/HEAD 缓存滞后于真实变更；`repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定，踩坑成本高于收益。
 - **原本从 vscode.git 拿的数据一律走本地实现**：分支名 → `RefsReader`（读 refs 文件）；upstream/ahead/behind → `_getBranchTrackInfo()`（单条 `for-each-ref`）；当前分支 → 读 `HEAD`；工作区是否干净 → `getWorkingTreeSummary()`（`status --porcelain -z`）；缓存失效 → `GitService.watchRepositoryChanges()`（`fs.watch` git 目录）。
+- **暂存/提交/行内 diff 的 UI 由自有 SCM Provider 提供**（`src/scm/sourceControlProvider.ts`，只用稳定的 `vscode.scm` API；`idea-git.scm.enabled` 可关）。差异基线一律走 `idea-git-diff` 虚拟文档：索引内容用伪 ref `index` / `index:<stage>`（`showBlob` 翻译成 git 的 `:path` / `:1:path`）——**不要写 `0:path`**，实测 `git show 0:path` 直接 invalid object name，索引语法的前导冒号不能省。
 - git 目录一律用 `resolveGitDir()` / `resolveCommonDir()`（src/services/gitPaths.ts）定位：linked worktree 的 `.git` 是 `gitdir:` 指针文件，refs 还可能在 `commondir` 指向的公共目录，直接拼 `.git/refs` 会读空。
 
 ## 4. 缓存体系（性能的生命线）
@@ -96,7 +97,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 重命名/删除后必须同步内部状态（`_branch`、`selectedBranch`），否则后续命令报 `unknown revision`。
 - push 允许无 upstream 分支：`getUpstream` 包 try-catch；无 upstream 时用 `git log remote..local` 取待推送提交；推送对话框提交列表与箭头共用 `getBranchesWithDetails` 同一数据源，区分首次推送/已最新/有待推送三态，提交分页（首屏 20 条 + 加载更多）。
 - `updateBranch`：远程存在同名分支时自动建立跟踪。
-- **冲突处理（merge/rebase/cherry-pick）一律交 VSCode 原生 SCM 视图**，插件只提供继续/终止入口和顶部持久化状态栏；冲突检测合并 stderr+stdout，扫 `unmerged files`、cherry-pick failed 等关键词，`isConflictError` 入参必须是字符串。
+- **冲突处理（merge/rebase/cherry-pick）直接打开冲突文件**（`openConflictFiles`，上限 10 个 tab），解决靠核心 merge-conflict 扩展的 Accept Current/Incoming 代码透镜——它不依赖 vscode.git；插件只提供继续/终止入口和顶部持久化状态栏，**不再 `executeCommand('workbench.view.scm')` 把用户踢去别人的 SCM 视图**（SCM 视图现在由我们自己的 provider 填充）。冲突检测合并 stderr+stdout，扫 `unmerged files`、cherry-pick failed 等关键词，`isConflictError` 入参必须是字符串。
 - 分支刷新按钮只刷分支树，不动中间提交列表；拉取其他分支时不触发 `_reload()`。
 - 外部分支变更检测：**`fs.watch` 监听 git 目录本身**（用 `resolveGitDir()` 定位）并按 `filename === 'HEAD'` 过滤 + 300ms 防抖，**不要监听 HEAD 文件本身**——git 以 `HEAD.lock` + rename 覆写 HEAD，Windows 上文件级 watcher 仍可靠（实测三次 checkout 都收到事件），但 macOS/Linux 的 inotify 绑的是 inode，rename 覆盖后就成了孤儿监听，不可移植。轮询（2s，读 HEAD 零子进程）**常开**作兜底，不能只在 watcher `error` 时启用（孤儿监听不会报错，只是从此静默无事件）。仅 webview 可见时启用；`pauseBranchCheck` 冷却语义保留。
 - 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { GitService } from '../services/gitService';
 import { GraphViewProvider } from '../views/graphView';
 import { t } from '../i18n';
@@ -79,25 +80,46 @@ export async function tryHandleConflict(
     error: any,
     gitService: GitService,
     graphView: GraphViewProvider,
-    operationLabel: string,
-    continueOperation: () => Promise<string>,
-    abortOperation: () => Promise<string>,
-    currentBranch?: string,
-    targetBranch?: string,
-    kind?: 'rebase' | 'merge'
+    operationLabel: string
 ): Promise<boolean> {
     if (isConflictError(combineErrorText(error))) {
-        await handleConflictLoop(gitService, graphView, operationLabel, continueOperation, abortOperation, currentBranch, targetBranch, kind);
+        await handleConflictLoop(gitService, graphView, operationLabel);
         return true;
     }
 
     const conflictFiles = await gitService.getConflictFiles();
     if (conflictFiles.length > 0) {
-        await handleConflictLoop(gitService, graphView, operationLabel, continueOperation, abortOperation, currentBranch, targetBranch, kind);
+        await handleConflictLoop(gitService, graphView, operationLabel);
         return true;
     }
 
     return false;
+}
+
+/** Cap so a rebase over a wide conflict set doesn't flood the editor with tabs. */
+const MAX_CONFLICT_FILES_OPENED = 10;
+
+/**
+ * Open the unmerged files in editors and return their repo-relative paths.
+ * A path may be missing on disk ("deleted by us" side of a conflict), which is
+ * skipped rather than reported.
+ */
+export async function openConflictFiles(gitService: GitService): Promise<string[]> {
+    const files = await gitService.getConflictFiles();
+    const root = gitService.repositoryPath;
+    if (!root) {return files;}
+
+    for (const relative of files.slice(0, MAX_CONFLICT_FILES_OPENED)) {
+        try {
+            const doc = await vscode.workspace.openTextDocument(
+                vscode.Uri.file(path.join(root, relative.split('/').join(path.sep)))
+            );
+            await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: true });
+        } catch {
+            // nothing to open for this side of the conflict
+        }
+    }
+    return files;
 }
 
 /**
@@ -109,31 +131,26 @@ export function extractWorktreePath(message: string): string | undefined {
 }
 
 /**
- * Open files with unresolved merge conflicts in the editor and let the user
- * choose to abort the operation. VSCode's built-in SCM view handles conflict resolution.
+ * Surface merge conflicts where they are actually resolved: the conflicted files
+ * themselves. The workbench's core merge-conflict editor contributes the
+ * "Accept Current / Incoming Change" actions, so opening the file is enough —
+ * no built-in git extension involved. The panel keeps its continue/abort bar
+ * because `graphView.refresh()` republishes the in-progress state.
  */
 export async function handleConflictLoop(
     gitService: GitService,
     graphView: GraphViewProvider,
-    operationLabel: string,
-    continueOperation: () => Promise<string>,
-    abortOperation: () => Promise<string>,
-    currentBranch?: string,
-    targetBranch?: string,
-    kind?: 'rebase' | 'merge'
+    operationLabel: string
 ): Promise<void> {
-    const conflictFiles = await gitService.getConflictFiles();
+    const conflictFiles = await openConflictFiles(gitService);
     if (conflictFiles.length === 0) {
         vscode.window.showInformationMessage(t('conflict.noneDetected'));
         return;
     }
 
-    // Refresh webview immediately to show operation status bar
     graphView.refresh();
-
-    // Show warning with conflict count and operation context
-    vscode.window.showWarningMessage(t('conflict.hasConflicts', { 
-        operation: operationLabel, 
-        count: conflictFiles.length 
+    vscode.window.showWarningMessage(t('conflict.hasConflicts', {
+        operation: operationLabel,
+        count: conflictFiles.length
     }));
 }
