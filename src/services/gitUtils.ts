@@ -299,6 +299,22 @@ export function parseStashList(raw: string): StashEntry[] {
     return entries;
 }
 
+/**
+ * Split the commit-list path filter into git pathspecs.
+ *
+ * Comma-separated so several files/directories can be tracked at once, and
+ * patterns are handed to git untouched: git's own pathspec wildmatch is what
+ * the user gets (`src/*.ts`, a directory prefix, an exact path). A leading
+ * '-' is deliberately NOT rejected — the caller always appends these after a
+ * `--` separator, so git cannot read them as options. Control characters are
+ * dropped because they cannot survive as a process argument anyway.
+ */
+export function parsePathFilter(raw: string | undefined): string[] {
+    if (!raw) {return [];}
+    // eslint-disable-next-line no-control-regex
+    return raw.split(',').map(part => part.trim()).filter(part => part.length > 0 && !/[\x00-\x1f]/.test(part));
+}
+
 /** The operation an in-progress merge/rebase/cherry-pick leaves behind. */
 export type InProgressOperation = 'rebase' | 'merge' | 'cherry-pick' | 'revert';
 

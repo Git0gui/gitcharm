@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject, parseStashList } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -422,5 +422,29 @@ describe('parseStashList', () => {
             row('HEAD@{3}', 'not a stash line', '2026-10-01T00:00:00+08:00'),
             row('stash@{1}', 'kept', '2026-10-02T00:00:00+08:00')
         ].join('\n')), [{ index: 1, message: 'kept', date: '2026-10-02T00:00:00+08:00' }]);
+    });
+});
+
+describe('parsePathFilter', () => {
+    it('splits comma-separated pathspecs and trims each', () => {
+        assert.deepEqual(parsePathFilter(' src/a.ts, media , x '), ['src/a.ts', 'media', 'x']);
+    });
+
+    it('passes globs and repo-relative paths through untouched', () => {
+        assert.deepEqual(parsePathFilter('src/*.ts, media/webview.js'), ['src/*.ts', 'media/webview.js']);
+    });
+
+    it('returns nothing for empty input', () => {
+        assert.deepEqual(parsePathFilter(undefined), []);
+        assert.deepEqual(parsePathFilter(''), []);
+        assert.deepEqual(parsePathFilter(' , , '), []);
+    });
+
+    it('drops segments containing control characters', () => {
+        assert.deepEqual(parsePathFilter('ok.ts, bad\u0000.ts'), ['ok.ts']);
+    });
+
+    it('keeps a leading dash: the caller appends these only after a -- separator', () => {
+        assert.deepEqual(parsePathFilter('--not-an-option'), ['--not-an-option']);
     });
 });

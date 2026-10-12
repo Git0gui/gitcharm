@@ -584,7 +584,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             text: (message.text || '').trim() || undefined,
                             author: (message.author || '').trim() || undefined,
                             from: message.from || undefined,
-                            to: message.to || undefined
+                            to: message.to || undefined,
+                            path: (message.path || '').trim() || undefined
                         };
                         await this._reload();
                         // _reload will send setData with searchContext
@@ -1224,7 +1225,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     private async _collect(force: boolean = false): Promise<GraphPayload> {
         logger.debug(`[GitCharm] _collect called with branch=${this._branch || 'all'}, force=${force}`);
-        logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}`);
+        logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}`);
         const [graphData, details] = await Promise.all([
             this._gitService.getCommitGraphData({
                 limit: GraphViewProvider.PAGE_FIRST,
@@ -1309,13 +1310,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             logger.debug(`[GitCharm] _reload sending setData with ${payload.commits.length} commits`);
             
             // Include search context if filters are active
-            const hasSearchFilter = !!this._filters?.text;
+            const hasSearchFilter = !!this._filters?.text || !!this._filters?.path;
             this._post({
                 command: 'setData',
                 ...payload,
                 preserveSelection,
                 searchContext: hasSearchFilter ? {
-                    query: this._filters.text,
+                    query: this._filters.text ?? this._filters.path,
                     resultCount: payload.commits.length
                 } : undefined
             });
@@ -1614,6 +1615,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     <div id="author-dropdown" class="author-dropdown"></div>
                     <button class="clr" style="display:none" id="clr-author" title="${t('ui.clear')}" type="button">&#10005;</button>
                 </div>
+                <label class="tb">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2.5h6l4 4V13.5H3z"/><path d="M9 2.5v4h4"/></svg>
+                    <input id="f-path" type="text" placeholder="${t('ui.filterPath')}">
+                    <button class="clr" style="display:none" id="clr-path" title="${t('ui.clear')}" type="button">&#10005;</button>
+                </label>
                 <label class="tb date">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><line x1="2" y1="6.5" x2="14" y2="6.5"/><line x1="5.5" y1="1.5" x2="5.5" y2="4"/><line x1="10.5" y1="1.5" x2="10.5" y2="4"/></svg>
                     <input id="f-from" type="date" title="${t('ui.fromDate')}">

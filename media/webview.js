@@ -1201,6 +1201,7 @@ function pushFilters() {
         command: 'setFilters',
         text: document.getElementById('f-search').value,
         author: document.getElementById('f-author').value,
+        path: document.getElementById('f-path').value,
         from: fromFormatted,
         to: toFormatted
     });
@@ -1208,6 +1209,12 @@ function pushFilters() {
 var debounce;
 document.getElementById('f-search').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
+        pushFilters();
+    }
+});
+document.getElementById('f-path').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+        // Same rule as the other filter boxes: search on Enter, not per keystroke.
         pushFilters();
     }
 });
@@ -1304,7 +1311,7 @@ function syncClr(inputId, clrId) {
     var b = document.getElementById(clrId);
     if (i && b) b.style.display = i.value ? '' : 'none';
 }
-['f-search|clr-search', 'f-author|clr-author', 'f-bfilter|clr-bfilter'].forEach(function (pair) {
+['f-search|clr-search', 'f-author|clr-author', 'f-path|clr-path', 'f-bfilter|clr-bfilter'].forEach(function (pair) {
     var ids = pair.split('|');
     syncClr(ids[0], ids[1]);
     var i = document.getElementById(ids[0]);
@@ -1325,6 +1332,10 @@ document.getElementById('clr-search').addEventListener('click', function () {
 document.getElementById('clr-author').addEventListener('click', function () {
     document.getElementById('f-author').value = '';
     syncClr('f-author', 'clr-author'); pushFilters();
+});
+document.getElementById('clr-path').addEventListener('click', function () {
+    document.getElementById('f-path').value = '';
+    syncClr('f-path', 'clr-path'); pushFilters();
 });
 document.getElementById('clr-date').addEventListener('click', function () {
     document.getElementById('f-from').value = '';
@@ -1731,9 +1742,18 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     var path = file.getAttribute('data-path');
     var items = [
         ['fileCompareLocal', T('menu.fileCompareLocal')],
-        ['fileCherryPick', T('menu.fileCherryPick')]
+        ['fileCherryPick', T('menu.fileCherryPick')],
+        ['filterPath', T('menu.filterByPath')]
     ];
     showMenu(e.clientX, e.clientY, items, function (action) {
+        if (action === 'filterPath') {
+            // Purely local: fill the toolbar path box and re-query. Keeping it here
+            // avoids a host round-trip just to echo a filter the panel already owns.
+            document.getElementById('f-path').value = path;
+            syncClr('f-path', 'clr-path');
+            pushFilters();
+            return;
+        }
         vscode.postMessage({ command: 'action', action: action, hash: state.selectedHash, path: path });
     });
 });

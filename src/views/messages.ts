@@ -135,7 +135,7 @@ export type WebviewToExtMessage =
     | { command: 'refreshFiles'; hash: string }
     | { command: 'showNotification'; message: string; type?: string }
     | { command: 'showStatusBarMessage'; message: string; timeout?: number }
-    | { command: 'setFilters'; text?: string; author?: string; from?: string; to?: string }
+    | { command: 'setFilters'; text?: string; author?: string; from?: string; to?: string; path?: string }
     | { command: 'loadMore' }
     | { command: 'selectCommit'; hash: string; force?: boolean }
     | { command: 'selectCommits'; hashes: string[] }

@@ -21,6 +21,7 @@ import {
     parseWorkingTreeSummary,
     parseStatusEntries,
     parseStashList,
+    parsePathFilter,
     operationFromStateFiles,
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
@@ -68,6 +69,8 @@ export interface LogFilters {
     author?: string;
     from?: string;
     to?: string;
+    /** Comma-separated pathspecs: only commits touching these paths are listed. */
+    path?: string;
 }
 
 export interface LogOptions {
@@ -1709,7 +1712,7 @@ export class GitService {
         const limit = opts.limit ?? 20;
         const skip = opts.skip ?? 0;
         const f = opts.filters ?? {};
-        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${f.text ?? ''}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}`;
+        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${f.text ?? ''}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}|${f.path ?? ''}`;
         if (!opts.force) {
             const hit = this._graphCache.get(key);
             if (hit) {return hit;}
@@ -1781,6 +1784,12 @@ export class GitService {
             } else {
                 a.push(`--format=${format}`);
             }
+            // Path filter last, after a `--` separator so git can never read a
+            // pattern as an option. Note this switches git to path-filtered history
+            // simplification: merges that did not touch the paths drop out, which is
+            // exactly the "commits that changed this file" answer the box promises.
+            const pathspecs = parsePathFilter(f.path);
+            if (pathspecs.length > 0) {a.push('--', ...pathspecs);}
             return a;
         };
 
