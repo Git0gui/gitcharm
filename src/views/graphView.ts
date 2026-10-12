@@ -1057,6 +1057,24 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     forceReload = true;
                     break;
                 }
+                case 'revert': {
+                    const revertNode = message.hashes && message.hashes.length > 1
+                        ? { hashes: message.hashes, label: `${message.hashes.length} commits` }
+                        : commitNode;
+                    await vscode.commands.executeCommand('idea-git.revertCommit', revertNode);
+                    forceReload = true;
+                    break;
+                }
+                case 'amend':
+                    await vscode.commands.executeCommand('idea-git.amendCommit', commitNode);
+                    forceReload = true;
+                    break;
+                case 'openRemoteCommit':
+                    await vscode.commands.executeCommand('idea-git.openCommitOnRemote', commitNode);
+                    return;
+                case 'openRemoteBranch':
+                    await vscode.commands.executeCommand('idea-git.openBranchOnRemote', branchNode);
+                    return;
                 case 'reset':
                     await vscode.commands.executeCommand('idea-git.resetToCommit', commitNode);
                     forceReload = true;
@@ -1164,8 +1182,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             headHash = await this._gitService.getHeadHash();
         } catch { /* empty repo */ }
         
-        // Check for in-progress rebase/merge/cherry-pick operation
-        let inProgress: 'rebase' | 'merge' | 'cherry-pick' | undefined;
+        // Check for in-progress rebase/merge/cherry-pick/revert operation
+        let inProgress: OperationKind | undefined;
         try {
             inProgress = await this._gitService.getInProgressOperation();
         } catch (error) {

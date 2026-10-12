@@ -1,24 +1,28 @@
 import * as vscode from 'vscode';
-import { GitService } from '../services/gitService';
+import { GitService, InProgressOperation } from '../services/gitService';
 import { GraphViewProvider } from '../views/graphView';
 import { isConflictError, combineErrorText, openConflictFiles } from './helpers';
 import { t } from '../i18n';
 
-type OpKind = 'rebase' | 'merge' | 'cherry-pick';
-
-function opLabelKey(op: OpKind): string {
+/**
+ * The four key helpers below assume `op.<kind>`, `op.<kind>Completed` and
+ * `op.<kind>Aborted` all exist for every kind — adding a kind to
+ * InProgressOperation means adding those three keys in both dictionaries, and
+ * the i18n parity test will fail until they are there.
+ */
+function opLabelKey(op: InProgressOperation): string {
     return op === 'cherry-pick' ? 'op.cherryPick' : `op.${op}`;
 }
 
-function opCompletedKey(op: OpKind): string {
+function opCompletedKey(op: InProgressOperation): string {
     return op === 'cherry-pick' ? 'op.cherryPickCompleted' : `op.${op}Completed`;
 }
 
-function opAbortedKey(op: OpKind): string {
+function opAbortedKey(op: InProgressOperation): string {
     return op === 'cherry-pick' ? 'op.cherryPickAborted' : `op.${op}Aborted`;
 }
 
-/** Continue/abort in-progress rebase/merge/cherry-pick operations. */
+/** Continue/abort in-progress rebase/merge/cherry-pick/revert operations. */
 export function registerOperationCommands(
     ctx: vscode.ExtensionContext,
     gitService: GitService,
@@ -49,6 +53,8 @@ export function registerOperationCommands(
                     await gitService.mergeContinue();
                 } else if (operation === 'cherry-pick') {
                     await gitService.executeGitArgs(['cherry-pick', '--continue']);
+                } else if (operation === 'revert') {
+                    await gitService.revertContinue();
                 }
                 vscode.window.showInformationMessage(t(opCompletedKey(operation)));
                 graphView.refresh();
@@ -73,6 +79,8 @@ export function registerOperationCommands(
                                 await gitService.mergeAbort();
                             } else if (currentOp === 'cherry-pick') {
                                 await gitService.abortCherryPick();
+                            } else if (currentOp === 'revert') {
+                                await gitService.revertAbort();
                             }
                             vscode.window.showInformationMessage(t('op.aborted'));
                             graphView.refresh();
@@ -110,6 +118,8 @@ export function registerOperationCommands(
                     await gitService.mergeAbort();
                 } else if (operation === 'cherry-pick') {
                     await gitService.abortCherryPick();
+                } else if (operation === 'revert') {
+                    await gitService.revertAbort();
                 }
                 vscode.window.showInformationMessage(t(opAbortedKey(operation)));
                 graphView.refresh();

@@ -1491,7 +1491,8 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['update', T('menu.pull')],
             ['push', T('menu.push')],
             ['newBranchFrom', T('menu.newBranchFrom')],
-            ['rename', T('menu.rename')]
+            ['rename', T('menu.rename')],
+            ['openRemoteBranch', T('menu.openOnRemote')]
         ];
     } else {
         // Other local branches: full action set
@@ -1504,7 +1505,8 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['newBranchFrom', T('menu.newBranchFrom')],
             ['compareBranch', T('menu.compareWithCurrent')],
             ['rename', T('menu.rename')],
-            ['deleteBranch', T('menu.deleteBranch')]
+            ['deleteBranch', T('menu.deleteBranch')],
+            ['openRemoteBranch', T('menu.openOnRemote')]
         ];
     }
     
@@ -1605,9 +1607,10 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
     var items = [];
     
     if (isMultiSelect) {
-        // Multi-select mode: allow cherry-pick, drop, and squash
+        // Multi-select mode: allow cherry-pick, revert, drop, and squash
         items = [
             ['cherryPick', T('menu.cherryPick') + ' (' + state.selectedHashes.length + ')'],
+            ['revert', T('menu.revert') + ' (' + state.selectedHashes.length + ')'],
             ['dropCommit', T('menu.dropCommit') + ' (' + state.selectedHashes.length + ')'],
             ['squashCommits', T('menu.squashCommits') + ' (' + state.selectedHashes.length + ')']
         ];
@@ -1616,27 +1619,37 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
         items = [
             ['showDiff', T('menu.showDiff')],
             ['cherryPick', T('menu.cherryPick')],
+            ['revert', T('menu.revert')],
             ['reset', T('menu.reset')]
         ];
         if (isHead) {
             items.push(['editMessage', T('menu.editMessage')]);
+            items.push(['amend', T('menu.amend')]);
             items.push(['dropCommit', T('menu.dropCommit')]);
         }
         items.push(['newBranchFrom', T('menu.newBranchFrom')]);
     }
+    items.push(['openRemoteCommit', T('menu.openOnRemote')]);
     items.push(['copy', T('menu.copyHash')]);
-    
+    items.push(['copyMessage', T('menu.copyMessage')]);
+
     showMenu(e.clientX, e.clientY, items, function (action) {
-        if (action === 'copy') {
-            navigator.clipboard.writeText(state.selectedHashes.length > 1 ? state.selectedHashes.join('\n') : hash);
-        } else {
-            vscode.postMessage({ 
-                command: 'action', 
-                action: action, 
-                hash: hash,
-                hashes: state.selectedHashes.length > 1 ? state.selectedHashes : undefined
-            });
+        if (action === 'copy' || action === 'copyMessage') {
+            var hashes = state.selectedHashes.length > 1 ? state.selectedHashes : [hash];
+            navigator.clipboard.writeText(action === 'copy'
+                ? hashes.join('\n')
+                : hashes.map(function (h) {
+                    var c = (state.commits || []).find(function (x) { return x.hash === h; });
+                    return (c ? c.shortHash + ' ' + (c.message || '') : h);
+                }).join('\n'));
+            return;
         }
+        vscode.postMessage({ 
+            command: 'action', 
+            action: action, 
+            hash: hash,
+            hashes: state.selectedHashes.length > 1 ? state.selectedHashes : undefined
+        });
     });
 });
 
@@ -2625,16 +2638,14 @@ function renderOperationStatus() {
     if (state.inProgress === 'rebase') opLabel = T('op.rebaseInProgress');
     else if (state.inProgress === 'merge') opLabel = T('op.mergeInProgress');
     else if (state.inProgress === 'cherry-pick') opLabel = T('op.cherryPickInProgress');
+    else if (state.inProgress === 'revert') opLabel = T('op.revertInProgress');
 
     textEl.textContent = opLabel;
 
-    // Update buttons based on operation type
-    if (state.inProgress === 'merge' || state.inProgress === 'rebase' || state.inProgress === 'cherry-pick') {
-        actionsEl.innerHTML = '<button id="btn-continue-op" class="op-btn continue">' + T('op.continue') + '</button>' +
-                              '<button id="btn-abort-op" class="op-btn abort">' + T('op.abort') + '</button>';
-    } else {
-        actionsEl.innerHTML = '';
-    }
+    // Every kind is continued/aborted through the same two buttons; the host
+    // chooses the matching git subcommand from the detected operation.
+    actionsEl.innerHTML = '<button id="btn-continue-op" class="op-btn continue">' + T('op.continue') + '</button>' +
+                          '<button id="btn-abort-op" class="op-btn abort">' + T('op.abort') + '</button>';
     
     statusEl.style.display = 'flex';
 }

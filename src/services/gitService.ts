@@ -21,6 +21,9 @@ import {
     parseWorkingTreeSummary,
     parseStatusEntries,
     operationFromStateFiles,
+    remoteUrlToWebBase,
+    parseGitConfigRemoteUrl,
+    InProgressOperation,
     StatusEntry,
     WorkingTreeSummary
 } from './gitUtils';
@@ -33,7 +36,8 @@ export {
     assertHash,
     LruCache,
     parseLogLine,
-    parseGraphLine
+    parseGraphLine,
+    InProgressOperation
 } from './gitUtils';
 
 export interface GraphCommit {
@@ -1248,6 +1252,23 @@ export class GitService {
     }
 
     /**
+     * Continue a revert that stopped on conflicts. `git revert` keeps its own
+     * REVERT_HEAD (not MERGE_HEAD), so `merge --continue` cannot finish it.
+     */
+    async revertContinue(): Promise<string> {
+        const output = await this._execMutateWithEnv(['revert', '--continue'], { GIT_EDITOR: 'true' });
+        return output || t('op.revertCompleted');
+    }
+
+    /**
+     * Abort the current revert and restore the pre-revert state.
+     */
+    async revertAbort(): Promise<string> {
+        const output = await this._execMutate(['revert', '--abort']);
+        return output || t('op.revertAborted');
+    }
+
+    /**
      * Return the paths of files with unresolved merge conflicts.
      * Uses plumbing (`ls-files -u`) with NUL-delimited output: stable across
      * git versions and locales, and safe for paths containing newlines.
@@ -1271,21 +1292,20 @@ export class GitService {
 
     /**
      * Cheap, subprocess-free in-progress check: looks only at git's state files
-     * (`rebase-merge`/`rebase-apply`/`CHERRY_PICK_HEAD`/`MERGE_HEAD`). Use it to
-     * decide whether the authoritative `getInProgressOperation()` — which also
-     * spawns `ls-files -u` for the unmerged-index case — is worth running.
+     * (`rebase-merge`/`rebase-apply`/`CHERRY_PICK_HEAD`/`REVERT_HEAD`/`MERGE_HEAD`).
+     * Use it to decide whether the authoritative `getInProgressOperation()` — which
+     * also spawns `ls-files -u` for the unmerged-index case — is worth running.
      */
-    detectOperationFromFiles(): 'rebase' | 'merge' | 'cherry-pick' | undefined {
+    detectOperationFromFiles(): InProgressOperation | undefined {
         const gitDir = this._gitDir();
         if (!gitDir) {return undefined;}
         return operationFromStateFiles(name => fs.existsSync(path.join(gitDir, name)));
     }
 
     /**
-     * Detect whether a rebase, merge, or cherry-pick is currently in progress.
-     * Returns 'rebase' | 'merge' | 'cherry-pick' | undefined.
+     * Detect whether a rebase, merge, cherry-pick or revert is in progress.
      */
-    async getInProgressOperation(): Promise<'rebase' | 'merge' | 'cherry-pick' | undefined> {
+    async getInProgressOperation(): Promise<InProgressOperation | undefined> {
         const fromFiles = this.detectOperationFromFiles();
         if (fromFiles) {return fromFiles;}
 
@@ -1293,6 +1313,24 @@ export class GitService {
         // pull): only `ls-files -u` can see them, so this is the one spawn path.
         const conflictFiles = await this.getConflictFiles();
         return conflictFiles.length > 0 ? 'merge' : undefined;
+    }
+
+    /**
+     * The repository's web UI base (`https://host/org/repo`), read straight from
+     * the config file in the common git dir — no subprocess, and worktree-safe.
+     * Undefined when no remote is configured or its URL is a local path.
+     */
+    getRemoteWebBase(): string | undefined {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (!gitDir) {return undefined;}
+        try {
+            const config = fs.readFileSync(path.join(resolveCommonDir(gitDir), 'config'), 'utf8');
+            const url = parseGitConfigRemoteUrl(config);
+            return url ? remoteUrlToWebBase(url) : undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     /**
@@ -1787,6 +1825,16 @@ export class GitService {
     }
 
     /**
+     * Revert one commit: apply the reverse patch as a new commit. `--no-edit`
+     * keeps git from opening an interactive editor for the default message,
+     * which is what makes this safe to run from the extension host.
+     */
+    async revert(hash: string): Promise<void> {
+        assertHash(hash);
+        await this._execMutate(['revert', '--no-edit', hash]);
+    }
+
+    /**
      * Abort an ongoing cherry-pick operation
      */
     async abortCherryPick(): Promise<void> {
@@ -1899,6 +1947,35 @@ export class GitService {
         }
         const out = await this._commitWithMessage(['commit', '--amend'], message);
         return out || t('commit.messageUpdated');
+    }
+
+    /**
+     * Fold the current changes into the tip commit, keeping its message — IDEA's
+     * "Amend". `-a` picks up tracked modifications on top of whatever is staged.
+     * Untracked files are deliberately not added: silently putting new files into
+     * an existing commit is worse than doing nothing, and this panel has no
+     * staging area to opt in from.
+     *
+     * Returns false when there is nothing to fold in, so the caller can say so
+     * instead of rewriting the commit hash for no effect.
+     */
+    async amendWithChanges(commitHash: string): Promise<boolean> {
+        const head = await this.getHeadHash();
+        if (commitHash !== head) {
+            throw new Error(t('commit.amendOnlyLast'));
+        }
+
+        const entries = await this.getStatusEntries();
+        if (entries.some(entry => entry.conflicted)) {
+            throw new Error(t('commit.amendConflict'));
+        }
+        const foldable = entries.some(entry =>
+            !entry.untracked && !entry.ignored
+            && (entry.indexStatus !== ' ' || entry.worktreeStatus !== ' '));
+        if (!foldable) {return false;}
+
+        await this._execMutate(['commit', '--amend', '--no-edit', '-a']);
+        return true;
     }
 
     /**

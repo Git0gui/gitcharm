@@ -213,15 +213,17 @@ export function parseWorkingTreeSummary(raw: string): WorkingTreeSummary {
 }
 
 /** The operation an in-progress merge/rebase/cherry-pick leaves behind. */
-export type InProgressOperation = 'rebase' | 'merge' | 'cherry-pick';
+export type InProgressOperation = 'rebase' | 'merge' | 'cherry-pick' | 'revert';
 
 /**
  * Files git keeps in `.git` while an operation is unfinished. Their removal is
  * what "resolved" means: `git commit` deletes MERGE_HEAD, `--continue` deletes
  * CHERRY_PICK_HEAD, a finished/aborted rebase deletes rebase-merge|rebase-apply.
+ * A conflicted `git revert` writes REVERT_HEAD (and no MERGE_HEAD), so it needs
+ * its own entry or the panel would show a conflict nobody can continue.
  */
 export const OPERATION_STATE_FILES: readonly string[] = [
-    'rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'MERGE_HEAD'
+    'rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'MERGE_HEAD'
 ];
 
 /** True when `name` (a bare filename inside `.git`) is one of the state files. */
@@ -241,6 +243,88 @@ export function operationFromStateFiles(
 ): InProgressOperation | undefined {
     if (exists('rebase-merge') || exists('rebase-apply')) {return 'rebase';}
     if (exists('CHERRY_PICK_HEAD')) {return 'cherry-pick';}
+    if (exists('REVERT_HEAD')) {return 'revert';}
     if (exists('MERGE_HEAD')) {return 'merge';}
     return undefined;
+}
+
+/**
+ * Turn a git remote URL into the base of its web UI, so a commit or branch can be
+ * opened in the browser. Handles the forms remotes actually come in: scp-like
+ * (`git@host:org/repo.git`), ssh/git/https URLs (with optional user and port), and
+ * local paths — for those there is no web UI, so it returns undefined.
+ */
+export function remoteUrlToWebBase(url: string): string | undefined {
+    const trimmed = url.trim();
+    if (!trimmed) {return undefined;}
+
+    let host: string | undefined;
+    let path: string | undefined;
+
+    const scheme = /^(?:git\+)?(https?|ssh|git):\/\/(?:[^/@]+@)?([^/]+)/.exec(trimmed);
+    if (scheme) {
+        host = scheme[2];
+        path = trimmed.slice(scheme[0].length).replace(/^\/+/, '');
+    } else {
+        // scp-like: [user@]host:path — the colon only counts when it precedes a '/'
+        // and nothing before it looks like a Windows drive letter or scheme.
+        const scp = /^(?:[^/@]+@)?([^/@\s:]+):(.+)$/.exec(trimmed);
+        if (scp && !/^[a-zA-Z]$/.test(scp[1])) {
+            host = scp[1];
+            path = scp[2];
+        } else {
+            return undefined; // local path or unparseable
+        }
+    }
+
+    host = host.replace(/:\d+$/, ''); // strip a port (ssh://git@host:22/…)
+    path = path.replace(/\.git$/i, '').replace(/\/+$/, '');
+    if (!host || !path) {return undefined;}
+    return `https://${host}/${path}`;
+}
+
+/** Build the web URL for a commit, or undefined when the remote has no web UI. */
+export function commitWebUrl(webBase: string | undefined, hash: string): string | undefined {
+    return webBase ? `${webBase}/commit/${hash}` : undefined;
+}
+
+/** Build the web URL for a branch (its tip), or undefined when unavailable. */
+export function branchWebUrl(webBase: string | undefined, branch: string): string | undefined {
+    return webBase ? `${webBase}/tree/${branch}` : undefined;
+}
+
+/**
+ * Read a remote's URL straight out of git's config file (no subprocess).
+ * Sections look like `[remote "origin"]` followed by `url = …`; the quotes are
+ * optional and either kind is accepted, since git only requires them when the
+ * name contains whitespace. Returns the preferred remote's URL, falling back to
+ * the first remote defined; the first `url` key inside a section wins.
+ */
+export function parseGitConfigRemoteUrl(raw: string, preferred = 'origin'): string | undefined {
+    let preferredUrl: string | undefined;
+    let firstUrl: string | undefined;
+    let current: string | undefined;
+
+    for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) {continue;}
+
+        const section = /^\[remote\s+(?:["']([^"'\]]+)["']|([^"'\]\s]+))\]$/.exec(trimmed);
+        if (section) {
+            current = section[1] ?? section[2];
+            continue;
+        }
+        if (trimmed.startsWith('[')) {current = undefined; continue;}
+        if (!current) {continue;}
+
+        const url = /^url\s*=\s*(.*)$/.exec(trimmed);
+        if (!url) {continue;}
+        const value = url[1].trim().replace(/^["'](.*)["']$/, '$1');
+        if (!value) {continue;}
+
+        if (firstUrl === undefined) {firstUrl = value;}
+        if (current === preferred && preferredUrl === undefined) {preferredUrl = value;}
+    }
+
+    return preferredUrl ?? firstUrl;
 }

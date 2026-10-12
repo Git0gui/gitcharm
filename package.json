@@ -164,6 +164,26 @@
         "command": "idea-git.initRepository",
         "title": "%cmd.initRepository%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.revertCommit",
+        "title": "%cmd.revertCommit%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.amendCommit",
+        "title": "%cmd.amendCommit%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.openCommitOnRemote",
+        "title": "%cmd.openCommitOnRemote%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.openBranchOnRemote",
+        "title": "%cmd.openBranchOnRemote%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {

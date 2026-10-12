@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl } from '../services/gitUtils';
 
 describe('parseTrackInfo', () => {
     it('parses ahead and behind counts', () => {
@@ -204,6 +204,7 @@ describe('operationFromStateFiles', () => {
     it('maps each state file to its operation', () => {
         assert.equal(operationFromStateFiles(present('MERGE_HEAD')), 'merge');
         assert.equal(operationFromStateFiles(present('CHERRY_PICK_HEAD')), 'cherry-pick');
+        assert.equal(operationFromStateFiles(present('REVERT_HEAD')), 'revert');
         assert.equal(operationFromStateFiles(present('rebase-merge')), 'rebase');
         assert.equal(operationFromStateFiles(present('rebase-apply')), 'rebase');
     });
@@ -218,11 +219,18 @@ describe('operationFromStateFiles', () => {
     it('lets cherry-pick win over merge', () => {
         assert.equal(operationFromStateFiles(present('CHERRY_PICK_HEAD', 'MERGE_HEAD')), 'cherry-pick');
     });
+
+    it('reads a conflicted revert as revert, not merge', () => {
+        // Empirically a conflicted revert writes REVERT_HEAD (+ MERGE_MSG,
+        // AUTO_MERGE) but never MERGE_HEAD; a revert inside a rebase is a rebase.
+        assert.equal(operationFromStateFiles(present('REVERT_HEAD', 'MERGE_HEAD')), 'revert');
+        assert.equal(operationFromStateFiles(present('REVERT_HEAD', 'rebase-apply')), 'rebase');
+    });
 });
 
 describe('isOperationStateFile', () => {
-    it('accepts exactly the four files git removes when an operation settles', () => {
-        for (const name of ['rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'MERGE_HEAD']) {
+    it('accepts exactly the files git removes when an operation settles', () => {
+        for (const name of ['rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'MERGE_HEAD']) {
             assert.equal(isOperationStateFile(name), true, name);
         }
     });
@@ -231,5 +239,83 @@ describe('isOperationStateFile', () => {
         for (const name of ['HEAD', 'index', 'packed-refs', 'ORIG_HEAD', 'COMMIT_EDITMSG']) {
             assert.equal(isOperationStateFile(name), false, name);
         }
+    });
+
+    it('rejects the byproduct files an operation leaves next to the head files', () => {
+        // These outlive the operation (or appear without one), so treating them as
+        // state would keep the in-progress bar up forever.
+        for (const name of ['MERGE_MSG', 'AUTO_MERGE', 'SQUASH_MSG', 'sequencer']) {
+            assert.equal(isOperationStateFile(name), false, name);
+        }
+    });
+});
+
+describe('remoteUrlToWebBase', () => {
+    it('handles the scp-like form GitHub uses', () => {
+        assert.equal(remoteUrlToWebBase('git@github.com:Git0gui/gitcharm.git'), 'https://github.com/Git0gui/gitcharm');
+    });
+
+    it('handles ssh URLs with a user and port, and a trailing slash', () => {
+        assert.equal(remoteUrlToWebBase('ssh://git@github.com:22/Git0gui/gitcharm/'), 'https://github.com/Git0gui/gitcharm');
+    });
+
+    it('handles https URLs with credentials and a port', () => {
+        assert.equal(remoteUrlToWebBase('https://user@gitea.example.com:8443/team/repo.git'), 'https://gitea.example.com/team/repo');
+    });
+
+    it('keeps GitLab subgroups intact', () => {
+        assert.equal(remoteUrlToWebBase('git@gitlab.com:group/sub/project.git'), 'https://gitlab.com/group/sub/project');
+    });
+
+    it('returns undefined for local paths — there is no web UI to open', () => {
+        for (const url of ['/srv/git/repo.git', 'C:/Users/me/repo', '\\\\server\\share\\repo', '', '   ']) {
+            assert.equal(remoteUrlToWebBase(url), undefined, url);
+        }
+    });
+});
+
+describe('commitWebUrl / branchWebUrl', () => {
+    it('append the commit and tree routes', () => {
+        assert.equal(commitWebUrl('https://github.com/o/r', 'abc123'), 'https://github.com/o/r/commit/abc123');
+        assert.equal(branchWebUrl('https://github.com/o/r', 'main'), 'https://github.com/o/r/tree/main');
+    });
+
+    it('stay undefined when the remote has no web base', () => {
+        assert.equal(commitWebUrl(undefined, 'abc123'), undefined);
+        assert.equal(branchWebUrl(undefined, 'main'), undefined);
+    });
+});
+
+describe('parseGitConfigRemoteUrl', () => {
+    it('prefers the requested remote over the first one listed', () => {
+        const raw = [
+            '[core]',
+            ' repositoryformatversion = 0',
+            '[remote "up"]',
+            '\turl = git@github.com:other/up.git',
+            '\tfetch = +refs/heads/*:refs/remotes/up/*',
+            '[remote "origin"]',
+            '\turl = git@github.com:Git0gui/gitcharm.git',
+        ].join('\n');
+        assert.equal(parseGitConfigRemoteUrl(raw), 'git@github.com:Git0gui/gitcharm.git');
+        assert.equal(parseGitConfigRemoteUrl(raw, 'up'), 'git@github.com:other/up.git');
+    });
+
+    it('falls back to the first remote when the preferred one is absent', () => {
+        const raw = '[remote "fork"]\nurl = https://github.com/me/repo.git\n';
+        assert.equal(parseGitConfigRemoteUrl(raw), 'https://github.com/me/repo.git');
+    });
+
+    it('accepts an unquoted section name and a bare url value', () => {
+        assert.equal(parseGitConfigRemoteUrl('[remote origin]\n  url=git@github.com:o/r.git'), 'git@github.com:o/r.git');
+    });
+
+    it('ignores urls outside remote sections and keeps the first url of a section', () => {
+        const raw = ['[branch "main"]', ' remote = origin', '[remote "origin"]', 'url = a', 'url = b'].join('\n');
+        assert.equal(parseGitConfigRemoteUrl(raw), 'a');
+    });
+
+    it('returns undefined when the repo has no remote', () => {
+        assert.equal(parseGitConfigRemoteUrl('[core]\n\tbare = false\n'), undefined);
     });
 });

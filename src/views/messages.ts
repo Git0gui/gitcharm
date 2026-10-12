@@ -7,7 +7,7 @@ import { FileIconPack } from '../services/fileIconTheme';
  * (media/webview.js) mirrors these shapes by convention — keep them in sync.
  */
 
-export type OperationKind = 'rebase' | 'merge' | 'cherry-pick';
+export type OperationKind = 'rebase' | 'merge' | 'cherry-pick' | 'revert';
 
 /**
  * What the panel can meaningfully show right now. Anything other than 'ready'
@@ -117,6 +117,7 @@ export type WebviewAction =
     | 'checkout' | 'push' | 'pull' | 'fetch' | 'merge' | 'rebase' | 'update'
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
+    | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
     | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
