@@ -30,6 +30,7 @@
 ### 修复
 
 - **多仓库工作区面板卡在骨架屏**：冷启动时分支走 `workspaceState` 缓存、提交走热索引，比 webview 脚本加载还快，`setBranches`/`setCommits` 在 `ready` 握手之前就发了出去——而握手之前的消息会被 webview 静默丢弃且没人重投，于是前两栏永远停在骨架条（看起来像"图标全没了"），第三栏却靠握手后的往返拿到了真实提交。现在 `_post` 把刷屏类消息按 command 暂存最新值，`ready` 时先 flush 再投递权威仓库状态；隐藏即 DOM 销毁，因此隐藏时把 `_webviewReady` 置回 `false` 并清空缓冲，避免把消息打进已经死掉的帧（同源问题：隐藏期间的 `setFileIconTheme` 过去会丢，重显示后文件图标退化成兜底图标）
+- **对话框里的右键菜单"点了没反应"**：`.context-menu` 一直是 `z-index: 1000`，而所有面板内对话框（Reflog、文件历史、推送、对比）用的遮罩层是 `2000`——菜单确实弹出来了，只是画在遮罩底下，看起来就像右键失效。提到 `10001`（盖过全部遮罩与 `10000` 的自定义 tooltip），一处 CSS 修好所有对话框内的菜单，不用给每个弹层单独传层叠上下文
 - **在 VS Code 里切分支时面板感知弱**：外部切换的探测原先把 `fs.watch` 绑在 `HEAD` 文件本身——git 是用 `HEAD.lock` + rename 覆写它，Windows 上还能收到事件，macOS/Linux 的 inotify 绑 inode，第一次切换后就变成孤儿监听；而 2s 轮询又只在 watcher 报 `error` 时才启动，孤儿监听并不报错、只是从此静默无事件，于是"切一次还行、后面全不刷新"。现在监听 git 目录并按 `HEAD` 过滤，轮询与监听常开并存（读 `HEAD` 是纯文件读取，不启子进程），任何一路失效另一路仍会跟上
 - **linked worktree 下 git 状态读不到**：worktree 的 `.git` 是 `gitdir:` 指针文件、refs 又共享在 `commondir` 指向的公共目录，旧代码拼 `repoPath/.git` 去读 `HEAD`、`MERGE_HEAD`、`rebase-merge`、`CHERRY_PICK_HEAD` 一律落空（冲突/变基状态栏不显示、分支与哈希退回子进程）。新增纯 fs 的 `resolveGitDir()` / `resolveCommonDir()`，所有状态文件读取统一走 worktree 感知路径
 - **git log 的位置参数存在参数注入面**：无 shell 的 argv 执行下，旧代码靠静默剥离 `" \` $` 来"消毒"，既会篡改合法分支名又挡不住以 `-` 开头的输入被 git 当成选项（如 hash 搜索框填入 `--output=…`）。现在分支 rev 走 `assertRef`（新增拒绝前导 `-`，合法 ref 本就不允许）、hash 走 `assertHash`，`--grep/--author/--since/--until` 作为选项值原样传递

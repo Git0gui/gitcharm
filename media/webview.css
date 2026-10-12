@@ -1145,7 +1145,9 @@ canvas.graph-canvas {
     border: 1px solid var(--vscode-menu-border, #454545);
     border-radius: 8px;
     padding: 4px 0;
-    z-index: 1000;
+    /* Above every dialog overlay (2000) and the tooltip (10000): a menu opened inside
+       the reflog / file-history dialogs used to paint underneath them. */
+    z-index: 10001;
     box-shadow: 0 4px 16px rgba(0,0,0,.35);
     min-width: 160px;
     max-height: calc(100vh - 8px);

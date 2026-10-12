@@ -79,6 +79,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **内联 JS 在 TS 模板串里要双重转义**：`\n` 等序列会静默杀死整段内联脚本。
 - **XSS 防线**：所有插入 HTML 的动态文本走统一的 `esc()`（webview.js 内集中实现），禁止字符串拼接原始数据。
 - **tooltip 用 `data-title` + 自定义浮层**，不用原生 `title`（白色原生 tooltip 会与主题浮层重叠）；多行内容 CSS 需 `white-space: pre-wrap`；`contextmenu` 时调 `window._hideTooltip()` 避免与右键菜单叠层。
+- **浮动层层级是固定序**：对话框遮罩 `.push-dialog-overlay` = 2000，tooltip = 10000，`.context-menu` = 10001（必须盖过前两者）。菜单/浮层一律 append 到 `document.body`，任何"右键没反应/菜单不见了"先查层级再查逻辑——对话框内弹菜单曾因 1000 < 2000 画在遮罩底下。新增遮罩不得高于 10001，除非同时抬高菜单。
 - **主题**：对话框、下拉等全部使用 VSCode 主题变量（`var(--vscode-*)`），不用原生 API 弹窗；HTML5 `datalist` 已弃用（暗色主题不可控），作者筛选用自定义下拉组件。
 - **渲染性能**：行选中用 `applyRowSelection()` 原地切 class，只有 setData/setCommits/appendCommits 才全量 `renderRows()`。
 - WebviewView 无 `retainContextWhenHidden`——隐藏即销毁 DOM，靠视图状态持久化恢复。
