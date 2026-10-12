@@ -1825,60 +1825,88 @@ function renderRepoSwitcher() {
     var row = document.getElementById('repo-row');
     var name = document.getElementById('repo-switch-name');
     if (!row || !name) { return; }
+    // The list this menu shows is exactly what just changed.
+    closeRepositoryMenu();
     var repos = state.repositories || [];
     if (repos.length < 2) {
         row.style.display = 'none';
         return;
     }
     var current = repos.filter(function (r) { return sameRepo(r.path, state.currentRepository); })[0];
-    // With no repository resolved the chip is the way out of the guidance page,
-    // so it needs a label of its own rather than an empty name.
-    name.textContent = current ? current.name : (state.currentRepository || T('repo.title'));
+    // A pinned root can sit outside the scanned trees (a linked worktree), so fall
+    // back to its own folder name; with nothing resolved the chip is the way out of
+    // the guidance page and needs a label of its own rather than an empty name.
+    var label = current ? current.name
+        : String(state.currentRepository || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+    name.textContent = label || T('repo.title');
     name.setAttribute('data-title', state.currentRepository || T('repo.hint'));
     row.style.display = '';
 }
 
-function showRepositoryDialog() {
-    var repos = state.repositories || [];
-    if (repos.length < 2) { return; }
+/**
+ * The repository list is a pick, not a dialog: an inline dropdown under the chip
+ * keeps the branch tree and the commit rows visible while choosing.
+ */
+var repoMenu = { open: false, index: -1 };
 
-    var overlay = document.createElement('div');
-    overlay.className = 'push-dialog-overlay';
-    overlay.id = 'repo-dialog';
-    overlay.innerHTML = '<div class="push-dialog-box">' +
-        '<div class="push-dialog-header">' + T('repo.title') + '</div>' +
-        '<div class="push-dialog-body"><div class="repo-list" id="repo-list">' +
-        repos.map(function (r) {
-            var cur = sameRepo(r.path, state.currentRepository);
-            return '<div class="repo-item' + (cur ? ' cur' : '') + '" data-path="' + esc(r.path) + '">' +
-                '<span class="repo-item-name">' + esc(r.name) + '</span>' +
-                '<span class="repo-item-path" data-title="' + esc(r.path) + '">' + esc(r.path) + '</span>' +
-                (cur ? '<span class="repo-item-mark">' + T('repo.current') + '</span>' : '') +
-                '</div>';
-        }).join('') +
-        '</div></div>' +
-        '<div class="push-dialog-actions">' +
-        '<span class="file-history-hint">' + T('repo.hint') + '</span>' +
-        '<button class="dialog-btn secondary" data-action="close">' + T('common.close') + '</button>' +
-        '</div></div>';
+function renderRepositoryMenu() {
+    var menu = document.getElementById('repo-menu');
+    if (!menu) { return; }
+    menu.innerHTML = (state.repositories || []).map(function (r) {
+        var cur = sameRepo(r.path, state.currentRepository);
+        return '<div class="repo-item' + (cur ? ' cur' : '') + '" data-path="' + esc(r.path) + '">' +
+            '<span class="repo-item-name">' + esc(r.name) + '</span>' +
+            '<span class="repo-item-path" data-title="' + esc(r.path) + '">' + esc(r.path) + '</span>' +
+            (cur ? '<span class="repo-item-mark">' + T('repo.current') + '</span>' : '') +
+            '</div>';
+    }).join('');
+}
 
-    document.body.appendChild(overlay);
+function highlightRepository(index) {
+    var menu = document.getElementById('repo-menu');
+    if (!menu) { return; }
+    var items = menu.querySelectorAll('.repo-item');
+    if (items.length === 0) { return; }
+    repoMenu.index = Math.max(0, Math.min(index, items.length - 1));
+    for (var i = 0; i < items.length; i++) {
+        items[i].classList.toggle('hl', i === repoMenu.index);
+    }
+    items[repoMenu.index].scrollIntoView({ block: 'nearest' });
+}
 
-    document.getElementById('repo-list').addEventListener('click', function (e) {
-        var item = e.target.closest('.repo-item');
-        if (!item) { return; }
-        var picked = item.getAttribute('data-path');
-        overlay.remove();
-        // Re-picking the visible repository is a no-op, not a reload.
-        if (!sameRepo(picked, state.currentRepository)) {
-            vscode.postMessage({ command: 'selectRepository', path: picked });
-        }
-    });
-    overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            overlay.remove();
-        });
-    });
+function openRepositoryMenu() {
+    var menu = document.getElementById('repo-menu');
+    var btn = document.getElementById('repo-switch');
+    if (!menu || !btn) { return; }
+    renderRepositoryMenu();
+    menu.style.display = '';
+    btn.classList.add('open');
+    repoMenu.open = true;
+    // Start the keyboard on the repository being shown.
+    var items = menu.querySelectorAll('.repo-item');
+    repoMenu.index = -1;
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].classList.contains('cur')) { highlightRepository(i); break; }
+    }
+}
+
+function closeRepositoryMenu() {
+    var menu = document.getElementById('repo-menu');
+    var btn = document.getElementById('repo-switch');
+    if (menu) { menu.style.display = 'none'; }
+    if (btn) { btn.classList.remove('open'); }
+    repoMenu.open = false;
+    repoMenu.index = -1;
+}
+
+function pickRepository(item) {
+    if (!item) { return; }
+    var picked = item.getAttribute('data-path');
+    closeRepositoryMenu();
+    // Re-picking the visible repository is a no-op, not a reload.
+    if (!sameRepo(picked, state.currentRepository)) {
+        vscode.postMessage({ command: 'selectRepository', path: picked });
+    }
 }
 
 function renderRepoState() {
@@ -1914,8 +1942,35 @@ if (repoStateBox) {
 
 var repoSwitchBtn = document.getElementById('repo-switch');
 if (repoSwitchBtn) {
-    repoSwitchBtn.addEventListener('click', showRepositoryDialog);
+    repoSwitchBtn.addEventListener('click', function () {
+        if (repoMenu.open) { closeRepositoryMenu(); } else { openRepositoryMenu(); }
+    });
 }
+
+var repoMenuEl = document.getElementById('repo-menu');
+if (repoMenuEl) {
+    repoMenuEl.addEventListener('click', function (e) {
+        pickRepository(e.target.closest('.repo-item'));
+    });
+}
+
+// Anywhere else dismisses it. The chip is inside #repo-row and toggles itself, so
+// excluding that element keeps its click from being closed and reopened at once.
+document.addEventListener('click', function (e) {
+    if (repoMenu.open && !e.target.closest('#repo-row')) { closeRepositoryMenu(); }
+});
+
+document.addEventListener('keydown', function (e) {
+    if (!repoMenu.open) { return; }
+    if (e.key === 'Escape') { closeRepositoryMenu(); return; }
+    if (e.key === 'ArrowDown') { highlightRepository(repoMenu.index + 1); }
+    else if (e.key === 'ArrowUp') { highlightRepository(repoMenu.index - 1); }
+    else if (e.key === 'Enter') {
+        pickRepository(document.querySelectorAll('#repo-menu .repo-item')[repoMenu.index]);
+    } else { return; }
+    // The list filters nothing, so the keys belong to the menu, not to a field.
+    e.preventDefault();
+});
 
 window.addEventListener('message', function (ev) {
     var m = ev.data;

@@ -1786,6 +1786,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     <span id="repo-switch-name"></span>
                     <svg class="repo-caret" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg>
                 </button>
+                <div id="repo-menu" class="repo-menu" style="display: none;"></div>
             </div>
             <div id="bf-row">
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12l-4.5 5.5V14l-3-1.5V8.5z"/></svg>

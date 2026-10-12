@@ -337,8 +337,10 @@ svg { flex: none; }
     border-right: 1px solid var(--vscode-panel-border, #333);
     min-height: 0;
 }
-/* Repository switcher — only shown in a multi-root workspace (see renderRepoSwitcher) */
+/* Repository switcher — chip plus inline dropdown, shown once the workspace holds
+   more than one repository (see renderRepoSwitcher) */
 #repo-row {
+    position: relative;          /* anchors the dropdown, like the author filter's */
     padding: 5px 8px;
     border-bottom: 1px solid var(--vscode-panel-border, #333);
 }
@@ -373,13 +375,24 @@ svg { flex: none; }
 #repo-switch .repo-caret {
     flex: none;
     opacity: .7;
+    transition: transform .15s cubic-bezier(.4, 0, .2, 1);
 }
-.repo-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-height: 300px;
-    overflow: auto;
+#repo-switch.open .repo-caret { transform: rotate(180deg); }
+/* Inline dropdown under the chip: the repository list is a pick, not a dialog. */
+.repo-menu {
+    position: absolute;
+    top: 100%;
+    left: 8px;
+    right: 8px;
+    margin-top: 4px;
+    padding: 4px;
+    background: var(--vscode-dropdown-background, #2d2d30);
+    border: 1px solid var(--vscode-dropdown-border, #454545);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .4);
+    max-height: 260px;
+    overflow-y: auto;
+    z-index: 1000;
 }
 .repo-item {
     display: flex;
@@ -392,6 +405,8 @@ svg { flex: none; }
     transition: background .12s cubic-bezier(.4, 0, .2, 1);
 }
 .repo-item:hover { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16)); }
+/* Keyboard highlight follows the pointer's colour, so either way it reads alike. */
+.repo-item.hl { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16)); }
 .repo-item.cur {
     background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, .12));
     border-color: var(--vscode-focusBorder, #007fd4);
