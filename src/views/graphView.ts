@@ -6,7 +6,7 @@ import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, We
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
-import { isOperationStateFile } from '../services/gitUtils';
+import { isOperationStateFile, repositoryKey } from '../services/gitUtils';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -260,6 +260,40 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         return state;
     }
 
+    /**
+     * Show another repository of a multi-folder workspace (the panel switcher,
+     * or the palette command).
+     *
+     * Everything that belonged to the previous root is dropped: branch, selection,
+     * in-progress operation and the pending view-state snapshot. Git lets those
+     * names repeat across projects, so a borrowed one would read as real data in
+     * the wrong repository. The text filters stay put — they are what the user
+     * typed, not repository state, and clearing them host-side would leave the
+     * input boxes disagreeing with the list they filter.
+     */
+    async switchRepository(rootPath: string): Promise<void> {
+        const current = this._gitService.repositoryPath;
+        if (!rootPath || (current && repositoryKey(current) === repositoryKey(rootPath))) {return;}
+
+        this._gitService.selectRepository(rootPath);
+        this._branch = undefined;
+        this._lastKnownBranch = undefined;
+        this._lastKnownTip = undefined;
+        this._lastInProgress = null;
+        this._skipBranchCheckUntil = 0;
+        this._pendingReveal = undefined;
+        this._pendingReflog = undefined;
+        this._pendingViewState = undefined;
+        // Retract the old repository's state immediately: the watcher below is
+        // the only other writer of this row and it now points at a different .git.
+        this._post({ command: 'setInProgress', inProgress: null });
+        this._stopBranchCheck();
+        await this.refreshRepoState(true);
+        // Re-arm on the new root: HEAD watch, operation check and auto-fetch all
+        // resolve their paths once, so they must not keep the previous repository.
+        if (this._repoState === 'ready') {this._startBranchCheck();}
+    }
+
     private async _computeRepoState(forceGitProbe: boolean): Promise<RepoUiState> {
         if (!(await this._gitService.isGitAvailable(forceGitProbe))) {return 'noGit';}
         if (!this._gitService.repositoryPath) {return 'noRepo';}
@@ -279,7 +313,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             command: 'setRepoState',
             state: this._repoState,
             files: this._repoPendingFiles,
-            folder: folder ? path.basename(folder) : undefined
+            folder: folder ? path.basename(folder) : undefined,
+            // The switcher appears on its own as soon as the workspace holds two
+            // repositories; with one there is nothing to choose.
+            repositories: this._gitService.listRepositories(),
+            currentRepository: this._gitService.repositoryPath
         });
     }
 
@@ -676,6 +714,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'recheckRepository':
                     await this.refreshRepoState(true);
                     break;
+                case 'selectRepository':
+                    await this.switchRepository(message.path);
+                    break;
                 case 'openScmView':
                     await vscode.commands.executeCommand('workbench.view.scm');
                     break;
@@ -823,6 +864,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
         if (this._pendingViewState) {
             this._pendingViewState.savedAt = Date.now();
+            // Stamped host-side: the webview has no business knowing paths, but the
+            // snapshot must be traceable to the repository it was taken in.
+            this._pendingViewState.repoPath = this._gitService.repositoryPath;
             void this._memento.update('idea-git.viewState', this._pendingViewState);
             this._pendingViewState = undefined;
         }
@@ -836,6 +880,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _restorableState(): PersistedViewState | undefined {
         const saved = this._memento.get<PersistedViewState>('idea-git.viewState');
         if (!saved) {return undefined;}
+        const current = this._gitService.repositoryPath;
+        // A snapshot taken in another repository of the same workspace is not a
+        // snapshot of this one: drop it instead of selecting a branch or a commit
+        // that happens to exist under the same name.
+        if (saved.repoPath && current && repositoryKey(saved.repoPath) !== repositoryKey(current)) {
+            void this._memento.update('idea-git.viewState', undefined);
+            return undefined;
+        }
         if (typeof saved.savedAt !== 'number' || Date.now() - saved.savedAt > GraphViewProvider.SESSION_RESTORE_TTL_MS) {
             void this._memento.update('idea-git.viewState', undefined);
             return undefined;
@@ -1686,6 +1738,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             <div id="operation-status" style="display: none;">
                 <span class="op-status-icon">⚠️</span>
                 <span id="operation-status-text"></span>
+            </div>
+            <div id="repo-row" style="display: none;">
+                <button id="repo-switch" type="button" title="${t('ui.switchRepository')}">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><ellipse cx="8" cy="3.6" rx="5.4" ry="2.1"/><path d="M2.6 3.6v8.8c0 1.16 2.42 2.1 5.4 2.1s5.4-.94 5.4-2.1V3.6"/><path d="M2.6 8c0 1.16 2.42 2.1 5.4 2.1s5.4-.94 5.4-2.1"/></svg>
+                    <span id="repo-switch-name"></span>
+                    <svg class="repo-caret" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg>
+                </button>
             </div>
             <div id="bf-row">
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12l-4.5 5.5V14l-3-1.5V8.5z"/></svg>

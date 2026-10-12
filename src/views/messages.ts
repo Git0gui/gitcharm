@@ -1,4 +1,4 @@
-import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry } from '../services/gitService';
+import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry, RepositoryOption } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 
 /**
@@ -39,6 +39,12 @@ export interface PersistedViewState {
     graphVisible?: boolean;
     /** Epoch ms stamped by the host when the snapshot is flushed; drives the session-restore TTL window. */
     savedAt?: number;
+    /**
+     * Repository the snapshot was taken in, stamped by the host. A mismatch means
+     * it belongs to another root of a multi-folder workspace and must not be
+     * replayed there — branch names and hashes collide between projects.
+     */
+    repoPath?: string;
 }
 
 export interface PushDialogCommit {
@@ -68,7 +74,19 @@ export type ExtToWebviewMessage =
     }
     | { command: 'setBranches'; local: string[]; remote: string[]; currentBranch?: string }
     | { command: 'setStashes'; stashes: StashEntry[] }
-    | { command: 'setRepoState'; state: RepoUiState; files?: number; folder?: string }
+    | {
+        command: 'setRepoState';
+        state: RepoUiState;
+        files?: number;
+        folder?: string;
+        /**
+         * Every repository of the workspace. Only more than one of these turns the
+         * switcher on — a single-root workspace never sees the control.
+         */
+        repositories?: RepositoryOption[];
+        /** Repository the panel is showing right now, out of `repositories`. */
+        currentRepository?: string;
+    }
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'setHeadHash'; headHash: string }
@@ -138,6 +156,7 @@ export type WebviewToExtMessage =
     | { command: 'refreshBranches' }
     | { command: 'initRepository' }
     | { command: 'recheckRepository' }
+    | { command: 'selectRepository'; path: string }
     | { command: 'openScmView' }
     | { command: 'refreshFiles'; hash: string }
     | { command: 'showNotification'; message: string; type?: string }

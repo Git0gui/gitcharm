@@ -13,6 +13,7 @@ import { registerRemoteCommands } from './commands/remoteCommands';
 import { registerTagCommands } from './commands/tagCommands';
 import { registerStashCommands } from './commands/stashCommands';
 import { registerReflogCommands } from './commands/reflogCommands';
+import { registerRepositoryCommands } from './commands/repositoryCommands';
 import { resolveLocale, setLocale, t } from './i18n';
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -98,26 +99,29 @@ export function activate(ctx: vscode.ExtensionContext) {
     };
     setStatusBarTooltip(hasGitRepo);
 
-    // Watch for git repository changes (git init, clone, etc.)
-    const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(vscode.workspace.workspaceFolders?.[0]?.uri || vscode.Uri.file('.'), '.git')
+    // Watch for git repository changes (git init, clone, etc.) — in every
+    // workspace folder, not just the first: a repository created in any root of a
+    // multi-folder workspace has to reach the panel's switcher.
+    const repoWatchers = (vscode.workspace.workspaceFolders ?? []).map(folder =>
+        vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '.git'))
     );
-
-    watcher.onDidCreate(() => {
-        vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', true);
-        gitService.refreshRepositoryPath();
+    // One handler in both directions, and for folder add/remove as well: what the
+    // context key and the tooltip say is whatever the service resolves now — so
+    // deleting one repository in a multi-folder workspace does not blank the panel
+    // while another root still has one, and adding a folder can light it up again.
+    const onRepositoryChange = () => {
+        const hasRepo = gitService.refreshRepositoryPath() !== undefined;
+        vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', hasRepo);
         void graphView.refreshRepoState(true);
-        setStatusBarTooltip(true);
-    });
+        setStatusBarTooltip(hasRepo);
+    };
+    for (const watcher of repoWatchers) {
+        watcher.onDidCreate(onRepositoryChange);
+        watcher.onDidDelete(onRepositoryChange);
+        ctx.subscriptions.push(watcher);
+    }
 
-    watcher.onDidDelete(() => {
-        vscode.commands.executeCommand('setContext', 'idea-git.hasGitRepo', false);
-        gitService.refreshRepositoryPath();
-        void graphView.refreshRepoState(true);
-        setStatusBarTooltip(false);
-    });
-
-    ctx.subscriptions.push(watcher);
+    ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(onRepositoryChange));
 
     // Event-driven cache invalidation: watch the git directory itself, so changes
     // made outside this extension (CLI, other tools) are picked up without polling
@@ -242,6 +246,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     registerTagCommands(ctx, gitService, graphView);
     registerStashCommands(ctx, gitService, graphView);
     registerReflogCommands(ctx, gitService, graphView);
+    registerRepositoryCommands(ctx, gitService, graphView);
 
     // Register cleanup callback: clear all caches when extension deactivates (project close)
     ctx.subscriptions.push({

@@ -195,6 +195,8 @@ var state = {
     repoState: 'ready',
     repoFolder: '',
     repoPendingFiles: 0,
+    repositories: [],
+    currentRepository: '',
     iconPack: null,
     _pendingScrollTop: null,
     _pendingRestore: null
@@ -1804,6 +1806,85 @@ function repoStateCopy(repoState, folder, files) {
     return null;
 }
 
+/* ---------- repository switcher (multi-root workspaces) ---------- */
+
+/** Compare two repository paths the way the host does: separators and case. */
+function repoKey(p) {
+    return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function sameRepo(a, b) {
+    return !!a && !!b && repoKey(a) === repoKey(b);
+}
+
+function baseName(p) {
+    var parts = String(p || '').replace(/\\/g, '/').split('/');
+    while (parts.length && !parts[parts.length - 1]) { parts.pop(); }
+    return parts.length ? parts[parts.length - 1] : String(p || '');
+}
+
+/**
+ * The switcher only shows up when there is something to switch between: with a
+ * single repository it would be a menu holding one entry.
+ */
+function renderRepoSwitcher() {
+    var row = document.getElementById('repo-row');
+    var name = document.getElementById('repo-switch-name');
+    if (!row || !name) { return; }
+    var repos = state.repositories || [];
+    if (repos.length < 2) {
+        row.style.display = 'none';
+        return;
+    }
+    var current = repos.filter(function (r) { return sameRepo(r.path, state.currentRepository); })[0];
+    name.textContent = current ? current.name : baseName(state.currentRepository);
+    name.setAttribute('data-title', state.currentRepository);
+    row.style.display = '';
+}
+
+function showRepositoryDialog() {
+    var repos = state.repositories || [];
+    if (repos.length < 2) { return; }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'push-dialog-overlay';
+    overlay.id = 'repo-dialog';
+    overlay.innerHTML = '<div class="push-dialog-box">' +
+        '<div class="push-dialog-header">' + T('repo.title') + '</div>' +
+        '<div class="push-dialog-body"><div class="repo-list" id="repo-list">' +
+        repos.map(function (r) {
+            var cur = sameRepo(r.path, state.currentRepository);
+            return '<div class="repo-item' + (cur ? ' cur' : '') + '" data-path="' + esc(r.path) + '">' +
+                '<span class="repo-item-name">' + esc(r.name) + '</span>' +
+                '<span class="repo-item-path" data-title="' + esc(r.path) + '">' + esc(r.path) + '</span>' +
+                (cur ? '<span class="repo-item-mark">' + T('repo.current') + '</span>' : '') +
+                '</div>';
+        }).join('') +
+        '</div></div>' +
+        '<div class="push-dialog-actions">' +
+        '<span class="file-history-hint">' + T('repo.hint') + '</span>' +
+        '<button class="dialog-btn secondary" data-action="close">' + T('common.close') + '</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+
+    document.getElementById('repo-list').addEventListener('click', function (e) {
+        var item = e.target.closest('.repo-item');
+        if (!item) { return; }
+        var picked = item.getAttribute('data-path');
+        overlay.remove();
+        // Re-picking the visible repository is a no-op, not a reload.
+        if (!sameRepo(picked, state.currentRepository)) {
+            vscode.postMessage({ command: 'selectRepository', path: picked });
+        }
+    });
+    overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            overlay.remove();
+        });
+    });
+}
+
 function renderRepoState() {
     var box = document.getElementById('repo-state');
     if (!box) { return; }
@@ -1835,6 +1916,11 @@ if (repoStateBox) {
     });
 }
 
+var repoSwitchBtn = document.getElementById('repo-switch');
+if (repoSwitchBtn) {
+    repoSwitchBtn.addEventListener('click', showRepositoryDialog);
+}
+
 window.addEventListener('message', function (ev) {
     var m = ev.data;
     if (m.command === 'setFileIconTheme') {
@@ -1845,6 +1931,9 @@ window.addEventListener('message', function (ev) {
         state.repoState = m.state || 'ready';
         state.repoPendingFiles = typeof m.files === 'number' ? m.files : 0;
         state.repoFolder = m.folder || '';
+        state.repositories = m.repositories || [];
+        state.currentRepository = m.currentRepository || '';
+        renderRepoSwitcher();
         if (state.repoState !== 'ready') {
             // No data will ever arrive to clear the startup skeleton
             loadState.initialLoad = false;

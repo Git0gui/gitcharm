@@ -337,6 +337,95 @@ svg { flex: none; }
     border-right: 1px solid var(--vscode-panel-border, #333);
     min-height: 0;
 }
+/* Repository switcher — only shown in a multi-root workspace (see renderRepoSwitcher) */
+#repo-row {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+#repo-switch {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 4px 6px;
+    background: var(--vscode-input-background, rgba(128, 128, 128, .08));
+    border: 1px solid var(--vscode-panel-border, #333);
+    border-radius: 6px;
+    color: var(--vscode-foreground, #ccc);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+    transition: background .15s cubic-bezier(.4, 0, .2, 1), transform .15s cubic-bezier(.4, 0, .2, 1);
+}
+#repo-switch:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16));
+    transform: translateY(-1px);
+}
+#repo-switch-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+#repo-switch .repo-caret {
+    flex: none;
+    opacity: .7;
+}
+.repo-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 300px;
+    overflow: auto;
+}
+.repo-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background .12s cubic-bezier(.4, 0, .2, 1);
+}
+.repo-item:hover { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16)); }
+.repo-item.cur {
+    background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, .12));
+    border-color: var(--vscode-focusBorder, #007fd4);
+    cursor: default;
+}
+.repo-item-name {
+    flex: none;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    font-size: 12px;
+}
+.repo-item-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;            /* keep the tail of a long path visible */
+    text-align: left;
+    font-family: monospace;
+    font-size: 11px;
+    opacity: .75;
+}
+.repo-item-mark {
+    flex: none;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--vscode-badge-background, #666);
+    color: var(--vscode-badge-foreground, #fff);
+}
 #bf-row {
     display: flex;
     align-items: center;

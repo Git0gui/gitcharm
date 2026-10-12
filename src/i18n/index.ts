@@ -416,6 +416,13 @@ const zh: Record<string, string> = {
     'repo.initProgress': '正在初始化 Git 仓库...',
     'repo.initSuccess': '已在 {path} 初始化 Git 仓库',
     'repo.initFailed': '初始化仓库失败: {error}',
+    'repo.title': '切换仓库',
+    'repo.current': '当前',
+    'repo.hint': '多根工作区：选择要在面板中查看的仓库',
+    'repo.pickTitle': '选择要查看的仓库',
+    'repo.pickPlaceHolder': '此工作区中的 Git 仓库',
+    'repo.single': '这个工作区只有一个仓库，无需切换',
+    'ui.switchRepository': '切换仓库',
 
     // webview dynamic strings
     'w.divergeBehind': '落后远端 {n} 个提交，需更新',
@@ -913,6 +920,13 @@ const en: Record<string, string> = {
     'repo.initProgress': 'Initializing Git repository...',
     'repo.initSuccess': 'Initialized a Git repository in {path}',
     'repo.initFailed': 'Failed to initialize the repository: {error}',
+    'repo.title': 'Switch repository',
+    'repo.current': 'Current',
+    'repo.hint': 'Multi-root workspace: pick which repository the panel shows',
+    'repo.pickTitle': 'Choose a repository to show',
+    'repo.pickPlaceHolder': 'Git repositories in this workspace',
+    'repo.single': 'This workspace has one repository, so there is nothing to switch',
+    'ui.switchRepository': 'Switch repository',
 
     // webview dynamic strings
     'w.divergeBehind': '{n} behind remote, update needed',

@@ -28,6 +28,9 @@ import {
     parseGitConfigRemoteUrl,
     parseGitConfigRemoteNames,
     pickFetchRemote,
+    collectRepositoryRoots,
+    repositoryKey,
+    RepositoryOption,
     tagNameProblem,
     InProgressOperation,
     StashEntry,
@@ -48,7 +51,8 @@ export {
     tagNameProblem,
     InProgressOperation,
     StashEntry,
-    ReflogEntry
+    ReflogEntry,
+    RepositoryOption
 } from './gitUtils';
 
 export interface GraphCommit {
@@ -159,6 +163,11 @@ export class GitService {
     private _rootMemo = new Map<string, string | undefined>();
     private _rootKey: string | undefined;
     private _rootValue: string | undefined;
+    // Repository the user pinned in the panel's switcher (multi-root workspaces).
+    // Wins over discovery while it is still a repository; persisted per workspace.
+    private _pinnedRoot: string | undefined;
+    private readonly _memento: vscode.Memento;
+    private static readonly PINNED_REPOSITORY_KEY = 'idea-git.selectedRepository';
     // Cached result of the `git --version` probe (undefined = not probed yet)
     private _gitAvailable: boolean | undefined;
 
@@ -173,7 +182,11 @@ export class GitService {
 
     constructor(memento: vscode.Memento, askpass?: GitAskpass) {
         this._askpass = askpass;
+        this._memento = memento;
         this._persistedCache = new PersistedBranchCache(memento, () => this._repositoryPath);
+        // A pin from an earlier session is only honoured while that folder is
+        // still a repository; otherwise discovery takes over unchanged.
+        this._pinnedRoot = this._isRepository(memento.get<string>(GitService.PINNED_REPOSITORY_KEY));
         this._repositoryPath = this._resolveRoot();
 
         // Load persisted branch cache on startup
@@ -307,6 +320,55 @@ export class GitService {
         // or a removed one needs the watch re-pointed.
         this._startRepositoryWatch();
         return root;
+    }
+
+    /**
+     * Repositories the panel can offer: one per workspace folder that sits inside
+     * a git repository, in workspace order, deduplicated — several folders of one
+     * repository give a single entry. Uses the same walk-up discovery as the
+     * implicit root, so a multi-root workspace behaves exactly as it did before
+     * the user picks anything. Purely filesystem: no subprocess per folder.
+     */
+    listRepositories(): RepositoryOption[] {
+        const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+        const roots = collectRepositoryRoots(folders, dir => this._probeRoot(dir));
+        const current = this._resolveRoot();
+        if (current && !roots.some(r => repositoryKey(r) === repositoryKey(current))) {
+            // Pinned root outside every workspace folder (e.g. a linked worktree)
+            roots.unshift(current);
+        }
+        return roots.map(root => ({ path: root, name: path.basename(root) }));
+    }
+
+    /**
+     * Show one repository in the panel. Everything learned about the previous
+     * root is dropped — caches, refs, selected branch/commit and the filesystem
+     * watch — because an entry from another repository reads as real data (branch
+     * names and short hashes collide harmlessly between projects). `undefined`
+     * hands the choice back to automatic discovery. Persisted per workspace.
+     */
+    selectRepository(root: string | undefined): void {
+        this._pinnedRoot = this._isRepository(root);
+        void this._memento.update(GitService.PINNED_REPOSITORY_KEY, this._pinnedRoot);
+        this._rootMemo.clear();
+        this._rootKey = undefined;
+        this._rootValue = undefined;
+        this.clearAllCaches();
+        this._selectedBranch = undefined;
+        this._selectedCommitHash = undefined;
+        this._repositoryPath = this._resolveRoot();
+        this._startRepositoryWatch();
+    }
+
+    /**
+     * Keep a candidate repository path only if it really is one. Anything else —
+     * including a pin left over from a session whose folder has since moved —
+     * resolves to undefined so discovery takes over instead of failing every
+     * command against a dead path.
+     */
+    private _isRepository(candidate: string | undefined): string | undefined {
+        if (typeof candidate !== 'string' || !candidate) {return undefined;}
+        return this._hasGitDir(path.join(candidate, '.git')) ? candidate : undefined;
     }
 
     /**
@@ -578,6 +640,12 @@ export class GitService {
      */
     private _findGitRoot(): string | undefined {
         const path = require('path');
+
+        // An explicit panel choice wins while that folder is still a repository;
+        // once it is gone, discovery resumes from the workspace folders unchanged.
+        if (this._pinnedRoot && this._hasGitDir(path.join(this._pinnedRoot, '.git'))) {
+            return this._pinnedRoot;
+        }
 
         // Collect candidate start directories: workspace folders first, then active editor
         const candidates: string[] = [];

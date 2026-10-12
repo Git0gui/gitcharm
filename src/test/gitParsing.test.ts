@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -534,5 +534,50 @@ describe('pickFetchRemote', () => {
 
     it('returns an empty string for no remotes', () => {
         assert.equal(pickFetchRemote([]), '');
+    });
+});
+
+describe('repositoryKey', () => {
+    it('unifies separators and drops trailing ones', () => {
+        assert.equal(repositoryKey('D:\\Work\\repo\\', false), 'D:/Work/repo');
+        assert.equal(repositoryKey('/home/me/repo/', false), '/home/me/repo');
+    });
+
+    it('folds case only for a case-insensitive filesystem', () => {
+        assert.equal(repositoryKey('D:/Work/Repo', true), 'd:/work/repo');
+        assert.equal(repositoryKey('/home/Me/Repo', false), '/home/Me/Repo');
+    });
+
+    it('treats two spellings of one root as the same repository', () => {
+        assert.equal(repositoryKey('D:/Work/GitCharm', true), repositoryKey('d:\\work\\gitcharm\\', true));
+    });
+});
+
+describe('collectRepositoryRoots', () => {
+    const roots: Record<string, string | undefined> = {
+        'D:/Work/app': 'D:/Work/app',
+        'D:/Work/app/src': 'D:/Work/app',
+        'D:/Work/lib': 'D:/Work/lib',
+        'D:/Notes': undefined          // not a repository
+    };
+    const probe = (dir: string): string | undefined => roots[dir];
+
+    it('keeps workspace order and skips folders that are not repositories', () => {
+        assert.deepEqual(collectRepositoryRoots(['D:/Work/lib', 'D:/Notes', 'D:/Work/app'], probe, false),
+            ['D:/Work/lib', 'D:/Work/app']);
+    });
+
+    it('collapses several folders of one repository into a single entry', () => {
+        assert.deepEqual(collectRepositoryRoots(['D:/Work/app', 'D:/Work/app/src'], probe, false), ['D:/Work/app']);
+    });
+
+    it('dedupes case-insensitively only when the filesystem is', () => {
+        const mixed = ['D:/Work/app', 'd:/work/APP'];
+        assert.deepEqual(collectRepositoryRoots(mixed, dir => dir, true).length, 1);
+        assert.deepEqual(collectRepositoryRoots(mixed, dir => dir, false).length, 2);
+    });
+
+    it('returns nothing for an empty workspace', () => {
+        assert.deepEqual(collectRepositoryRoots([], probe, false), []);
     });
 });

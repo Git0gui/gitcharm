@@ -224,6 +224,11 @@
         "command": "idea-git.showReflog",
         "title": "%cmd.showReflog%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.selectRepository",
+        "title": "%cmd.selectRepository%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {

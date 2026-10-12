@@ -470,6 +470,49 @@ export function parseGitConfigRemoteNames(raw: string): string[] {
 export function pickFetchRemote(names: readonly string[]): string {
     return names.includes('origin') ? 'origin' : (names[0] ?? '');
 }
+
+/** One repository of a multi-root workspace, as offered by the panel's switcher. */
+export interface RepositoryOption {
+    path: string;
+    name: string;
+}
+
+/**
+ * Comparable form of a repository path: separators unified, trailing ones
+ * stripped, and case folded only where the filesystem ignores case. Two
+ * spellings of the same root must collapse into one entry in the switcher —
+ * but not on Linux, where they are genuinely different directories.
+ */
+export function repositoryKey(repoPath: string, caseInsensitive = process.platform === 'win32'): string {
+    const unified = repoPath.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+    return caseInsensitive ? unified.toLowerCase() : unified;
+}
+
+/**
+ * Repository roots behind `startDirs`, in the given order, deduplicated.
+ * `probe` resolves one directory to its git root (the caller's own detection),
+ * so this stays a pure function and keeps the semantics the implicit lookup has
+ * always had: several folders of one repository yield a single entry, and a
+ * folder inside a bigger repository reports that repository.
+ */
+export function collectRepositoryRoots(
+    startDirs: readonly string[],
+    probe: (dir: string) => string | undefined,
+    caseInsensitive = process.platform === 'win32'
+): string[] {
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    for (const dir of startDirs) {
+        const root = probe(dir);
+        if (!root) {continue;}
+        const key = repositoryKey(root, caseInsensitive);
+        if (seen.has(key)) {continue;}
+        seen.add(key);
+        roots.push(root);
+    }
+    return roots;
+}
+
 /**
  * Read a remote's URL straight out of git's config file (no subprocess).
  * Sections look like `[remote "origin"]` followed by `url = …`; the quotes are
