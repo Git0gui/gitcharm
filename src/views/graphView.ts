@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitService, GraphCommit, LogFilters } from '../services/gitService';
+import { GitService, GraphCommit, LogFilters, ReflogEntry } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
@@ -39,6 +39,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _extensionUri: vscode.Uri;
     private _branch: string | undefined;
     private _pendingReveal: string | undefined;
+    private _pendingReflog: { scope: string; entries: ReflogEntry[] } | undefined;
     private _filters: LogFilters = {};
     private _loaded = 0;
     private _hasMore = false;
@@ -139,6 +140,22 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         void this._searchAndRevealCommit(hash);
     }
     
+    /**
+     * Show the reflog dialog in the panel. The webview renders the rows and their
+     * context menu reuses the commit actions, so this is a data hand-off only.
+     * Focus first: the palette command works with the panel hidden, and the view
+     * only exists once it has been shown — hence the same pending/flush dance as
+     * revealCommit for a webview that has not reported `ready` yet.
+     */
+    showReflog(scope: string, entries: ReflogEntry[]): void {
+        void vscode.commands.executeCommand('idea-git.mainView.focus');
+        if (!this._view || !this._webviewReady) {
+            this._pendingReflog = { scope, entries };
+            return;
+        }
+        this._post({ command: 'showReflog', scope, entries });
+    }
+
     /**
      * Search for a commit by hash in the current branch and display only that commit.
      */
@@ -689,6 +706,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         this._pendingReveal = undefined;
                         this._post({ command: 'revealCommit', hash });
                     }
+                    if (this._pendingReflog) {
+                        const pending = this._pendingReflog;
+                        this._pendingReflog = undefined;
+                        this._post({ command: 'showReflog', scope: pending.scope, entries: pending.entries });
+                    }
                     {
                         // Reading the icon theme JSON is synchronous work on the host, so it
                         // goes after everything the panel needs to show its data.
@@ -1119,6 +1141,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     return;
                 case 'stashSave':
                     await vscode.commands.executeCommand('idea-git.stashSave');
+                    return;
+                case 'reflog':
+                    // Read-only view: the toolbar button asks for HEAD's reflog, a branch
+                    // row asks for its own. No reload either way.
+                    await vscode.commands.executeCommand('idea-git.showReflog', message.branch ? branchNode : undefined);
                     return;
                 case 'stashApply':
                 case 'stashPop':
@@ -1627,6 +1654,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     <input id="f-to" type="date" title="${t('ui.toDate')}">
                     <button class="clr" style="display:none" id="clr-date" title="${t('ui.clearDate')}" type="button">&#10005;</button>
                 </label>
+                <button id="btn-reflog" title="${t('ui.reflog')}">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.2 8a6.2 6.2 0 1 1-1.8-4.4"/><path d="M14.4 1.6v2.8h-2.8"/><path d="M8 4.6V8l2.6 1.6"/></svg>
+                </button>
                 <button id="btn-refresh" title="${t('ui.refreshCommits')}">
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 1.5v3h-3"/></svg>
                 </button>

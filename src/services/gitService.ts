@@ -22,12 +22,14 @@ import {
     parseStatusEntries,
     parseStashList,
     parsePathFilter,
+    parseReflogList,
     operationFromStateFiles,
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
     tagNameProblem,
     InProgressOperation,
     StashEntry,
+    ReflogEntry,
     StatusEntry,
     WorkingTreeSummary
 } from './gitUtils';
@@ -43,7 +45,8 @@ export {
     parseGraphLine,
     tagNameProblem,
     InProgressOperation,
-    StashEntry
+    StashEntry,
+    ReflogEntry
 } from './gitUtils';
 
 export interface GraphCommit {
@@ -1007,10 +1010,30 @@ export class GitService {
     }
 
     /**
+     * Reflog of a rev (HEAD by default) — the rescue list for commits lost to a
+     * `checkout`, `reset` or a botched rebase. Read with `log -g`, which is the
+     * plumbing form of `reflog show` and lets us pick the fields: selector,
+     * target hash, subject and date, NUL-separated because a subject carries
+     * colons and free-form message text. A rev with no reflog exits non-zero,
+     * and an empty history is a far better answer than an error toast.
+     */
+    async getReflog(rev?: string, limit = 100): Promise<ReflogEntry[]> {
+        const target = rev ? assertRef(rev, t('label.reflog')) : 'HEAD';
+        try {
+            const output = await this.executeGitArgs([
+                'log', '-g', target, '--format=%gd%x00%H%x00%gs%x00%aI', '-n', String(limit)
+            ]);
+            return parseReflogList(output);
+        } catch (error) {
+            logger.debug('[GitCharm] Reflog unavailable:', error);
+            return [];
+        }
+    }
+
+    /**
      * Identity of the stash ref — its hash, or '' when the repository has no
      * stashes. One small file read, cheap enough to compare on every poll tick so
-     * a `git stash` run in a terminal shows up without a manual refresh.
-     *
+     * a `git stash` run in a terminal shows up without a manual refresh.     *
      * Read from the *common* dir: `refs/stash` is shared by all worktrees (a
      * linked worktree's own git dir has no refs/stash), and git never packs it.
      */

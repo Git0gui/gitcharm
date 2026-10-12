@@ -1,4 +1,4 @@
-import { GraphCommit, CommitDetail, FileStat, StashEntry } from '../services/gitService';
+import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 
 /**
@@ -97,6 +97,12 @@ export type ExtToWebviewMessage =
         history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string }>;
     }
     | {
+        command: 'showReflog';
+        /** Which rev's reflog this is, shown as the dialog subtitle. */
+        scope: string;
+        entries: ReflogEntry[];
+    }
+    | {
         command: 'showCompareDialog';
         branchName: string;
         currentBranch: string;
@@ -121,6 +127,7 @@ export type WebviewAction =
     | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
     | 'newTag' | 'deleteTag' | 'pushTag'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
+    | 'reflog'
     | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */

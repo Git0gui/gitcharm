@@ -12,6 +12,7 @@ import { registerOperationCommands } from './commands/operationCommands';
 import { registerRemoteCommands } from './commands/remoteCommands';
 import { registerTagCommands } from './commands/tagCommands';
 import { registerStashCommands } from './commands/stashCommands';
+import { registerReflogCommands } from './commands/reflogCommands';
 import { resolveLocale, setLocale, t } from './i18n';
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -232,6 +233,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     registerRemoteCommands(ctx, gitService);
     registerTagCommands(ctx, gitService, graphView);
     registerStashCommands(ctx, gitService, graphView);
+    registerReflogCommands(ctx, gitService, graphView);
 
     // Register cleanup callback: clear all caches when extension deactivates (project close)
     ctx.subscriptions.push({

@@ -1296,6 +1296,11 @@ document.getElementById('f-to').addEventListener('keydown', function(e) {
 document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
 });
+document.getElementById('btn-reflog').addEventListener('click', function () {
+    // No branch: the host falls back to HEAD's reflog, which is the list that
+    // still holds commits lost to a checkout or reset.
+    vscode.postMessage({ command: 'action', action: 'reflog' });
+});
 document.getElementById('tg-graph').addEventListener('click', function () {
     state.graphVisible = state.graphVisible === false;
     renderRows();
@@ -1527,7 +1532,8 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['checkout', T('menu.checkout')],
             ['fetch', T('menu.fetchRemote')],
             ['newBranchFrom', T('menu.newBranchFrom')],
-            ['compareBranch', T('menu.compareWithCurrent')]
+            ['compareBranch', T('menu.compareWithCurrent')],
+            ['reflog', T('menu.reflog')]
         ];
     } else if (isCurrent) {
         // Current branch: only show applicable actions
@@ -1536,7 +1542,8 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['push', T('menu.push')],
             ['newBranchFrom', T('menu.newBranchFrom')],
             ['rename', T('menu.rename')],
-            ['openRemoteBranch', T('menu.openOnRemote')]
+            ['openRemoteBranch', T('menu.openOnRemote')],
+            ['reflog', T('menu.reflog')]
         ];
     } else {
         // Other local branches: full action set
@@ -1550,7 +1557,8 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['compareBranch', T('menu.compareWithCurrent')],
             ['rename', T('menu.rename')],
             ['deleteBranch', T('menu.deleteBranch')],
-            ['openRemoteBranch', T('menu.openOnRemote')]
+            ['openRemoteBranch', T('menu.openOnRemote')],
+            ['reflog', T('menu.reflog')]
         ];
     }
     
@@ -2062,6 +2070,8 @@ window.addEventListener('message', function (ev) {
         window._handleCompareFiles(m.hash, m.files || []);
     } else if (m.command === 'showFileHistory') {
         showFileHistoryDialog(m.filePath, m.history || []);
+    } else if (m.command === 'showReflog') {
+        showReflogDialog(m.scope, m.entries || []);
     } else if (m.command === 'multiCommitsResponse') {
         // Handle multi-select commits response
         state.multiCommits = m.commits || [];
@@ -2654,6 +2664,106 @@ function showFileHistoryDialog(filePath, history) {
             }
         });
     }
+
+    overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            overlay.remove();
+        });
+    });
+}
+
+/* ---------- reflog dialog (recover lost commits) ---------- */
+var reflogState = { entries: [], visibleCount: 20 };
+
+function showReflogDialog(scope, entries) {
+    reflogState = { entries: entries, visibleCount: 20 };
+
+    function row(entry) {
+        var tip = entry.ref + '  ' + entry.shortHash + '\n' +
+            entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
+            fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
+        return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
+            '<span class="reflog-ref">' + esc(entry.ref) + '</span>' +
+            '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
+            '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
+            '<span class="push-commit-author">' + esc(entry.action) + '</span>' +
+            '<span class="push-commit-date" data-title="' + esc(fmtDateTime(entry.date)) + '">' + esc(fmtRelativeTime(entry.date)) + '</span>' +
+            '</div>';
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'push-dialog-overlay';
+    overlay.id = 'reflog-dialog';
+    var visible = entries.slice(0, reflogState.visibleCount);
+    var moreHtml = entries.length > visible.length
+        ? '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: entries.length - visible.length }) + '</button></div>'
+        : '';
+
+    overlay.innerHTML = '<div class="push-dialog-box">' +
+        '<div class="push-dialog-header">' + T('reflog.title') + ' <span class="push-compare-sub">' + esc(scope) + '</span></div>' +
+        '<div class="push-dialog-body">' +
+        '<div class="push-commits-list full"><div class="push-commits-scroll" id="reflog-scroll">' +
+        visible.map(row).join('') + moreHtml +
+        '</div></div>' +
+        '</div>' +
+        '<div class="push-dialog-actions">' +
+        '<span class="file-history-hint">' + T('reflog.hint') + '</span>' +
+        '<button class="dialog-btn secondary" data-action="close">' + T('common.close') + '</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+
+    var scroll = overlay.querySelector('#reflog-scroll');
+    // Delegation: appended batches need handlers too, and the picked row must be
+    // usable after the list grows.
+    scroll.addEventListener('click', function (e) {
+        var more = e.target.closest('.push-load-more-btn');
+        if (more) {
+            var next = Math.min(reflogState.visibleCount + 20, entries.length);
+            var container = more.parentElement;
+            var frag = document.createElement('div');
+            frag.innerHTML = entries.slice(reflogState.visibleCount, next).map(row).join('');
+            while (frag.firstChild) { container.parentNode.insertBefore(frag.firstChild, container); }
+            reflogState.visibleCount = next;
+            if (next < entries.length) {
+                more.textContent = T('common.loadMoreCommits', { n: entries.length - next });
+            } else {
+                container.remove();
+            }
+            return;
+        }
+        var picked = e.target.closest('.push-commit-row');
+        if (!picked) { return; }
+        overlay.querySelectorAll('.push-commit-row').forEach(function (r) { r.classList.remove('sel'); });
+        picked.classList.add('sel');
+    });
+    scroll.addEventListener('dblclick', function (e) {
+        var picked = e.target.closest('.push-commit-row');
+        if (!picked) { return; }
+        vscode.postMessage({ command: 'action', action: 'showDiff', hash: picked.getAttribute('data-hash') });
+        overlay.remove();
+    });
+    scroll.addEventListener('contextmenu', function (e) {
+        var picked = e.target.closest('.push-commit-row');
+        if (!picked) { return; }
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+        var hash = picked.getAttribute('data-hash');
+        var items = [
+            ['showDiff', T('menu.showDiff')],
+            ['newBranchFrom', T('menu.newBranchFrom')],
+            ['reset', T('menu.reset')],
+            ['copy', T('menu.copyHash')]
+        ];
+        showMenu(e.clientX, e.clientY, items, function (action) {
+            if (action === 'copy') {
+                navigator.clipboard.writeText(hash);
+                return;
+            }
+            vscode.postMessage({ command: 'action', action: action, hash: hash });
+            overlay.remove();
+        });
+    });
 
     overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
         btn.addEventListener('click', function () {

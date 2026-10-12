@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -446,5 +446,48 @@ describe('parsePathFilter', () => {
 
     it('keeps a leading dash: the caller appends these only after a -- separator', () => {
         assert.deepEqual(parsePathFilter('--not-an-option'), ['--not-an-option']);
+    });
+});
+
+describe('parseReflogList', () => {
+    const nul = '\0';
+    const row = (ref: string, hash: string, subject: string, date: string) => [ref, hash, subject, date].join(nul);
+
+    it('splits the action off the first colon only', () => {
+        const out = parseReflogList(row('HEAD@{1}', '6e3f2a1b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f', 'commit: fix: keep a colon in the message', '2026-10-12T10:00:00+08:00'));
+        assert.equal(out.length, 1);
+        assert.equal(out[0].ref, 'HEAD@{1}');
+        assert.equal(out[0].action, 'commit');
+        assert.equal(out[0].message, 'fix: keep a colon in the message');
+        assert.equal(out[0].shortHash, '6e3f2a1');
+    });
+
+    it('keeps a parenthesised action as one action', () => {
+        const out = parseReflogList(row('HEAD@{0}', 'aaaaaaaabbbbbbbb', 'commit (amend): 重写消息', '2026-10-12T10:00:00+08:00'));
+        assert.deepEqual([out[0].action, out[0].message], ['commit (amend)', '重写消息']);
+    });
+
+    it('leaves the message empty when the subject has no colon', () => {
+        const out = parseReflogList(row('main@{2}', 'bbbbbbbbcccccccc', ' Branch created', '2026-10-10T08:00:00+08:00'));
+        assert.deepEqual([out[0].action, out[0].message], ['Branch created', '']);
+        assert.equal(out[0].date, '2026-10-10T08:00:00+08:00');
+    });
+
+    it('handles checkout and reset subjects, CRLF and blank lines', () => {
+        const raw = [
+            row('HEAD@{0}', '1111111122222222', 'checkout: moving from main to feat/x', '2026-10-12T09:00:00+08:00'),
+            '',
+            row('HEAD@{1}', '3333333344444444', 'reset: moving to HEAD~1', '2026-10-11T09:00:00+08:00')
+        ].join('\r\n');
+        const out = parseReflogList(raw);
+        assert.deepEqual(out.map(e => e.action), ['checkout', 'reset']);
+        assert.deepEqual(out.map(e => e.message), ['moving from main to feat/x', 'moving to HEAD~1']);
+    });
+
+    it('returns nothing for empty output or a line without a hash', () => {
+        assert.deepEqual(parseReflogList(''), []);
+        assert.deepEqual(parseReflogList('\n   \n'), []);
+        assert.deepEqual(parseReflogList('HEAD@{0}'), []);
+        assert.deepEqual(parseReflogList(row('HEAD@{0}', '', 'commit: x', '2026-10-12T09:00:00+08:00')), []);
     });
 });

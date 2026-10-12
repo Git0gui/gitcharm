@@ -264,7 +264,7 @@ svg { flex: none; }
     color: var(--vscode-foreground);
     transform: scale(1.1);
 }
-#btn-refresh, #tg-graph {
+#btn-refresh, #btn-reflog, #tg-graph {
     flex: none;
     width: 30px;
     height: 26px;
@@ -281,6 +281,11 @@ svg { flex: none; }
 #btn-refresh:hover { 
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
     transform: rotate(90deg);
+}
+/* A clock face reads wrong spinning, so this one only lifts. */
+#btn-reflog:hover {
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+    transform: scale(1.08);
 }
 #tg-graph:hover {
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
@@ -1320,6 +1325,23 @@ canvas.graph-canvas {
     min-width: 52px;
 }
 .push-commit-row.sel .push-commit-hash { color: rgba(255,255,255,.6); }
+/* Reflog selector column: HEAD@{12} / feature/x@{3}, monospace and fixed so the
+   rows line up, and dimmer than the hash it points at. */
+.reflog-ref {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    flex: none;
+    width: 82px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.reflog-row .push-commit-author {
+    font-family: monospace;
+    font-size: 10.5px;
+    opacity: .8;
+}
 .push-commit-msg {
     flex: 1;
     min-width: 0;

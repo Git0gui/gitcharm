@@ -225,6 +225,16 @@ const zh: Record<string, string> = {
     'stash.dropFailed': '删除贮藏失败: {error}',
     'stash.dropBtn': '删除',
 
+    // reflog viewer (rescue lost commits)
+    'reflog.title': '操作记录（Reflog）',
+    'reflog.hint': '右键某行可新建分支、回退或查看差异',
+    'reflog.empty': '没有可显示的操作记录',
+    'reflog.failed': '读取操作记录失败: {error}',
+    'reflog.scopeHead': 'HEAD（含切换分支的记录）',
+    'menu.reflog': '查看操作记录（Reflog）',
+    'ui.reflog': '操作记录（Reflog）：找回丢失的提交',
+    'label.reflog': '操作记录',
+
     // file diff / history
     'fileHistory.title': '文件历史',
     'fileHistory.dblclickHint': '双击提交查看该文件在此提交的改动',
@@ -711,6 +721,16 @@ const en: Record<string, string> = {
     'stash.dropped': 'Dropped stash {ref}',
     'stash.dropFailed': 'Failed to drop stash: {error}',
     'stash.dropBtn': 'Drop',
+
+    // reflog viewer (rescue lost commits)
+    'reflog.title': 'Reflog',
+    'reflog.hint': 'Right-click a row to branch from it, reset to it, or diff it',
+    'reflog.empty': 'No reflog entries to show',
+    'reflog.failed': 'Failed to read the reflog: {error}',
+    'reflog.scopeHead': 'HEAD (includes branch checkouts)',
+    'menu.reflog': 'Show Reflog',
+    'ui.reflog': 'Reflog: recover lost commits',
+    'label.reflog': 'reflog',
 
     // file diff / history
     'fileHistory.title': 'File History',

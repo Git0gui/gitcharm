@@ -315,6 +315,52 @@ export function parsePathFilter(raw: string | undefined): string[] {
     return raw.split(',').map(part => part.trim()).filter(part => part.length > 0 && !/[\x00-\x1f]/.test(part));
 }
 
+/** One reflog record: a movement of a rev, newest first. */
+export interface ReflogEntry {
+    /** Selector as printed by `%gd`, e.g. `HEAD@{3}` or `main@{0}`. */
+    ref: string;
+    hash: string;
+    shortHash: string;
+    /** Kind of movement: the subject up to its first `': '` (`commit`, `reset`, `checkout`…). */
+    action: string;
+    /** Subject without that prefix; empty when the subject has no colon. */
+    message: string;
+    /** ISO 8601 author date of the record. */
+    date: string;
+}
+
+/**
+ * Parse NUL-separated reflog output (`%gd%x00%H%x00%gs%x00%aI`).
+ *
+ * NUL again because the subject is free text: `commit: <user message>` can
+ * contain anything, including colons — which is also why `action` splits on the
+ * FIRST `': '` only, so `reset: moving to 1a2b` stays one action. The hash is
+ * the full one: these rows feed `reset`/`checkout`, and an abbreviated hash can
+ * be ambiguous in a large repository.
+ */
+export function parseReflogList(raw: string): ReflogEntry[] {
+    const entries: ReflogEntry[] = [];
+    for (const line of raw.split('\n')) {
+        const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line;
+        if (!trimmed.trim()) {continue;}
+
+        const parts = trimmed.split('\0');
+        const hash = (parts[1] ?? '').trim();
+        if (!hash) {continue;}
+        const subject = (parts[2] ?? '').trim();
+        const split = subject.indexOf(': ');
+        entries.push({
+            ref: (parts[0] ?? '').trim(),
+            hash,
+            shortHash: hash.substring(0, 7),
+            action: split > 0 ? subject.substring(0, split) : subject,
+            message: split > 0 ? subject.substring(split + 2).trim() : '',
+            date: (parts[3] ?? '').trim()
+        });
+    }
+    return entries;
+}
+
 /** The operation an in-progress merge/rebase/cherry-pick leaves behind. */
 export type InProgressOperation = 'rebase' | 'merge' | 'cherry-pick' | 'revert';
 

@@ -219,6 +219,11 @@
         "command": "idea-git.stashDrop",
         "title": "%cmd.stashDrop%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.showReflog",
+        "title": "%cmd.showReflog%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {
