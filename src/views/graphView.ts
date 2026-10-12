@@ -27,6 +27,19 @@ const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const ALL_COMMITS_ROW = '__all__';
 /** How often to re-read HEAD while the panel is visible (watcher backstop). */
 const BRANCH_POLL_MS = 2000;
+/**
+ * Messages that paint the panel itself, as opposed to answering one request.
+ * The webview discards anything posted before its script reports 'ready', and a
+ * warm start (persisted branch cache, cached history) can win that race — the
+ * rows would then stay skeleton bars until the panel was hidden and shown again.
+ * These carry the whole current value, so keeping only the newest per command
+ * and replaying it on the handshake is enough.
+ */
+const SCREEN_COMMANDS: ReadonlySet<ExtToWebviewMessage['command']> = new Set([
+    'setData', 'setBranches', 'setCommits', 'setStashes', 'setRepoState',
+    'setHeadHash', 'setInProgress', 'setDivergence', 'setCurrentBranch',
+    'setDetail', 'setFileIconTheme'
+]);
 
 export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly PAGE_FIRST = 20;
@@ -63,6 +76,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _lastStashSignature: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
+    /** Screen messages held until the webview script reports 'ready'. */
+    private _pendingScreen = new Map<ExtToWebviewMessage['command'], ExtToWebviewMessage>();
     // Last known in-progress operation; also the value replayed on the 'ready'
     // handshake, and the baseline the auto re-check compares against.
     private _lastInProgress: OperationKind | null = null;
@@ -81,9 +96,25 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._memento = memento;
     }
 
-    /** Type-checked postMessage; silently drops when the panel is not created yet. */
+    /** Type-checked postMessage; screen messages wait for the 'ready' handshake. */
     private _post(msg: ExtToWebviewMessage): void {
+        if (!this._webviewReady) {
+            if (SCREEN_COMMANDS.has(msg.command)) {
+                // Re-insert so the newest value is the last one replayed.
+                this._pendingScreen.delete(msg.command);
+                this._pendingScreen.set(msg.command, msg);
+            }
+            return;
+        }
         void this._view?.webview.postMessage(msg);
+    }
+
+    /** Replay everything that was painted while the webview could not receive it. */
+    private _flushScreen(): void {
+        if (this._pendingScreen.size === 0) {return;}
+        const queued = [...this._pendingScreen.values()];
+        this._pendingScreen.clear();
+        for (const msg of queued) {void this._view?.webview.postMessage(msg);}
     }
 
     /** Media plus the active file-icon theme folder, so the webview may load their assets. */
@@ -608,6 +639,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     async resolveWebviewView(webviewView: vscode.WebviewView) {
         this._view = webviewView;
         this._webviewReady = false;
+        this._pendingScreen.clear();
         this._grantedThemeRoot = undefined;
         this._applyWebviewOptions(webviewView.webview, true);
 
@@ -722,6 +754,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     break;
                 case 'ready':
                     this._webviewReady = true;
+                    // First, whatever the host already painted while the script was
+                    // still booting; then the authoritative repository state.
+                    this._flushScreen();
                     this._postRepoState();
                     if (this._lastInProgress) {
                         this._post({ command: 'setInProgress', inProgress: this._lastInProgress });
@@ -837,6 +872,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             } else {
                 this._stopBranchCheck();
                 this._flushViewState();
+                // Hiding destroys the DOM, so the next show re-runs the script and
+                // handshakes again. Anything posted in between must not be fired into
+                // the dead frame — treat the panel as not listening and buffer instead.
+                // The reload on show regenerates what this drops.
+                this._webviewReady = false;
+                this._pendingScreen.clear();
                 // Git Graph-style hide cleanup: drop heavy per-commit payloads
                 // (file stats, details) but keep the lightweight commit index
                 this._gitService.releaseHeavyCaches();
