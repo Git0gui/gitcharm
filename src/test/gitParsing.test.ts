@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -489,5 +489,50 @@ describe('parseReflogList', () => {
         assert.deepEqual(parseReflogList('\n   \n'), []);
         assert.deepEqual(parseReflogList('HEAD@{0}'), []);
         assert.deepEqual(parseReflogList(row('HEAD@{0}', '', 'commit: x', '2026-10-12T09:00:00+08:00')), []);
+    });
+});
+
+describe('parseGitConfigRemoteNames', () => {
+    it('collects every remote section in file order', () => {
+        const raw = [
+            '[core]',
+            '\trepositoryformatversion = 0',
+            '[remote "origin"]',
+            '\turl = git@github.com:Git0gui/gitcharm.git',
+            '[branch "main"]',
+            '\tremote = origin',
+            '[remote "fork"]',
+            '\turl = https://github.com/me/repo.git',
+        ].join('\n');
+        assert.deepEqual(parseGitConfigRemoteNames(raw), ['origin', 'fork']);
+    });
+
+    it('accepts an unquoted section name and de-duplicates repeats', () => {
+        const raw = '[remote upstream]\nurl = a\n[remote "upstream"]\nurl = b';
+        assert.deepEqual(parseGitConfigRemoteNames(raw), ['upstream']);
+    });
+
+    it('ignores comments, blanks and non-remote sections', () => {
+        const raw = ['# [remote "x"]', '', '  ; [remote "y"]', '[submodule "vendor"]', '[remote "z"]'].join('\n');
+        assert.deepEqual(parseGitConfigRemoteNames(raw), ['z']);
+    });
+
+    it('returns an empty list when the repo has no remote', () => {
+        assert.deepEqual(parseGitConfigRemoteNames('[core]\n\tbare = false\n'), []);
+        assert.deepEqual(parseGitConfigRemoteNames(''), []);
+    });
+});
+
+describe('pickFetchRemote', () => {
+    it('prefers origin wherever it appears', () => {
+        assert.equal(pickFetchRemote(['fork', 'origin']), 'origin');
+    });
+
+    it('falls back to the first remote without origin', () => {
+        assert.equal(pickFetchRemote(['upstream', 'fork']), 'upstream');
+    });
+
+    it('returns an empty string for no remotes', () => {
+        assert.equal(pickFetchRemote([]), '');
     });
 });

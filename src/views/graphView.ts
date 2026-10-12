@@ -33,6 +33,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly PAGE_MORE = 10;
     /** Session-restore window: reopen within this period restores the last view; later opens start fresh. */
     private static readonly SESSION_RESTORE_TTL_MS = 2 * 60 * 60 * 1000;
+    /** Short pause after the panel opens before the first background fetch. */
+    private static readonly AUTO_FETCH_FIRST_DELAY_MS = 5000;
 
     private _view: vscode.WebviewView | undefined;
     private _gitService: GitService;
@@ -46,6 +48,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _loadingMore = false;
     private _loadedHashes = new Set<string>();
     private _branchCheckTimer: NodeJS.Timeout | undefined;
+    private _autoFetchTimer: NodeJS.Timeout | undefined;
+    private _autoFetchDelay: NodeJS.Timeout | undefined;
+    private _autoFetching = false;
     private _headWatcher: fs.FSWatcher | undefined;
     private _headDebounce: NodeJS.Timeout | undefined;
     private _operationDebounce: NodeJS.Timeout | undefined;
@@ -839,6 +844,71 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Background fetch ("idea-git.autoFetchMinutes", 0 = off, off by default).
+     *
+     * Runs only while the panel is visible, alongside the branch watcher: an
+     * extension nobody is looking at should not be making network calls. The
+     * first tick lands shortly after the panel opens — otherwise turning the
+     * setting on would appear to do nothing for a whole interval — and is bounded
+     * by the same in-flight guard, so a slow link cannot stack fetches.
+     */
+    private _startAutoFetch(): void {
+        this._stopAutoFetch();
+        const minutes = GraphViewProvider._autoFetchMinutes();
+        if (minutes <= 0) {return;}
+
+        const delay = setTimeout(() => {
+            this._autoFetchDelay = undefined;
+            void this._tickAutoFetch();
+        }, GraphViewProvider.AUTO_FETCH_FIRST_DELAY_MS);
+        this._autoFetchDelay = delay;
+        this._autoFetchTimer = setInterval(() => void this._tickAutoFetch(), minutes * 60000);
+    }
+
+    private _stopAutoFetch(): void {
+        if (this._autoFetchDelay) {
+            clearTimeout(this._autoFetchDelay);
+            this._autoFetchDelay = undefined;
+        }
+        if (this._autoFetchTimer) {
+            clearInterval(this._autoFetchTimer);
+            this._autoFetchTimer = undefined;
+        }
+    }
+
+    /** Config changed: re-arm, but only if the panel is currently being watched. */
+    resyncAutoFetch(): void {
+        if (this._headWatcher || this._branchCheckTimer) {this._startAutoFetch();} else {this._stopAutoFetch();}
+    }
+
+    private static _autoFetchMinutes(): number {
+        const raw = vscode.workspace.getConfiguration('idea-git').get<number>('autoFetchMinutes', 0);
+        return Number.isFinite(raw) && raw > 0 ? raw : 0;
+    }
+
+    private async _tickAutoFetch(): Promise<void> {
+        if (this._autoFetching || this._repoState !== 'ready') {return;}
+        const remote = this._gitService.getFetchRemote();
+        if (!remote) {return;}
+        this._autoFetching = true;
+        try {
+            await this._gitService.fetchSilent(remote);
+            logger.debug(`[GitCharm] Auto-fetch from ${remote} done`);
+            // A fetch moves remote refs only: the branch tree and the behind/ahead
+            // arrows are what changed. Local history is untouched, so the middle
+            // list is deliberately not reloaded.
+            await this._refreshBranchesOnly();
+            this._refreshDivergence();
+        } catch (error) {
+            // Silent by design — offline, no credentials, or a remote that no
+            // longer exists must not interrupt the user every few minutes.
+            logger.debug('[GitCharm] Auto-fetch skipped:', error);
+        } finally {
+            this._autoFetching = false;
+        }
+    }
+
+    /**
      * Watch for external branch switches (VS Code's own Git UI, CLI, other tools).
      *
      * The watch is on the git *directory* with a HEAD filter rather than on HEAD
@@ -885,6 +955,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }
         }
         this._startBranchPolling();
+        this._startAutoFetch();
     }
 
     private _startBranchPolling(): void {
@@ -1021,6 +1092,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             clearInterval(this._branchCheckTimer);
             this._branchCheckTimer = undefined;
         }
+        this._stopAutoFetch();
     }
 
     dispose(): void {

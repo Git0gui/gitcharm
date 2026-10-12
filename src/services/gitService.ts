@@ -26,6 +26,8 @@ import {
     operationFromStateFiles,
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
+    parseGitConfigRemoteNames,
+    pickFetchRemote,
     tagNameProblem,
     InProgressOperation,
     StashEntry,
@@ -1461,6 +1463,42 @@ export class GitService {
         assertRef(remote, t('label.remote'));
         const output = await this._execNetwork(['fetch', remote]);
         return output || t('fetch.fetchedFrom', { remote });
+    }
+
+    /**
+     * Remote a background fetch should contact, read straight from the config
+     * file (no subprocess, worktree-safe like `getRemoteWebBase`). Empty when the
+     * repository has no remote, so the scheduler can skip instead of failing on a
+     * doomed `git fetch origin` every tick.
+     */
+    getFetchRemote(): string {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (!gitDir) {return '';}
+        try {
+            const config = fs.readFileSync(path.join(resolveCommonDir(gitDir), 'config'), 'utf8');
+            return pickFetchRemote(parseGitConfigRemoteNames(config));
+        } catch {
+            return '';
+        }
+    }
+
+    /**
+     * Unattended fetch for the scheduler.
+     *
+     * Deliberately NOT `_execNetwork`: that attaches our GIT_ASKPASS, and a
+     * credential box appearing on its own every few minutes is exactly what the
+     * user did not ask for. With no askpass and `GIT_TERMINAL_PROMPT=0` git gives
+     * up immediately when it would have to ask, and the caller drops the error.
+     * Bounded timeout because a half-dead network must not hold the timer open.
+     */
+    async fetchSilent(remote: string): Promise<void> {
+        assertRef(remote, t('label.remote'));
+        await this.executeGitArgs(['fetch', '--quiet', remote], {
+            env: { GIT_TERMINAL_PROMPT: '0' },
+            timeoutMs: 60000
+        });
+        this.invalidateVolatile();
     }
 
     /**

@@ -60,6 +60,14 @@ export function activate(ctx: vscode.ExtensionContext) {
         }
     }));
 
+    // Auto-fetch interval ("idea-git.autoFetchMinutes" setting): re-arm the timer
+    // so a change applies without reopening the panel (0 stops it entirely)
+    ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('idea-git.autoFetchMinutes')) {
+            graphView.resyncAutoFetch();
+        }
+    }));
+
     // File icons come from the workbench themes, so a switch has to re-send the pack
     ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
         if (e.affectsConfiguration('workbench.iconTheme')) {

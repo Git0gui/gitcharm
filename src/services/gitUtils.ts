@@ -443,6 +443,34 @@ export function branchWebUrl(webBase: string | undefined, branch: string): strin
 }
 
 /**
+ * Remote names in git's config file, in file order with duplicates removed.
+ * Same section grammar as `parseGitConfigRemoteUrl`, just without the values —
+ * a background fetch needs to know whether a remote exists at all before
+ * spending a subprocess on it.
+ */
+export function parseGitConfigRemoteNames(raw: string): string[] {
+    const names: string[] = [];
+    for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) {continue;}
+        const section = /^\[remote\s+(?:["']([^"'\]]+)["']|([^"'\]\s]+))\]$/.exec(trimmed);
+        if (section) {
+            const name = section[1] ?? section[2];
+            if (name && !names.includes(name)) {names.push(name);}
+        }
+    }
+    return names;
+}
+
+/**
+ * Pick the remote a background fetch should contact: `origin` when it exists
+ * (the convention every tool assumes), otherwise the first configured remote,
+ * otherwise nothing — an empty string means "do not fetch".
+ */
+export function pickFetchRemote(names: readonly string[]): string {
+    return names.includes('origin') ? 'origin' : (names[0] ?? '');
+}
+/**
  * Read a remote's URL straight out of git's config file (no subprocess).
  * Sections look like `[remote "origin"]` followed by `url = …`; the quotes are
  * optional and either kind is accepted, since git only requires them when the

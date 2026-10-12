@@ -362,6 +362,12 @@
           "type": "boolean",
           "default": false,
           "description": "%config.debug%"
+        },
+        "idea-git.autoFetchMinutes": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "%config.autoFetchMinutes%"
         }
       }
     }

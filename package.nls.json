@@ -47,5 +47,6 @@
     "config.language.auto": "Follow the VSCode display language",
     "config.language.zh-cn": "Chinese (Simplified)",
     "config.language.en": "English",
-    "config.debug": "Enable debug logging (written to the extension host console for troubleshooting)"
+    "config.debug": "Enable debug logging (written to the extension host console for troubleshooting)",
+    "config.autoFetchMinutes": "Fetch from the remote every N minutes while the GitCharm panel is open. 0 (the default) disables it. Silent: no credential prompt, no error toast."
 }
