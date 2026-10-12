@@ -172,6 +172,34 @@ const zh: Record<string, string> = {
     'remote.copied': '无法打开浏览器，已复制地址到剪贴板：{url}',
     'remote.openFailed': '打开远端页面失败: {error}',
 
+    // tags
+    'tag.nameEmpty': '标签名不能为空',
+    'tag.nameChars': '标签名包含 git 不允许的字符',
+    'tag.nameDot': '标签名不能以「.」结尾，也不能包含以「.」开头的路径段',
+    'tag.nameLock': '标签名不能以「.lock」结尾（git 保留给引用事务）',
+    'tag.nameExists': '标签 {name} 已存在',
+    'tag.none': '此仓库没有标签',
+    'tag.pickTitle': '选择标签',
+    'tag.pickDeletePlaceHolder': '选择要删除的标签（可多选）',
+    'tag.pickPushPlaceHolder': '选择要推送到远端的标签（可多选）',
+    'tag.namePrompt': '为提交 {hash} 输入标签名',
+    'tag.messagePrompt': '标签说明（留空则创建轻量标签）',
+    'tag.messagePlaceholder': '留空 = 轻量标签；填写 = 附注标签',
+    'tag.creating': '正在创建标签 {name}...',
+    'tag.created': '已创建标签 {name}',
+    'tag.createFailed': '创建标签失败: {error}',
+    'tag.deleteConfirm': '删除本地标签 {names}？远端标签不会被删除。',
+    'tag.deleteBtn': '删除',
+    'tag.deleting': '正在删除标签 {names}...',
+    'tag.deleted': '已删除标签 {name}',
+    'tag.deletedMultiple': '已删除 {count} 个标签',
+    'tag.deleteFailed': '以下标签删除失败: {error}',
+    'tag.pushing': '正在推送标签 {name}...',
+    'tag.pushingMultiple': '正在推送 {count} 个标签...',
+    'tag.pushed': '已推送标签 {name} 到远端',
+    'tag.pushedMultiple': '已推送 {count} 个标签到远端',
+    'tag.pushFailed': '推送标签 {names} 失败: {error}',
+
     // file diff / history
     'fileHistory.title': '文件历史',
     'fileHistory.dblclickHint': '双击提交查看该文件在此提交的改动',
@@ -300,6 +328,7 @@ const zh: Record<string, string> = {
     'label.targetRef': '目标引用',
     'label.ref': '引用',
     'label.rebaseBase': '变基基点',
+    'label.tag': '标签',
 
     // graphView messages
     'view.commitNotFound': '未在当前分支找到提交 {hash}',
@@ -398,6 +427,9 @@ const zh: Record<string, string> = {
     'menu.amend': '修补最近提交（并入改动）',
     'menu.copyMessage': '复制提交消息',
     'menu.openOnRemote': '在远端网页打开',
+    'menu.newTag': '新建标签',
+    'menu.pushTag': '推送标签',
+    'menu.deleteTag': '删除标签',
 
     // push dialog
     'pushDlg.allCommits': '全部提交',
@@ -595,6 +627,34 @@ const en: Record<string, string> = {
     'remote.copied': 'Could not open a browser; copied the address instead: {url}',
     'remote.openFailed': 'Failed to open the remote page: {error}',
 
+    // tags
+    'tag.nameEmpty': 'A tag name is required',
+    'tag.nameChars': 'The tag name contains characters git does not allow',
+    'tag.nameDot': 'A tag name may not end with "." or contain a path component starting with "."',
+    'tag.nameLock': 'A tag name may not end with ".lock" (reserved by git for ref transactions)',
+    'tag.nameExists': 'Tag {name} already exists',
+    'tag.none': 'This repository has no tags',
+    'tag.pickTitle': 'Select Tags',
+    'tag.pickDeletePlaceHolder': 'Select tags to delete (multiple allowed)',
+    'tag.pickPushPlaceHolder': 'Select tags to push (multiple allowed)',
+    'tag.namePrompt': 'Tag name for commit {hash}',
+    'tag.messagePrompt': 'Tag description (leave empty for a lightweight tag)',
+    'tag.messagePlaceholder': 'Empty = lightweight tag; text = annotated tag',
+    'tag.creating': 'Creating tag {name}...',
+    'tag.created': 'Created tag {name}',
+    'tag.createFailed': 'Failed to create tag: {error}',
+    'tag.deleteConfirm': 'Delete local tag {names}? The remote tag is not removed.',
+    'tag.deleteBtn': 'Delete',
+    'tag.deleting': 'Deleting tag {names}...',
+    'tag.deleted': 'Deleted tag {name}',
+    'tag.deletedMultiple': 'Deleted {count} tags',
+    'tag.deleteFailed': 'Failed to delete these tags: {error}',
+    'tag.pushing': 'Pushing tag {name}...',
+    'tag.pushingMultiple': 'Pushing {count} tags...',
+    'tag.pushed': 'Pushed tag {name} to the remote',
+    'tag.pushedMultiple': 'Pushed {count} tags to the remote',
+    'tag.pushFailed': 'Failed to push tag {names}: {error}',
+
     // file diff / history
     'fileHistory.title': 'File History',
     'fileHistory.dblclickHint': 'Double-click a commit to view its changes to this file',
@@ -723,6 +783,7 @@ const en: Record<string, string> = {
     'label.targetRef': 'target ref',
     'label.ref': 'ref',
     'label.rebaseBase': 'rebase base',
+    'label.tag': 'tag',
 
     // graphView messages
     'view.commitNotFound': 'Commit {hash} not found in the current branch',
@@ -821,6 +882,9 @@ const en: Record<string, string> = {
     'menu.amend': 'Amend Last Commit (fold changes in)',
     'menu.copyMessage': 'Copy Commit Message',
     'menu.openOnRemote': 'Open on Remote',
+    'menu.newTag': 'New Tag',
+    'menu.pushTag': 'Push Tag',
+    'menu.deleteTag': 'Delete Tag',
 
     // push dialog
     'pushDlg.allCommits': 'All Commits',

@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject } from '../services/gitUtils';
+import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
     it('parses ahead and behind counts', () => {
@@ -317,5 +318,68 @@ describe('parseGitConfigRemoteUrl', () => {
 
     it('returns undefined when the repo has no remote', () => {
         assert.equal(parseGitConfigRemoteUrl('[core]\n\tbare = false\n'), undefined);
+    });
+});
+
+describe('tagNameProblem', () => {
+    it('accepts names git accepts, ignoring surrounding spaces', () => {
+        for (const name of ['v1.0.0', '1.0', 'release/2026-10', 'a.b.c', '释放v1', '  v1.0  ']) {
+            assert.equal(tagNameProblem(name), undefined, name);
+        }
+    });
+
+    it('rejects an empty name', () => {
+        assert.equal(tagNameProblem(''), t('tag.nameEmpty'));
+        assert.equal(tagNameProblem('   '), t('tag.nameEmpty'));
+    });
+
+    it('rejects ref-illegal punctuation and leading dashes', () => {
+        for (const name of ['a b', 'a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', '..ref', 'user@{0}', '-tag']) {
+            assert.equal(tagNameProblem(name), t('tag.nameChars'), name);
+        }
+    });
+
+    it('rejects a trailing dot and dot-prefixed path components', () => {
+        // Probed against `git check-ref-format refs/tags/…`; the trailing dot of
+        // "a./b" is fine, only a component that *starts* with a dot is not.
+        assert.equal(tagNameProblem('end.'), t('tag.nameDot'));
+        assert.equal(tagNameProblem('.hidden'), t('tag.nameDot'));
+        assert.equal(tagNameProblem('a/.hidden'), t('tag.nameDot'));
+        assert.equal(tagNameProblem('a./b'), undefined);
+    });
+
+    it('rejects a .lock suffix', () => {
+        assert.equal(tagNameProblem('v1.lock'), t('tag.nameLock'));
+    });
+
+    it('rejects a name that is already taken', () => {
+        assert.equal(tagNameProblem('v1', ['v1', 'v2']), t('tag.nameExists', { name: 'v1' }));
+        assert.equal(tagNameProblem(' v1 ', ['v1']), t('tag.nameExists', { name: 'v1' }));
+        assert.equal(tagNameProblem('v3', ['v1']), undefined);
+    });
+});
+
+describe('peeledCommitFromTagObject', () => {
+    const commit = 'ba88db9f8714fa62ef566f6655e5775276d8616c';
+    // Layout verified against a real loose tag object: `tag <size>` NUL, header
+    // lines, a blank line, then the message.
+    const tagObject = `tag 112\u0000object ${commit}\ntype commit\ntag v1.0.0\ntagger A <a@a> 1700000000 +0800\n\nrelease notes\n`;
+
+    it('returns the tagged commit of an annotated tag', () => {
+        assert.equal(peeledCommitFromTagObject(tagObject), commit);
+    });
+
+    it('ignores a body that mentions another object', () => {
+        // Only the header counts: the message is cut at its leading blank line.
+        const forged = `tag 200\u0000object ${commit}\ntype commit\n\nobject 0000000000000000000000000000000000000000\n`;
+        assert.equal(peeledCommitFromTagObject(forged), commit);
+    });
+
+    it('returns undefined for commit objects and malformed input', () => {
+        assert.equal(peeledCommitFromTagObject(`commit 200\u0000tree ${commit}\nparent ${commit}\n`), undefined);
+        assert.equal(peeledCommitFromTagObject(`tag 100\u0000type commit\n\u0000`), undefined);
+        assert.equal(peeledCommitFromTagObject(`tag 100\u0000object zzz\n\u0000`), undefined);
+        assert.equal(peeledCommitFromTagObject(`object ${commit}\n`), undefined);
+        assert.equal(peeledCommitFromTagObject(''), undefined);
     });
 });

@@ -118,6 +118,7 @@ export type WebviewAction =
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
     | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
+    | 'newTag' | 'deleteTag' | 'pushTag'
     | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */

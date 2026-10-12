@@ -184,6 +184,21 @@
         "command": "idea-git.openBranchOnRemote",
         "title": "%cmd.openBranchOnRemote%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.createTag",
+        "title": "%cmd.createTag%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.deleteTag",
+        "title": "%cmd.deleteTag%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.pushTag",
+        "title": "%cmd.pushTag%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {

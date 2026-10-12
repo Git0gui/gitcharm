@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as zlib from 'zlib';
 import { logger } from './logger';
 import { resolveCommonDir, resolveGitDir } from './gitPaths';
+import { peeledCommitFromTagObject } from './gitUtils';
 
 /**
  * Reads branch/tag -> commit-hash mappings straight from the git directory
@@ -64,7 +66,7 @@ export class RefsReader {
         }
     }
 
-    /** tagName -> commit hash */
+    /** tagName -> commit hash (annotated tags peeled to the commit they point at) */
     readTagRefs(): Map<string, string> {
         const now = Date.now();
         if (this._tagCache && (now - this._timestamp) < RefsReader.TTL_MS) {
@@ -82,12 +84,37 @@ export class RefsReader {
                 }
             }
 
+            // An annotated tag ref holds the tag-object hash, not a commit hash,
+            // so it would match no row in the log until peeled.
+            for (const [name, hash] of tagMap) {
+                const peeled = this._peelTagObject(dirs.objectsDir, hash);
+                if (peeled) {tagMap.set(name, peeled);}
+            }
+
             this._tagCache = new Map(tagMap);
             this._timestamp = now;
         } catch (error) {
             logger.error('[GitCharm] Failed to read tag refs:', error);
         }
         return tagMap;
+    }
+
+    /**
+     * Inflate a loose object and return the commit it tags, or undefined when it
+     * is not a tag object. A packed tag object has no loose file to read, and
+     * then the raw hash is kept — same as before peeling existed, so nothing
+     * that works today regresses.
+     */
+    private _peelTagObject(objectsDir: string, hash: string): string | undefined {
+        if (!/^[0-9a-f]{40}$/.test(hash)) {return undefined;}
+        try {
+            const file = path.join(objectsDir, hash.substring(0, 2), hash.substring(2));
+            if (!fs.existsSync(file)) {return undefined;}
+            const raw = zlib.inflateSync(fs.readFileSync(file)).toString('utf8');
+            return peeledCommitFromTagObject(raw);
+        } catch {
+            return undefined;
+        }
     }
 
     /** Call after operations that create/rename/delete refs. */
@@ -103,19 +130,22 @@ export class RefsReader {
      * `.git` is a pointer file rather than a directory, so a naive `.git/refs`
      * read would come up empty.
      */
-    private _resolveDirs(): { refsDir: string; packedRefsPath: string } {
+    private _resolveDirs(): { refsDir: string; packedRefsPath: string; objectsDir: string } {
         const repoPath = this._getRepoPath() || '';
         const gitDir = resolveGitDir(repoPath);
         if (!gitDir) {
+            const fallback = path.join(repoPath, '.git');
             return {
-                refsDir: path.join(repoPath, '.git', 'refs'),
-                packedRefsPath: path.join(repoPath, '.git', 'packed-refs')
+                refsDir: path.join(fallback, 'refs'),
+                packedRefsPath: path.join(fallback, 'packed-refs'),
+                objectsDir: path.join(fallback, 'objects')
             };
         }
         const refsBase = resolveCommonDir(gitDir);
         return {
             refsDir: path.join(refsBase, 'refs'),
-            packedRefsPath: path.join(refsBase, 'packed-refs')
+            packedRefsPath: path.join(refsBase, 'packed-refs'),
+            objectsDir: path.join(refsBase, 'objects')
         };
     }
 

@@ -1075,6 +1075,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'openRemoteBranch':
                     await vscode.commands.executeCommand('idea-git.openBranchOnRemote', branchNode);
                     return;
+                case 'newTag':
+                    await vscode.commands.executeCommand('idea-git.createTag', commitNode);
+                    return;
+                case 'deleteTag':
+                    await vscode.commands.executeCommand('idea-git.deleteTag', commitNode);
+                    return;
+                case 'pushTag':
+                    await vscode.commands.executeCommand('idea-git.pushTag', commitNode);
+                    return;
                 case 'reset':
                     await vscode.commands.executeCommand('idea-git.resetToCommit', commitNode);
                     forceReload = true;

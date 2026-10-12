@@ -42,6 +42,56 @@ export function assertHash(value: string): string {
     return value;
 }
 
+/**
+ * Why a tag name would be refused, or undefined when git accepts it.
+ *
+ * `assertRef` already covers the shared ref rules (illegal punctuation, `..`,
+ * `@{`, leading/trailing slash, leading dash — that one also keeps `git tag -x`
+ * from reading the name as an option). The three checks here are the rest of
+ * `git check-ref-format`, verified against git rather than assumed: a path
+ * component may not start with a dot, and the name may not end with a dot or
+ * with `.lock` (git reserves those for its own ref transactions).
+ */
+export function tagNameProblem(name: string, existing: readonly string[] = []): string | undefined {
+    const trimmed = name.trim();
+    if (!trimmed) {return t('tag.nameEmpty');}
+    try {
+        assertRef(trimmed, t('label.tag'));
+    } catch {
+        return t('tag.nameChars');
+    }
+    if (trimmed.endsWith('.')) {return t('tag.nameDot');}
+    if (trimmed.endsWith('.lock')) {return t('tag.nameLock');}
+    if (trimmed.split('/').some(part => part.startsWith('.'))) {return t('tag.nameDot');}
+    if (existing.includes(trimmed)) {return t('tag.nameExists', { name: trimmed });}
+    return undefined;
+}
+
+/**
+ * The commit an annotated tag points at, read straight out of its loose object.
+ *
+ * `refs/tags/…` stores the *tag object* hash for annotated tags, so a raw ref
+ * read would never match any commit in the log — the badge would vanish and
+ * "delete/push tag on this commit" could not find the tag. A tag object is a
+ * small text blob (`tag <len>` NUL, then header lines, then a blank line and
+ * the message), so peeling costs one inflated read instead of a
+ * `git rev-parse` per tag.
+ *
+ * Returns undefined for anything that is not a tag object (lightweight tags
+ * point at the commit directly) or has no usable `object` line.
+ */
+export function peeledCommitFromTagObject(raw: string): string | undefined {
+    const nul = raw.indexOf('\0');
+    if (nul < 0 || !/^tag \d+$/.test(raw.slice(0, nul))) {return undefined;}
+
+    // Only the header is authoritative: a message line may read like one.
+    const bodyStart = nul + 1;
+    const blank = raw.indexOf('\n\n', bodyStart);
+    const header = blank >= 0 ? raw.slice(bodyStart, blank) : raw.slice(bodyStart);
+    const match = /^object ([0-9a-f]{40})[ \t]*$/m.exec(header);
+    return match ? match[1] : undefined;
+}
+
 export class LruCache<V> {
     private _map = new Map<string, V>();
 

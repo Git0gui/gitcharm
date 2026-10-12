@@ -166,18 +166,6 @@ function handleAuthorKeydown(e) {
     }
 }
 
-/**
- * Check if a ref name looks like a tag (common conventions)
- * Tags are usually short names without slashes, or match patterns like v1.0.0, release-*, etc.
- */
-function isTagName(name) {
-    // Common tag patterns: v1.0.0, 1.0.0, release-*, etc.
-    // Also check if it's in refs/tags/ namespace (would come from git as just the name)
-    return /^v?\d+\.\d+/.test(name) || 
-           /^(release|tag)[-_]/i.test(name) ||
-           /^[A-Z][a-z]+-\d/.test(name); // e.g., "Version-1"
-}
-
 var state = {
     commits: INITIAL.commits || [],
     local: INITIAL.local || [],
@@ -694,11 +682,12 @@ function renderRows() {
         (c.refs || []).forEach(function (r) {
             if (r === 'HEAD') return;
             
-            // Determine ref type for styling
-            var isBranch = !r.includes('/') && !isTagName(r);
+            // Determine ref type for styling. Tags are known by the host (it read
+            // refs/tags), so the badge never guesses from the name's shape.
+            var isTag = (c.tags || []).indexOf(r) >= 0;
+            var isBranch = !r.includes('/') && !isTag;
             var isRemote = r.indexOf('origin/') === 0 || r.indexOf('remotes/') === 0;
-            var isTag = isTagName(r);
-            
+
             var cls = 'chip';
             if (isTag) {
                 cls += ' tag'; // Yellow badge for tags
@@ -1628,6 +1617,16 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
             items.push(['dropCommit', T('menu.dropCommit')]);
         }
         items.push(['newBranchFrom', T('menu.newBranchFrom')]);
+        items.push(['newTag', T('menu.newTag')]);
+
+        // The host knows which refs are tags, so only offer to manage the ones
+        // actually sitting on this commit.
+        var rowCommit = (state.commits || []).find(function (x) { return x.hash === hash; });
+        var rowTags = (rowCommit && rowCommit.tags) || [];
+        if (rowTags.length > 0) {
+            items.push(['pushTag', T('menu.pushTag') + ' (' + rowTags.length + ')']);
+            items.push(['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')']);
+        }
     }
     items.push(['openRemoteCommit', T('menu.openOnRemote')]);
     items.push(['copy', T('menu.copyHash')]);

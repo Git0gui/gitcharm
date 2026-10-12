@@ -23,6 +23,7 @@ import {
     operationFromStateFiles,
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
+    tagNameProblem,
     InProgressOperation,
     StatusEntry,
     WorkingTreeSummary
@@ -37,6 +38,7 @@ export {
     LruCache,
     parseLogLine,
     parseGraphLine,
+    tagNameProblem,
     InProgressOperation
 } from './gitUtils';
 
@@ -48,6 +50,8 @@ export interface GraphCommit {
     date: string;
     parents: string[];
     refs: string[];
+    /** Subset of `refs` that are tags — authoritative, from the refs directory. */
+    tags: string[];
     isMerge: boolean;
 }
 
@@ -1779,11 +1783,17 @@ export class GitService {
         }
         
         // Add tags
+        const hashToTags = new Map<string, string[]>();
         for (const [tagName, hash] of tagRefsMap.entries()) {
             if (!hashToRefs.has(hash)) {
                 hashToRefs.set(hash, []);
             }
             hashToRefs.get(hash)!.push(tagName);
+
+            if (!hashToTags.has(hash)) {
+                hashToTags.set(hash, []);
+            }
+            hashToTags.get(hash)!.push(tagName);
         }
         
         // Parse commits - always create new objects to avoid stale references
@@ -1792,6 +1802,7 @@ export class GitService {
             const commit: GraphCommit = {
                 ...parsed,
                 refs: [],
+                tags: [],
                 isMerge: parsed.parents.length > 1
             };
             
@@ -1799,6 +1810,10 @@ export class GitService {
             const refs = hashToRefs.get(parsed.hash);
             if (refs && refs.length > 0) {
                 commit.refs = refs;
+            }
+            const tags = hashToTags.get(parsed.hash);
+            if (tags && tags.length > 0) {
+                commit.tags = tags;
             }
             
             this._commitIndex.set(hash, commit);
@@ -1832,6 +1847,61 @@ export class GitService {
     async revert(hash: string): Promise<void> {
         assertHash(hash);
         await this._execMutate(['revert', '--no-edit', hash]);
+    }
+
+    /**
+     * Every tag with the commit it points at, read from the refs on disk
+     * (no subprocess). Annotated tags resolve to the tagged commit, which is
+     * what RefsReader already reports.
+     */
+    listTags(): Array<{ name: string; hash: string }> {
+        const tags: Array<{ name: string; hash: string }> = [];
+        for (const [name, hash] of this._refsReader.readTagRefs()) {
+            tags.push({ name, hash });
+        }
+        return tags.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    /** Tag names pointing exactly at `hash` — the ones a row can delete or push. */
+    getTagsAt(hash: string): string[] {
+        const found: string[] = [];
+        for (const [name, tagHash] of this._refsReader.readTagRefs()) {
+            if (tagHash === hash) {found.push(name);}
+        }
+        return found.sort((a, b) => a.localeCompare(b));
+    }
+
+    /**
+     * Create a tag on an existing commit. A message turns it into an annotated
+     * tag (`-a`), and the message goes through a temp file — never the command
+     * line — so it survives verbatim. Without one it stays a lightweight tag.
+     */
+    async createTag(name: string, hash: string, message?: string): Promise<void> {
+        assertRef(name, t('label.tag'));
+        assertHash(hash);
+        const annotated = message && message.trim().length > 0;
+        if (annotated) {
+            await this._commitWithMessage(['tag', '-a', name, hash], message!.trim() + '\n');
+        } else {
+            await this._execMutate(['tag', name, hash]);
+        }
+    }
+
+    /** Delete a local tag. Remote tags are a separate ref and stay untouched. */
+    async deleteTag(name: string): Promise<string> {
+        assertRef(name, t('label.tag'));
+        return this._execMutate(['tag', '-d', name]);
+    }
+
+    /**
+     * Push one tag to a remote. The explicit `refs/tags/…` form is what git
+     * needs to push a tag rather than something that happens to share the name.
+     */
+    async pushTag(name: string, remote = 'origin'): Promise<string> {
+        assertRef(name, t('label.tag'));
+        assertRef(remote, t('label.remote'));
+        const output = await this._execNetwork(['push', remote, `refs/tags/${name}`]);
+        return output || t('tag.pushed', { name, remote });
     }
 
     /**
