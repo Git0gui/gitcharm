@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, tagNameProblem, peeledCommitFromTagObject, parseStashList } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -381,5 +381,46 @@ describe('peeledCommitFromTagObject', () => {
         assert.equal(peeledCommitFromTagObject(`tag 100\u0000object zzz\n\u0000`), undefined);
         assert.equal(peeledCommitFromTagObject(`object ${commit}\n`), undefined);
         assert.equal(peeledCommitFromTagObject(''), undefined);
+    });
+});
+
+describe('parseStashList', () => {
+    const nul = '\0';
+    const row = (ref: string, subject: string, date: string) => [ref, subject, date].join(nul);
+
+    it('parses index, subject and date', () => {
+        const out = parseStashList(row('stash@{0}', 'On main: reworking login', '2026-10-12T23:20:07+08:00') + '\n');
+        assert.deepEqual(out, [{ index: 0, message: 'On main: reworking login', date: '2026-10-12T23:20:07+08:00' }]);
+    });
+
+    it('keeps a pipe inside the subject intact', () => {
+        // The fields are NUL-separated precisely because git subjects carry pipes.
+        const out = parseStashList(row('stash@{1}', 'WIP on main: 1a2b3c4 fix a|b', '2026-10-01T10:00:00+08:00'));
+        assert.equal(out[0].message, 'WIP on main: 1a2b3c4 fix a|b');
+        assert.equal(out[0].index, 1);
+    });
+
+    it('reads every entry, newest first, and skips CRLF noise', () => {
+        const raw = [
+            row('stash@{0}', 'newest', '2026-10-12T00:00:00+08:00'),
+            row('stash@{2}', 'oldest', '2026-10-01T00:00:00+08:00')
+        ].join('\r\n');
+        const out = parseStashList(raw);
+        assert.deepEqual(out.map(e => e.index), [0, 2]);
+        assert.deepEqual(out.map(e => e.message), ['newest', 'oldest']);
+    });
+
+    it('tolerates missing trailing fields', () => {
+        const out = parseStashList('stash@{0}');
+        assert.deepEqual(out, [{ index: 0, message: '', date: '' }]);
+    });
+
+    it('returns no entries for empty output or a line without a stash refname', () => {
+        assert.deepEqual(parseStashList(''), []);
+        assert.deepEqual(parseStashList('\n  \n'), []);
+        assert.deepEqual(parseStashList([
+            row('HEAD@{3}', 'not a stash line', '2026-10-01T00:00:00+08:00'),
+            row('stash@{1}', 'kept', '2026-10-02T00:00:00+08:00')
+        ].join('\n')), [{ index: 1, message: 'kept', date: '2026-10-02T00:00:00+08:00' }]);
     });
 });

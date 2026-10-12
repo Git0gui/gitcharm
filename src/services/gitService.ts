@@ -20,11 +20,13 @@ import {
     parseRefPath,
     parseWorkingTreeSummary,
     parseStatusEntries,
+    parseStashList,
     operationFromStateFiles,
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
     tagNameProblem,
     InProgressOperation,
+    StashEntry,
     StatusEntry,
     WorkingTreeSummary
 } from './gitUtils';
@@ -39,7 +41,8 @@ export {
     parseLogLine,
     parseGraphLine,
     tagNameProblem,
-    InProgressOperation
+    InProgressOperation,
+    StashEntry
 } from './gitUtils';
 
 export interface GraphCommit {
@@ -978,20 +981,58 @@ export class GitService {
     }
 
     /**
-     * Get stash list
+     * The stash stack, newest first.
+     *
+     * The stash ref is checked on disk first: a repository with no stashes is the
+     * common case and answers with zero subprocesses. The list itself comes from
+     * the stash reflog because `git stash list` cannot carry a date, and fields
+     * are NUL-separated because a stash subject may contain a pipe.
      */
-    async getStashes(): Promise<{ index: number; message: string }[]> {
-        const output = (await this.executeGitArgs(['stash', 'list', '--format=%gd|%gs'])).trim();
-        if (!output) {return [];}
+    async getStashes(): Promise<StashEntry[]> {
+        if (!this.getStashRefSignature()) {return [];}
+        try {
+            const output = await this.executeGitArgs([
+                'log', '-g', 'stash', '--format=%gd%x00%gs%x00%aI'
+            ]);
+            return parseStashList(output);
+        } catch (error) {
+            // Ref disappeared between the check and the read: an empty stack is
+            // the honest answer, not an error toast over a tree row.
+            logger.debug('[GitCharm] Stash reflog unavailable:', error);
+            return [];
+        }
+    }
 
-        return output.split('\n').filter(l => l.trim()).map(line => {
-            const parts = line.split('|');
-            const indexMatch = parts[0]?.match(/stash@\{(\d+)\}/);
-            return {
-                index: indexMatch ? parseInt(indexMatch[1]) : 0,
-                message: parts[1] || parts[0] || ''
-            };
-        });
+    /**
+     * Identity of the stash ref — its hash, or '' when the repository has no
+     * stashes. One small file read, cheap enough to compare on every poll tick so
+     * a `git stash` run in a terminal shows up without a manual refresh.
+     *
+     * Read from the *common* dir: `refs/stash` is shared by all worktrees (a
+     * linked worktree's own git dir has no refs/stash), and git never packs it.
+     */
+    getStashRefSignature(): string {
+        const repoPath = this._repositoryPath;
+        if (!repoPath) {return '';}
+        const gitDir = resolveGitDir(repoPath);
+        if (!gitDir) {return '';}
+        try {
+            const stashRef = path.join(resolveCommonDir(gitDir), 'refs', 'stash');
+            return fs.readFileSync(stashRef, 'utf-8').trim();
+        } catch {
+            return '';
+        }
+    }
+
+    /**
+     * Whether `git stash push` would save anything. Only tracked changes count:
+     * untracked files are left in place (no `-u`), so a tree whose only changes
+     * are untracked would produce "No local changes to save" and an empty stack.
+     */
+    async hasStashableChanges(): Promise<boolean> {
+        const entries = await this.getStatusEntries();
+        return entries.some(entry => !entry.untracked && !entry.ignored
+            && (entry.indexStatus !== ' ' || entry.worktreeStatus !== ' '));
     }
 
     /**

@@ -1,4 +1,4 @@
-import { GraphCommit, CommitDetail, FileStat } from '../services/gitService';
+import { GraphCommit, CommitDetail, FileStat, StashEntry } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 
 /**
@@ -67,6 +67,7 @@ export type ExtToWebviewMessage =
         searchContext?: { query?: string; resultCount?: number };
     }
     | { command: 'setBranches'; local: string[]; remote: string[]; currentBranch?: string }
+    | { command: 'setStashes'; stashes: StashEntry[] }
     | { command: 'setRepoState'; state: RepoUiState; files?: number; folder?: string }
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
@@ -119,6 +120,7 @@ export type WebviewAction =
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
     | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
     | 'newTag' | 'deleteTag' | 'pushTag'
+    | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
     | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
@@ -145,6 +147,8 @@ export type WebviewToExtMessage =
         hashes?: string[];
         path?: string;
         remainingHashes?: string[];
+        /** Stash stack position (`stash@{n}`), for the stash tree section's actions. */
+        stash?: number;
     }
     | { command: 'dialogAction'; action: string }
     | { command: 'squashMessageResponse'; message?: string }

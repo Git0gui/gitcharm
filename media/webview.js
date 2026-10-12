@@ -170,6 +170,7 @@ var state = {
     commits: INITIAL.commits || [],
     local: INITIAL.local || [],
     remote: INITIAL.remote || [],
+    stashes: [],
     divergence: {},
     detailVisible: false,
     current: INITIAL.currentBranch || '',
@@ -435,6 +436,8 @@ var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stro
 // Same silhouette with filled nodes: the checked-out branch has to stand out in the tree.
 var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="4.5" cy="12.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="11.5" cy="5.5" r="2" fill="currentColor" stroke-width="1"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
+// Archive box: the lid, the body and the slot a stash is put through.
+var I_STASH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>';
 // Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
 // the stroke-based carets used across the panel. currentColor keeps it theme aware.
 var I_FOLDER = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
@@ -579,6 +582,26 @@ function renderTree() {
         }
         return s;
     }
+    // Stash rows carry no branch, so they are not .bitem: the tree's dblclick ->
+    // checkout handler must never fire on them.
+    function stashItem(entry) {
+        var ref = 'stash@{' + entry.index + '}';
+        var label = entry.message || ref;
+        var when = fmtRelativeTime(entry.date);
+        var tooltip = ref + '\n' + label + (when ? '\n' + when : '');
+        return '<div class="sitem" data-stash="' + entry.index + '" data-title="' + esc(tooltip) + '" style="padding-left:20px">' +
+            I_STASH + '<span class="bname">' + esc(label) + '</span>' +
+            (when ? '<span class="sdate">' + esc(when) + '</span>' : '') + '</div>';
+    }
+    function stashSection() {
+        if (state.stashes.length === 0) {return '';}
+        var visible = state.stashes.filter(function (s) { return match(s.message || ''); });
+        var s = header('stash', T('w.stashSection'), visible.length);
+        if (!state.collapsedSec['stash']) {
+            visible.forEach(function (entry) { s += stashItem(entry); });
+        }
+        return s;
+    }
     var head = '';
     if (state.current) {
         var resumeHtml = '';
@@ -594,7 +617,8 @@ function renderTree() {
     document.getElementById('btree').innerHTML =
         '<div id="btree-inner">' + head +
         section('local', T('common.local'), state.local, I_BRANCH) +
-        section('remote', T('common.remote'), state.remote, I_CLOUD) + '</div>';
+        section('remote', T('common.remote'), state.remote, I_CLOUD) +
+        stashSection() + '</div>';
 }
 
 /* ---------- center commit list ---------- */
@@ -1441,6 +1465,10 @@ document.getElementById('rf-branch').addEventListener('click', function () {
     vscode.postMessage({ command: 'refreshBranches' });
 });
 
+document.getElementById('stash-save').addEventListener('click', function () {
+    vscode.postMessage({ command: 'action', action: 'stashSave' });
+});
+
 document.getElementById('tg-files').addEventListener('click', function () {
     state.detailVisible = !state.detailVisible;
     applyDetailVisibility();
@@ -1454,6 +1482,22 @@ document.getElementById('rf-files').addEventListener('click', function () {
 });
 
 document.getElementById('btree').addEventListener('contextmenu', function (e) {
+    var stashRow = e.target.closest('.sitem');
+    if (stashRow) {
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+
+        var stashIndex = parseInt(stashRow.getAttribute('data-stash'), 10);
+        showMenu(e.clientX, e.clientY, [
+            ['stashApply', T('menu.stashApply')],
+            ['stashPop', T('menu.stashPop')],
+            ['stashDrop', T('menu.stashDrop')]
+        ], function (action) {
+            vscode.postMessage({ command: 'action', action: action, stash: stashIndex });
+        });
+        return;
+    }
+
     var item = e.target.closest('.bitem');
     if (!item) return;
     e.preventDefault();
@@ -1900,6 +1944,11 @@ window.addEventListener('message', function (ev) {
             hideInitialLoading();
         }
         
+        renderTree();
+    } else if (m.command === 'setStashes') {
+        // The stash stack lives in the same tree but is re-sent on its own: stashing
+        // never moves HEAD, so the commit list has nothing to reload.
+        state.stashes = m.stashes || [];
         renderTree();
     } else if (m.command === 'showCherryPickResume') {
         // Show resume button on current branch node

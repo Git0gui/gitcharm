@@ -200,6 +200,31 @@ const zh: Record<string, string> = {
     'tag.pushedMultiple': '已推送 {count} 个标签到远端',
     'tag.pushFailed': '推送标签 {names} 失败: {error}',
 
+    // stash commands (stashCommands.ts)
+    'stash.none': '此仓库没有贮藏（stash）',
+    'stash.nothingToSave': '没有可贮藏的改动（未跟踪的文件不会被贮藏）',
+    'stash.messagePrompt': '贮藏说明（留空则使用默认 WIP 说明）',
+    'stash.messagePlaceholder': '例如：正在重构登录页',
+    'stash.saving': '正在贮藏当前改动...',
+    'stash.saved': '已把改动存入 stash',
+    'stash.saveFailed': '贮藏失败: {error}',
+    'stash.pickTitle': '贮藏列表',
+    'stash.pickApplyPlaceHolder': '选择要应用的贮藏',
+    'stash.pickPopPlaceHolder': '选择要弹出的贮藏',
+    'stash.pickDropPlaceHolder': '选择要删除的贮藏',
+    'stash.operationLabel': '贮藏变更',
+    'stash.applying': '正在应用 {ref}...',
+    'stash.applied': '已应用 {ref}，贮藏仍保留',
+    'stash.applyFailed': '应用贮藏失败: {error}',
+    'stash.popping': '正在弹出 {ref}...',
+    'stash.popped': '已弹出 {ref}',
+    'stash.popFailed': '弹出贮藏失败: {error}',
+    'stash.dropConfirm': '删除贮藏 {ref}：{message}？',
+    'stash.dropping': '正在删除 {ref}...',
+    'stash.dropped': '已删除贮藏 {ref}',
+    'stash.dropFailed': '删除贮藏失败: {error}',
+    'stash.dropBtn': '删除',
+
     // file diff / history
     'fileHistory.title': '文件历史',
     'fileHistory.dblclickHint': '双击提交查看该文件在此提交的改动',
@@ -292,13 +317,13 @@ const zh: Record<string, string> = {
 
     // conflict handling (helpers.ts)
     'conflict.noneDetected': '未检测到冲突文件，操作状态可能已改变。',
-    'conflict.hasConflicts': '{operation} 遇到 {count} 个文件冲突，请在源代码管理器视图中解决',
+    'conflict.hasConflicts': '{operation} 遇到 {count} 个文件冲突，已在编辑器中打开冲突文件，请在文件里解决',
     'conflict.rebaseDetail': '分支 "{current}" 变基到 "{target}" 时发生冲突',
     'conflict.mergeDetail': '合并 "{target}" 到 "{current}" 时发生冲突',
     'conflict.resolveInScm': '{detail}\n\n请在源代码管理器视图中解决所有冲突',
     'conflict.abortAction': '终止操作',
     'conflict.abortFailed': '终止失败: {error}',
-    'conflict.stillUnresolved': '仍有冲突未解决，请在源代码管理器中继续解决',
+    'conflict.stillUnresolved': '仍有冲突未解决，请继续在已打开的冲突文件里处理',
 
     // gitService / gitUtils errors
     'err.noUpstreamNoRemote': '分支 "{name}" 没有配置远端跟踪分支，且远程不存在同名分支',
@@ -348,6 +373,7 @@ const zh: Record<string, string> = {
     'ui.filterBranches': '筛选分支',
     'ui.clear': '清空',
     'ui.refreshBranches': '刷新分支',
+    'ui.stashSave': '贮藏当前改动（stash）',
     'ui.searchCommits': '提交 / 哈希...',
     'ui.author': '提交人...',
     'ui.fromDate': '起始日期',
@@ -384,6 +410,7 @@ const zh: Record<string, string> = {
     'w.divergeBehind': '落后远端 {n} 个提交，需更新',
     'w.divergeAhead': '领先远端 {n} 个提交，需推送',
     'w.headSection': 'HEAD(当前分支)',
+    'w.stashSection': '贮藏(Stash)',
     'w.resumeCherryPick': '继续挑拣 {count} 个提交（冲突在 {hash}）',
     'w.noMatch': '没有匹配的提交',
     'w.authorPrefix': '作者: ',
@@ -430,6 +457,9 @@ const zh: Record<string, string> = {
     'menu.newTag': '新建标签',
     'menu.pushTag': '推送标签',
     'menu.deleteTag': '删除标签',
+    'menu.stashApply': '应用贮藏（保留条目）',
+    'menu.stashPop': '弹出贮藏（移除条目）',
+    'menu.stashDrop': '删除贮藏',
 
     // push dialog
     'pushDlg.allCommits': '全部提交',
@@ -655,6 +685,31 @@ const en: Record<string, string> = {
     'tag.pushedMultiple': 'Pushed {count} tags to the remote',
     'tag.pushFailed': 'Failed to push tag {names}: {error}',
 
+    // stash commands (stashCommands.ts)
+    'stash.none': 'This repository has no stashes',
+    'stash.nothingToSave': 'Nothing to stash (untracked files are not stashed)',
+    'stash.messagePrompt': 'Stash description (empty uses the default WIP message)',
+    'stash.messagePlaceholder': 'e.g. reworking the login page',
+    'stash.saving': 'Stashing current changes...',
+    'stash.saved': 'Changes stored in stash',
+    'stash.saveFailed': 'Failed to stash: {error}',
+    'stash.pickTitle': 'Stash Stack',
+    'stash.pickApplyPlaceHolder': 'Select the stash to apply',
+    'stash.pickPopPlaceHolder': 'Select the stash to pop',
+    'stash.pickDropPlaceHolder': 'Select the stash to drop',
+    'stash.operationLabel': 'Stash changes',
+    'stash.applying': 'Applying {ref}...',
+    'stash.applied': 'Applied {ref}, the stash is kept',
+    'stash.applyFailed': 'Failed to apply stash: {error}',
+    'stash.popping': 'Popping {ref}...',
+    'stash.popped': 'Popped {ref}',
+    'stash.popFailed': 'Failed to pop stash: {error}',
+    'stash.dropConfirm': 'Drop stash {ref}: {message}?',
+    'stash.dropping': 'Dropping {ref}...',
+    'stash.dropped': 'Dropped stash {ref}',
+    'stash.dropFailed': 'Failed to drop stash: {error}',
+    'stash.dropBtn': 'Drop',
+
     // file diff / history
     'fileHistory.title': 'File History',
     'fileHistory.dblclickHint': 'Double-click a commit to view its changes to this file',
@@ -747,13 +802,13 @@ const en: Record<string, string> = {
 
     // conflict handling
     'conflict.noneDetected': 'No conflicting files detected; the operation state may have changed.',
-    'conflict.hasConflicts': '{operation} encountered {count} file conflicts. Resolve in Source Control view',
+    'conflict.hasConflicts': '{operation} hit {count} file conflicts. The conflicted files are open in editors, resolve them there',
     'conflict.rebaseDetail': 'Conflicts occurred while rebasing "{current}" onto "{target}"',
     'conflict.mergeDetail': 'Conflicts occurred while merging "{target}" into "{current}"',
     'conflict.resolveInScm': '{detail}\n\nResolve all conflicts in the Source Control view',
     'conflict.abortAction': 'Abort operation',
     'conflict.abortFailed': 'Failed to abort: {error}',
-    'conflict.stillUnresolved': 'Conflicts remain unresolved; continue resolving them in the Source Control view',
+    'conflict.stillUnresolved': 'Conflicts remain unresolved; keep resolving them in the opened files',
 
     // gitService / gitUtils errors
     'err.noUpstreamNoRemote': 'Branch "{name}" has no upstream and no same-named remote branch',
@@ -803,6 +858,7 @@ const en: Record<string, string> = {
     'ui.filterBranches': 'Filter branches',
     'ui.clear': 'Clear',
     'ui.refreshBranches': 'Refresh branches',
+    'ui.stashSave': 'Stash current changes',
     'ui.searchCommits': 'Message / hash...',
     'ui.author': 'Author...',
     'ui.fromDate': 'Start date',
@@ -839,6 +895,7 @@ const en: Record<string, string> = {
     'w.divergeBehind': '{n} behind remote, update needed',
     'w.divergeAhead': '{n} ahead of remote, push needed',
     'w.headSection': 'HEAD (current branch)',
+    'w.stashSection': 'Stashes',
     'w.noMatch': 'No matching commits',
     'w.authorPrefix': 'Author: ',
     'w.timePrefix': 'Date: ',
@@ -885,6 +942,9 @@ const en: Record<string, string> = {
     'menu.newTag': 'New Tag',
     'menu.pushTag': 'Push Tag',
     'menu.deleteTag': 'Delete Tag',
+    'menu.stashApply': 'Apply Stash (keep entry)',
+    'menu.stashPop': 'Pop Stash (remove entry)',
+    'menu.stashDrop': 'Drop Stash',
 
     // push dialog
     'pushDlg.allCommits': 'All Commits',

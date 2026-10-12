@@ -262,6 +262,43 @@ export function parseWorkingTreeSummary(raw: string): WorkingTreeSummary {
     };
 }
 
+/** One entry of the stash stack, i.e. one commit of the stash reflog. */
+export interface StashEntry {
+    /** Position in the stack: `stash@{0}` is the newest. Shifts when a stash is dropped. */
+    index: number;
+    /** The stash subject (`On main: note`, `WIP on main: 1a2b3c4 msg`, …). */
+    message: string;
+    /** ISO 8601 author date of the stash commit. */
+    date: string;
+}
+
+/**
+ * Parse `git log -g stash --format=%gd%x00%gs%x00%aI` output.
+ *
+ * Fields are NUL-separated, not pipe-separated, because a stash subject is free
+ * text that routinely contains a pipe (`WIP on main: 1a2b3c4 fix a|b`) and would
+ * otherwise be cut in half. The date comes from `%aI`: `git stash list` cannot
+ * emit any date format, while the reflog log gives index, subject and date in a
+ * single spawn.
+ */
+export function parseStashList(raw: string): StashEntry[] {
+    const entries: StashEntry[] = [];
+    for (const line of raw.split('\n')) {
+        const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line;
+        if (!trimmed.trim()) {continue;}
+
+        const parts = trimmed.split('\0');
+        const indexMatch = /stash@\{(\d+)\}/.exec(parts[0] ?? '');
+        if (!indexMatch) {continue;}
+        entries.push({
+            index: Number.parseInt(indexMatch[1], 10),
+            message: (parts[1] ?? '').trim(),
+            date: (parts[2] ?? '').trim()
+        });
+    }
+    return entries;
+}
+
 /** The operation an in-progress merge/rebase/cherry-pick leaves behind. */
 export type InProgressOperation = 'rebase' | 'merge' | 'cherry-pick' | 'revert';
 

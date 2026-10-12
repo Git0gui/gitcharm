@@ -52,6 +52,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     // Tip of the rev the middle list is showing; a change means history moved
     // outside this extension and the commit rows have to follow.
     private _lastKnownTip: string | undefined;
+    // Contents of refs/stash ('' when the repo has none); a change means a stash
+    // was created, applied or dropped outside this extension.
+    private _lastStashSignature: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
     // Last known in-progress operation; also the value replayed on the 'ready'
@@ -184,6 +187,25 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Re-send the stash stack. Stashes never move HEAD, so a full reload would be
+     * the wrong tool: the commit list is still accurate, only the tree section is.
+     */
+    refreshStashes(): void {
+        void this._postStashes();
+    }
+
+    /**
+     * Read the stash stack and hand it to the tree. The signature is recorded with
+     * the value that was posted, so the poll below only re-reads when it moves.
+     */
+    private async _postStashes(): Promise<void> {
+        if (!this._view) {return;}
+        this._lastStashSignature = this._gitService.getStashRefSignature();
+        const stashes = await this._gitService.getStashes();
+        this._post({ command: 'setStashes', stashes });
+    }
+
+    /**
      * Decide what the panel can actually show, then either paint the guidance
      * page or load history. Every git query is skipped while git is missing,
      * the workspace is not a repository, or the repository has no commits —
@@ -211,6 +233,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
         // No history to show: reset both regions so nothing stale stays on screen
         this._post({ command: 'setBranches', local: [], remote: [], currentBranch: '' });
+        this._post({ command: 'setStashes', stashes: [] });
         this._post({ command: 'setCommits', commits: [], hasMore: false });
         return state;
     }
@@ -884,6 +907,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     this._lastKnownTip = tip;
                 }
             }
+
+            // Same idea for the stash stack: a `git stash` in a terminal moves
+            // refs/stash without touching HEAD, so nothing else would notice. The
+            // comparison is one small file read; the respawn happens only once the
+            // signature actually differs (and never at all in a repo with no stashes).
+            if (this._gitService.getStashRefSignature() !== this._lastStashSignature) {
+                logger.info('[GitCharm] Stash stack changed externally');
+                void this._postStashes();
+            }
         } catch (err) {
             // Ignore errors during branch check
         }
@@ -1084,6 +1116,23 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'pushTag':
                     await vscode.commands.executeCommand('idea-git.pushTag', commitNode);
                     return;
+                case 'stashSave':
+                    await vscode.commands.executeCommand('idea-git.stashSave');
+                    return;
+                case 'stashApply':
+                case 'stashPop':
+                case 'stashDrop': {
+                    // Stashes touch the worktree, never HEAD, so the commit list stays
+                    // accurate; each command re-sends the stack itself.
+                    const stashNode = { stash: message.stash };
+                    await vscode.commands.executeCommand(
+                        message.action === 'stashApply' ? 'idea-git.stashApply'
+                            : message.action === 'stashPop' ? 'idea-git.stashPop'
+                                : 'idea-git.stashDrop',
+                        stashNode
+                    );
+                    return;
+                }
                 case 'reset':
                     await vscode.commands.executeCommand('idea-git.resetToCommit', commitNode);
                     forceReload = true;
@@ -1297,6 +1346,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 remote: details.remote.map(b => b.name),
                 currentBranch: details.current
             });
+            void this._postStashes();
             
             // Async refresh divergence after branches are updated (non-blocking)
             setTimeout(() => {
@@ -1351,6 +1401,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 remote: details.remote.map(b => b.name),
                 currentBranch: details.current
             });
+            // Stashes live in the same tree, so they load alongside the branches.
+            void this._postStashes();
 
             // Update head hash separately when ready (don't wait for it)
             const headHash = await headHashPromise;
@@ -1464,6 +1516,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 local: details.local.map(b => b.name),
                 remote: details.remote.map(b => b.name)
             });
+            void this._postStashes();
             // Also refresh divergence info (ahead/behind arrows)
             await this._refreshDivergence();
         } catch (error) {
@@ -1538,6 +1591,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12l-4.5 5.5V14l-3-1.5V8.5z"/></svg>
                 <input id="f-bfilter" type="text" placeholder="${t('ui.filterBranches')}">
                 <button class="clr" style="display:none" id="clr-bfilter" title="${t('ui.clear')}" type="button">&#10005;</button>
+                <button class="col-refresh no-spin" id="stash-save" title="${t('ui.stashSave')}">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>
+                </button>
                 <button class="col-refresh" id="rf-branch" title="${t('ui.refreshBranches')}">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 1.5v3h-3"/></svg>
                 </button>

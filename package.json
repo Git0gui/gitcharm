@@ -199,6 +199,26 @@
         "command": "idea-git.pushTag",
         "title": "%cmd.pushTag%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashSave",
+        "title": "%cmd.stashSave%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashApply",
+        "title": "%cmd.stashApply%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashPop",
+        "title": "%cmd.stashPop%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashDrop",
+        "title": "%cmd.stashDrop%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {
