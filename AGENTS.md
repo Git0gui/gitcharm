@@ -41,6 +41,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 命令输出是 `Buffer`，必须显式 `toString('utf8')`，避免 StringDecoder 拼接错误。
 - 查询优先用 plumbing 并带机器友好格式：`status -z`、`blame --porcelain`、`ls-files -u`、`for-each-ref --format=...`，解析 `-z` 输出按 NUL 分隔。
 - 写提交消息类内容用 `-F`（文件）或 stdin，**禁止拼进命令行**（注入风险 + 编码问题）。
+- **pathspec（路径过滤）一律追加在 `--` 之后**：`… -- <path>…`。有 `--` 兜底，前导 `-` 不可能被 git 当选项，所以不必再拒绝这类字符（那是仓库内真实存在的文件名）；把 pathspec 混在选项区里则等于开注入面。注意带 pathspec 的 `git log` 会做**按路径的历史简化**，未触及这些路径的 merge 提交不再出现，这是预期语义不是 bug。
 - rebase/squash 等需要编辑器的操作：用 `env` + `cp` 作为 GIT_EDITOR/GIT_SEQUENCE_EDITOR，不要依赖交互式编辑器。
 
 ### 禁止依赖 vscode.git（已彻底移除）
@@ -109,6 +110,9 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 自动刷新必须带 `preserveSelection`：webview 只在所选提交仍存在于新列表时保留选中项、详情、折叠态与滚动位置，否则退回全量重置——不带这个标志，用户在终端每提交一次面板就跳回顶部、第三栏清空。
 - 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
+- **切换仓库只准走 `GraphViewProvider.switchRepository`**：面板切换器与 `idea-git.selectRepository` 命令共用这一条路径，保证重置的是同一批状态（`_branch`、选中提交、`_lastInProgress`、待落盘的视图快照，并按新 git 目录重新挂 watcher / auto-fetch）。git 允许不同项目重名分支与相同短哈希，任何一处"自己换个 root 就完事"都会把上一个项目的状态带进新仓库。文本过滤器是用户输入而非仓库状态，切换时**必须保留**，否则输入框与宿主过滤条件不一致。
+- **缓存与快照必须能识别自己属于哪个仓库**：钉住的仓库写在 `workspaceState`（`idea-git.selectedRepository`），启动时用 `_hasGitDir` 校验，目录搬走就交给自动发现；持久化视图快照由宿主盖 `repoPath`，与当前仓库不匹配即丢弃（同 `PersistedBranchCache` 的 repoPath 校验思路）。
+- **后台 / 定时任务禁止走 `_execNetwork`**：它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框。自动 fetch 用 `fetchSilent()`（绕开 askpass + `GIT_TERMINAL_PROMPT=0` + 有限超时 + 失败只记 `logger.debug`），且先用 fs 读 `.git/config` 判断有没有远端——没远端一个子进程都不 spawn。这类任务还要绑"面板可见"条件，与分支 watcher 同起同停。
 
 ## 9. Git 工作流约束（AI 协作红线）
 
