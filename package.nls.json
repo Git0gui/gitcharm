@@ -38,7 +38,7 @@
     "cmd.stashPop": "Pop Stash (remove entry)",
     "cmd.stashDrop": "Drop Stash",
     "cmd.showReflog": "Show Reflog (recover lost commits)",
-    "cmd.selectRepository": "Switch Repository (multi-root workspace)",
+    "cmd.selectRepository": "Switch Repository (workspaces holding several repositories)",
     "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "Enable branch info caching for faster startup (cache is persisted and only updated on repository changes or Git operations)",
     "config.pullStrategy": "Update strategy when pulling a remote branch",

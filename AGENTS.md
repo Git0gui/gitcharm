@@ -75,7 +75,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 ## 6. Webview 规范
 
 - **消息协议必须类型化**：所有扩展↔webview 消息在 `src/views/messages.ts` 定义为判别联合（`command` 字段），禁止 `as any`。
-- **扩展→webview 首屏消息必须等 `ready` 握手**再投递（html 设置后立即 postMessage 会丢失）；等待期间缓冲，ready 时 flush。
+- **扩展→webview 首屏消息必须等 `ready` 握手**再投递（html 设置后立即 postMessage 会丢失）；等待期间缓冲，ready 时 flush。缓冲集中在 `GraphViewProvider._post`：刷屏类消息（`SCREEN_COMMANDS` 列出的那些）按 command 只留最新值，`case 'ready'` 里先 `_flushScreen()` 再 `_postRepoState()`。**隐藏视图即 DOM 销毁，`onDidChangeVisibility` 必须把 `_webviewReady` 置回 false 并清空缓冲**，否则消息打进已死的帧——多仓库冷启动走缓存快路径就会赢下这条竞态，分支与提交全丢、面板永卡骨架屏（第三栏反而有数据，因为它走的是握手后的往返）。
 - **内联 JS 在 TS 模板串里要双重转义**：`\n` 等序列会静默杀死整段内联脚本。
 - **XSS 防线**：所有插入 HTML 的动态文本走统一的 `esc()`（webview.js 内集中实现），禁止字符串拼接原始数据。
 - **tooltip 用 `data-title` + 自定义浮层**，不用原生 `title`（白色原生 tooltip 会与主题浮层重叠）；多行内容 CSS 需 `white-space: pre-wrap`；`contextmenu` 时调 `window._hideTooltip()` 避免与右键菜单叠层。
@@ -111,6 +111,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
 - **切换仓库只准走 `GraphViewProvider.switchRepository`**：面板切换器与 `idea-git.selectRepository` 命令共用这一条路径，保证重置的是同一批状态（`_branch`、选中提交、`_lastInProgress`、待落盘的视图快照，并按新 git 目录重新挂 watcher / auto-fetch）。git 允许不同项目重名分支与相同短哈希，任何一处"自己换个 root 就完事"都会把上一个项目的状态带进新仓库。文本过滤器是用户输入而非仓库状态，切换时**必须保留**，否则输入框与宿主过滤条件不一致。
+- **仓库发现是"向上 + 向下"两条路**：`_findGitRoot` 的向上探测解决"文件夹在仓库里面"，但真实工作区更常见的是**一个普通父目录并排十几个独立仓库**——向上探不到，切换器就会数出 1 个仓库、干脆不出现。向下扫（`discoverRepositoryRoots`）必须带三条护栏：命中仓库即停（不再往里 list，这是成本的主要来源）、跳过点目录与依赖/构建树、深度与目录预算上限；结果缓存在 `_discoveredRoots`，只在 `_resetRootDiscovery()`（文件夹增减、`git init`、克隆出现/消失）时失效。实测十几个仓库 5ms。
 - **缓存与快照必须能识别自己属于哪个仓库**：钉住的仓库写在 `workspaceState`（`idea-git.selectedRepository`），启动时用 `_hasGitDir` 校验，目录搬走就交给自动发现；持久化视图快照由宿主盖 `repoPath`，与当前仓库不匹配即丢弃（同 `PersistedBranchCache` 的 repoPath 校验思路）。
 - **后台 / 定时任务禁止走 `_execNetwork`**：它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框。自动 fetch 用 `fetchSilent()`（绕开 askpass + `GIT_TERMINAL_PROMPT=0` + 有限超时 + 失败只记 `logger.debug`），且先用 fs 读 `.git/config` 判断有没有远端——没远端一个子进程都不 spawn。这类任务还要绑"面板可见"条件，与分支 watcher 同起同停。
 

@@ -29,6 +29,7 @@ import {
     parseGitConfigRemoteNames,
     pickFetchRemote,
     collectRepositoryRoots,
+    discoverRepositoryRoots,
     repositoryKey,
     RepositoryOption,
     tagNameProblem,
@@ -163,6 +164,9 @@ export class GitService {
     private _rootMemo = new Map<string, string | undefined>();
     private _rootKey: string | undefined;
     private _rootValue: string | undefined;
+    // Repositories found by listing below the workspace folders; the one part of
+    // discovery that reads directories, so it is kept until the layout changes.
+    private _discoveredRoots: string[] | undefined;
     // Repository the user pinned in the panel's switcher (multi-root workspaces).
     // Wins over discovery while it is still a repository; persisted per workspace.
     private _pinnedRoot: string | undefined;
@@ -198,9 +202,7 @@ export class GitService {
 
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             // Only clear root memo when workspace folders change; keep caches alive
-            this._rootMemo.clear();
-            this._rootKey = undefined;
-            this._rootValue = undefined;
+            this._resetRootDiscovery();
             // Re-resolve root for new workspace
             this._repositoryPath = this._resolveRoot();
             this._startRepositoryWatch();
@@ -311,9 +313,7 @@ export class GitService {
      * panel reacts without a restart.
      */
     refreshRepositoryPath(): string | undefined {
-        this._rootMemo.clear();
-        this._rootKey = undefined;
-        this._rootValue = undefined;
+        this._resetRootDiscovery();
         this.clearAllCaches();
         const root = this._resolveRoot();
         // The watcher follows a specific directory, so a new repo (git init, clone)
@@ -323,21 +323,56 @@ export class GitService {
     }
 
     /**
-     * Repositories the panel can offer: one per workspace folder that sits inside
-     * a git repository, in workspace order, deduplicated — several folders of one
-     * repository give a single entry. Uses the same walk-up discovery as the
-     * implicit root, so a multi-root workspace behaves exactly as it did before
-     * the user picks anything. Purely filesystem: no subprocess per folder.
+     * Repositories the panel can offer, in workspace order and deduplicated: the
+     * repository behind each workspace folder plus every sibling project below a
+     * plain parent directory, so several folders of one repository still give a
+     * single entry. Purely filesystem — no subprocess per folder, one bounded
+     * directory listing per level the scan descends.
      */
     listRepositories(): RepositoryOption[] {
-        const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
-        const roots = collectRepositoryRoots(folders, dir => this._probeRoot(dir));
+        const roots = this._discoverRoots();
         const current = this._resolveRoot();
         if (current && !roots.some(r => repositoryKey(r) === repositoryKey(current))) {
             // Pinned root outside every workspace folder (e.g. a linked worktree)
             roots.unshift(current);
         }
         return roots.map(root => ({ path: root, name: path.basename(root) }));
+    }
+
+    /**
+     * Workspace folders resolved to repositories, in workspace order. A folder
+     * opened inside a repository resolves upward; a folder opened above a dozen
+     * sibling projects has to be listed downward instead, which is the layout the
+     * implicit lookup cannot see at all.
+     */
+    private _discoverRoots(): string[] {
+        if (this._discoveredRoots) {return [...this._discoveredRoots];}
+        const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+        const upward = collectRepositoryRoots(folders, dir => this._probeRoot(dir));
+        const downward = discoverRepositoryRoots(
+            folders,
+            (dir, child) => path.join(dir, child),
+            dir => this._hasGitDir(path.join(dir, '.git')),
+            dir => this._listChildDirs(dir)
+        );
+        const roots = collectRepositoryRoots([...upward, ...downward], dir => dir);
+        this._discoveredRoots = roots;
+        return [...roots];
+    }
+
+    /**
+     * Immediate subdirectories of `dir`. A directory that cannot be read (no
+     * permission, deleted between listing and stat) simply contributes nothing.
+     */
+    private _listChildDirs(dir: string): string[] {
+        try {
+            return fs.readdirSync(dir, { withFileTypes: true })
+                .filter(entry => entry.isDirectory())
+                .map(entry => entry.name);
+        } catch (error) {
+            logger.debug('[GitCharm] repository scan skipped:', dir, error);
+            return [];
+        }
     }
 
     /**
@@ -350,9 +385,7 @@ export class GitService {
     selectRepository(root: string | undefined): void {
         this._pinnedRoot = this._isRepository(root);
         void this._memento.update(GitService.PINNED_REPOSITORY_KEY, this._pinnedRoot);
-        this._rootMemo.clear();
-        this._rootKey = undefined;
-        this._rootValue = undefined;
+        this._resetRootDiscovery();
         this.clearAllCaches();
         this._selectedBranch = undefined;
         this._selectedCommitHash = undefined;
@@ -441,6 +474,19 @@ export class GitService {
      */
     clearCherryPickResume(memento: vscode.Memento): void {
         memento.update(GitService.CHERRY_PICK_RESUME_KEY, undefined);
+    }
+
+    /**
+     * Forget everything root discovery remembers: the per-directory walk-up memo,
+     * the resolved root and the directory listing behind the repository list.
+     * Called wherever the workspace layout may have changed (folders added or
+     * removed, `git init`, a clone appearing or disappearing).
+     */
+    private _resetRootDiscovery(): void {
+        this._rootMemo.clear();
+        this._rootKey = undefined;
+        this._rootValue = undefined;
+        this._discoveredRoots = undefined;
     }
 
     /**

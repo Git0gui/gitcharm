@@ -513,6 +513,71 @@ export function collectRepositoryRoots(
     return roots;
 }
 
+/** Never worth descending into: dependency and build trees hold no project. */
+const SCAN_IGNORED_DIRS: ReadonlySet<string> = new Set([
+    'node_modules', 'bower_components', 'jspm_packages', 'web_modules', 'vendor',
+    'dist', 'build', 'out', 'target', 'bin', 'obj', '__pycache__'
+]);
+
+export interface RepositoryScanOptions {
+    /** Levels below the start directory to look for a repository (0 checks only the starts). */
+    maxDepth?: number;
+    /** Directories to visit at most, so an unusual workspace root cannot stall the host. */
+    budget?: number;
+}
+
+/**
+ * Repositories contained in the trees below `startDirs`, breadth-first, in
+ * discovery order and deduplicated.
+ *
+ * Walking up from a workspace folder only finds a repository when the folder
+ * *is* one. The layout that actually shows up in practice is a plain parent
+ * directory holding a dozen sibling projects, each with its own `.git` — git
+ * itself reports those, so a repository picker has to look downward too.
+ *
+ * Describing the tree is the caller's job through `isRepository` / `listChildren`
+ * to keep this testable and fs-free; `budget` is consumed per directory listed.
+ */
+export function discoverRepositoryRoots(
+    startDirs: readonly string[],
+    join: (dir: string, child: string) => string,
+    isRepository: (dir: string) => boolean,
+    listChildren: (dir: string) => readonly string[],
+    options: RepositoryScanOptions = {},
+    caseInsensitive = process.platform === 'win32'
+): string[] {
+    const maxDepth = options.maxDepth ?? 2;
+    let budget = options.budget ?? 1000;
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    const queue: Array<{ dir: string; depth: number }> = startDirs.map(dir => ({ dir, depth: 0 }));
+
+    while (queue.length > 0) {
+        const next = queue.shift() as { dir: string; depth: number };
+        const key = repositoryKey(next.dir, caseInsensitive);
+        if (seen.has(key)) {continue;}
+        seen.add(key);
+
+        if (isRepository(next.dir)) {
+            roots.push(next.dir);
+            // A repository's own tree is never listed: that is where the huge,
+            // irrelevant directories live, and its projects are already roots.
+            continue;
+        }
+        if (next.depth >= maxDepth || budget <= 0) {continue;}
+        budget--;
+
+        for (const child of listChildren(next.dir)) {
+            // Dot-directories are tooling state, not projects, and listing them is
+            // how a scan wanders into ~/.gradle-sized trees for nothing.
+            if (!child || child.startsWith('.') || SCAN_IGNORED_DIRS.has(child.toLowerCase())) {continue;}
+            queue.push({ dir: join(next.dir, child), depth: next.depth + 1 });
+        }
+    }
+
+    return roots;
+}
+
 /**
  * Read a remote's URL straight out of git's config file (no subprocess).
  * Sections look like `[remote "origin"]` followed by `url = …`; the quotes are

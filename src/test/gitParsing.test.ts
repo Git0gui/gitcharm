@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -579,5 +579,80 @@ describe('collectRepositoryRoots', () => {
 
     it('returns nothing for an empty workspace', () => {
         assert.deepEqual(collectRepositoryRoots([], probe, false), []);
+    });
+});
+
+describe('discoverRepositoryRoots', () => {
+    const join = (dir: string, child: string) => `${dir}/${child}`;
+
+    /**
+     * Drive the scan over a fake tree: `dirs` maps a directory to its child
+     * names, `repos` lists the ones that hold a `.git`. `visited` collects every
+     * directory whose children were listed, which is what costs real I/O.
+     */
+    function scan(
+        startDirs: string[],
+        dirs: Record<string, string[]>,
+        repos: string[],
+        options?: { maxDepth?: number; budget?: number },
+        visited?: string[]
+    ): string[] {
+        const known = new Set(repos);
+        return discoverRepositoryRoots(startDirs, join, dir => known.has(dir), dir => {
+            visited?.push(dir);
+            return dirs[dir] ?? [];
+        }, options, false);
+    }
+
+    it('finds the sibling repositories below a plain parent folder', () => {
+        assert.deepEqual(scan(['D:/Work'], {
+            'D:/Work': ['app', 'lib', 'Notes'],
+            'D:/Work/Notes': ['scratch']
+        }, ['D:/Work/lib', 'D:/Work/app']), ['D:/Work/app', 'D:/Work/lib']);
+    });
+
+    it('never lists inside a repository it already found', () => {
+        const visited: string[] = [];
+        scan(['D:/Work'], {
+            'D:/Work': ['app'],
+            'D:/Work/app': ['deep', 'nested', 'src', 'test', 'docs']
+        }, ['D:/Work/app'], undefined, visited);
+        assert.deepEqual(visited, ['D:/Work']);
+    });
+
+    it('skips dependency, build and hidden directories', () => {
+        assert.deepEqual(scan(['D:/Work'], {
+            'D:/Work': ['node_modules', '.cache', 'dist', 'real']
+        }, ['D:/Work/node_modules/left-pad', 'D:/Work/.cache/probe', 'D:/Work/dist/x', 'D:/Work/real']),
+        ['D:/Work/real']);
+    });
+
+    it('respects the depth limit', () => {
+        const dirs = {
+            'D:/Work': ['team'],
+            'D:/Work/team': ['sandbox'],
+            'D:/Work/team/sandbox': ['repo']
+        };
+        const repos = ['D:/Work/team/sandbox/repo'];
+        assert.deepEqual(scan(['D:/Work'], dirs, repos, { maxDepth: 2 }), []);
+        assert.deepEqual(scan(['D:/Work'], dirs, repos, { maxDepth: 3 }), repos);
+    });
+
+    it('reports the start directory itself when it is a repository', () => {
+        const visited: string[] = [];
+        assert.deepEqual(scan(['D:/Work/app'], { 'D:/Work/app': ['src'] }, ['D:/Work/app'], undefined, visited),
+            ['D:/Work/app']);
+        assert.deepEqual(visited, []);
+    });
+
+    it('dedupes a repository reachable from two start directories', () => {
+        assert.deepEqual(scan(['D:/Work', 'D:/Work/team'], {
+            'D:/Work': ['team'],
+            'D:/Work/team': ['app']
+        }, ['D:/Work/team/app']), ['D:/Work/team/app']);
+    });
+
+    it('stops listing once the budget is spent', () => {
+        assert.deepEqual(scan(['D:/Work'], { 'D:/Work': ['app'] }, ['D:/Work/app'], { budget: 0 }), []);
     });
 });

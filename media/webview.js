@@ -1817,12 +1817,6 @@ function sameRepo(a, b) {
     return !!a && !!b && repoKey(a) === repoKey(b);
 }
 
-function baseName(p) {
-    var parts = String(p || '').replace(/\\/g, '/').split('/');
-    while (parts.length && !parts[parts.length - 1]) { parts.pop(); }
-    return parts.length ? parts[parts.length - 1] : String(p || '');
-}
-
 /**
  * The switcher only shows up when there is something to switch between: with a
  * single repository it would be a menu holding one entry.
@@ -1837,8 +1831,10 @@ function renderRepoSwitcher() {
         return;
     }
     var current = repos.filter(function (r) { return sameRepo(r.path, state.currentRepository); })[0];
-    name.textContent = current ? current.name : baseName(state.currentRepository);
-    name.setAttribute('data-title', state.currentRepository);
+    // With no repository resolved the chip is the way out of the guidance page,
+    // so it needs a label of its own rather than an empty name.
+    name.textContent = current ? current.name : (state.currentRepository || T('repo.title'));
+    name.setAttribute('data-title', state.currentRepository || T('repo.hint'));
     row.style.display = '';
 }
 

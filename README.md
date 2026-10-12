@@ -78,7 +78,7 @@ GitCharm provides a three-panel Git log view:
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
 - **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
 - **Optional background fetch**: set `idea-git.autoFetchMinutes` and the panel fetches from the remote every N minutes while it is open, refreshing the branch tree and the ahead/behind arrows. Silent by design — no credential prompt, no error toast, and no subprocess at all when the repository has no remote
-- **Multi-root workspaces**: a workspace holding several repositories gets a repository switcher above the branch tree (and `GitCharm: Switch Repository` in the command palette); the choice is remembered per workspace, and switching clears what belonged to the other repository instead of reusing branch names and hashes that only look valid
+- **Several repositories in one workspace**: whether they come from several workspace folders or from a plain parent directory holding a dozen sibling projects, GitCharm discovers them all and puts a repository switcher above the branch tree (and `GitCharm: Switch Repository` in the command palette); the choice is remembered per workspace, and switching clears what belonged to the other repository instead of reusing branch names and hashes that only look valid
 
 ## Requirements
 
@@ -236,7 +236,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
 - **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
 - **可选的后台定时 fetch**：设置 `idea-git.autoFetchMinutes` 后，面板打开期间每隔 N 分钟静默 fetch 一次，只更新分支树与超前/落后箭头。刻意保持安静：不弹凭据输入、不弹错误提示，仓库没有远端时一个子进程也不 spawn
-- **多根工作区**：一个工作区里有多个仓库时，分支树上方出现仓库切换器（命令面板另有 `GitCharm: 切换仓库`），选择按工作区记忆；切换会清掉属于另一个仓库的状态，而不是拿"看着像真的"的同名分支与短哈希继续用。只有一个仓库时这个控件不出现
+- **一个工作区里有多个仓库**：不管它们来自多个工作区文件夹，还是一个普通父目录下并排的十几个工程，都会被一并发现，分支树上方出现仓库切换器（命令面板另有 `GitCharm: 切换仓库`），选择按工作区记忆；切换会清掉属于另一个仓库的状态，而不是拿"看着像真的"的同名分支与短哈希继续用。只有一个仓库时这个控件不出现
 
 ## 环境要求
 
