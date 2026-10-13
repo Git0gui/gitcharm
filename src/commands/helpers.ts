@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { GitService } from '../services/gitService';
+import { GitService, InProgressOperation } from '../services/gitService';
 import { GraphViewProvider } from '../views/graphView';
+import { isEmptyCommitStop, emptyCommitStopInfo, formatGitError } from '../services/gitUtils';
 import { t } from '../i18n';
 
 /**
@@ -94,6 +95,132 @@ export async function tryHandleConflict(
     }
 
     return false;
+}
+
+/** The choice the user made about a step that turned out to be empty. */
+export type EmptyStepChoice = 'skip' | 'keep' | 'abort' | 'cancel';
+
+/**
+ * `op.<kind>` / `op.cherryPick` — the label for whichever operation is in
+ * progress, used by the conflict and abort paths below. Adding a kind to
+ * InProgressOperation means adding that key in both dictionaries; the i18n
+ * parity test fails until it is there.
+ */
+export function inProgressLabel(operation: InProgressOperation): string {
+    return operation === 'cherry-pick' ? t('op.cherryPick') : `op.${operation}`;
+}
+
+/**
+ * End whichever operation is in progress. Shared by the panel's 终止 command and
+ * the empty-step dialog below, which have to dispatch the same four ways.
+ */
+export async function abortInProgressOperation(
+    gitService: GitService,
+    operation: InProgressOperation
+): Promise<void> {
+    if (operation === 'rebase') {
+        await gitService.rebaseAbort();
+    } else if (operation === 'merge') {
+        await gitService.mergeAbort();
+    } else if (operation === 'revert') {
+        await gitService.revertAbort();
+    } else {
+        await gitService.abortCherryPick();
+    }
+}
+
+/**
+ * git stops a cherry-pick / rebase / revert when the step's changes turn out to
+ * be empty — normally because the user resolved a conflict by keeping what the
+ * other side already had. It answers by printing its whole advice block, which
+ * is really three options: skip the step, land it anyway as an empty commit, or
+ * call it off. Ask for one of those instead, and carry out the answer.
+ *
+ * Returns undefined when this is not that kind of stop, so the caller keeps its
+ * own handling; 'cancel' means the user declined to choose and the operation is
+ * still in progress (the panel's continue/abort bar is then the way out).
+ */
+export async function tryHandleEmptyCommitStop(
+    error: unknown,
+    gitService: GitService,
+    graphView: GraphViewProvider
+): Promise<EmptyStepChoice | undefined> {
+    if (!isEmptyCommitStop(combineErrorText(error))) {return undefined;}
+
+    const operation = await gitService.getInProgressOperation();
+    if (!operation) {
+        // Nothing is in progress any more: git finished the step its own way
+        // (it drops a commit that is already upstream). Let the caller report.
+        return undefined;
+    }
+
+    const info = emptyCommitStopInfo(combineErrorText(error));
+    const commit = info.hash ? `${info.hash.substring(0, 7)}${info.subject ? ` ${info.subject}` : ''}` : '';
+    const choice = await graphView.showDialog(
+        t('op.emptyStop', { commit }),
+        [t('op.emptySkip'), t('op.emptyKeep'), t('op.abort')],
+        'warn'
+    );
+
+    if (choice !== t('op.emptySkip') && choice !== t('op.emptyKeep') && choice !== t('op.abort')) {
+        return 'cancel';
+    }
+
+    try {
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: choice === t('op.emptySkip') ? t('op.emptySkip') : choice,
+            cancellable: false
+        }, async () => {
+            if (choice === t('op.emptySkip')) {
+                if (operation === 'rebase') {
+                    await gitService.rebaseSkip();
+                } else if (operation === 'revert') {
+                    await gitService.revertSkip();
+                } else {
+                    await gitService.cherryPickSkip();
+                }
+                return;
+            }
+            if (choice === t('op.emptyKeep')) {
+                await gitService.commitEmptyStep();
+                // Committing the step ends it, but a rebase always has a todo
+                // left, and a multi-commit cherry-pick/revert keeps its queue in
+                // .git/sequencer — git commit does not resume either.
+                if (operation === 'rebase') {
+                    await gitService.rebaseContinue();
+                } else if (gitService.hasPendingSequencerSteps()) {
+                    if (operation === 'revert') {
+                        await gitService.revertContinue();
+                    } else {
+                        await gitService.cherryPickContinue();
+                    }
+                }
+                return;
+            }
+            await abortInProgressOperation(gitService, operation);
+        });
+    } catch (inner) {
+        // Resuming the queue can stop on the *next* step's conflicts, which is
+        // the ordinary conflict path, not a failure of the choice just made.
+        if (await gitService.getInProgressOperation()) {
+            await handleConflictLoop(gitService, graphView, inProgressLabel(operation));
+            return 'cancel';
+        }
+        vscode.window.showErrorMessage(t('op.emptyStopFailed', { error: formatGitError(inner) }));
+        graphView.refresh();
+        return 'cancel';
+    }
+
+    vscode.window.showInformationMessage(
+        choice === t('op.emptySkip')
+            ? t('op.emptySkipped', { commit })
+            : choice === t('op.emptyKeep')
+                ? t('op.emptyKept', { commit })
+                : t('op.aborted')
+    );
+    graphView.refresh();
+    return choice === t('op.emptySkip') ? 'skip' : choice === t('op.emptyKeep') ? 'keep' : 'abort';
 }
 
 /** Cap so a rebase over a wide conflict set doesn't flood the editor with tabs. */

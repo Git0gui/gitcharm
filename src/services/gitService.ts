@@ -1521,11 +1521,68 @@ export class GitService {
     }
 
     /**
+     * Continue a cherry-pick that stopped on conflicts (or on a step that came
+     * out empty). GIT_EDITOR=true for the same reason as the other --continue
+     * calls: the extension host has no terminal to hand an interactive editor.
+     */
+    async cherryPickContinue(): Promise<string> {
+        const output = await this._execMutateWithEnv(['cherry-pick', '--continue'], { GIT_EDITOR: 'true' });
+        return output || t('op.cherryPickCompleted');
+    }
+
+    /**
      * Abort the current revert and restore the pre-revert state.
      */
     async revertAbort(): Promise<string> {
         const output = await this._execMutate(['revert', '--abort']);
         return output || t('op.revertAborted');
+    }
+
+    /**
+     * Drop the step a rebase stopped on and carry on with the rest of the todo —
+     * the way out git itself names for a step whose changes came out empty.
+     */
+    async rebaseSkip(): Promise<string> {
+        return this._execMutate(['rebase', '--skip']);
+    }
+
+    /** Skip the stopped cherry-pick and move to the next one. */
+    async cherryPickSkip(): Promise<string> {
+        return this._execMutate(['cherry-pick', '--skip']);
+    }
+
+    /** Skip the stopped revert and move to the next one. */
+    async revertSkip(): Promise<string> {
+        return this._execMutate(['revert', '--skip']);
+    }
+
+    /**
+     * Land the stopped step as an empty commit, keeping its original message.
+     * `--no-edit` is load-bearing: without it git opens an editor for the
+     * prepared message. Measured on a stopped cherry-pick — with `--no-edit` no
+     * editor is started even when GIT_EDITOR cannot run, and the commit reuses
+     * the picked message and ends the step.
+     */
+    async commitEmptyStep(): Promise<string> {
+        return this._execMutate(['commit', '--allow-empty', '--no-edit']);
+    }
+
+    /**
+     * Whether the stopped operation was part of a sequence with steps left to
+     * run. `git commit` lands the stopped step and clears CHERRY_PICK_HEAD /
+     * REVERT_HEAD, but it does not resume the queue — only `--continue` does
+     * that, and a single cherry-pick has no queue at all (measured: git 2.45.1
+     * leaves no `sequencer` directory in the worktree's git dir for one).
+     */
+    hasPendingSequencerSteps(): boolean {
+        const gitDir = this._gitDir();
+        if (!gitDir) {return false;}
+        try {
+            const todo = fs.readFileSync(path.join(gitDir, 'sequencer', 'todo'), 'utf8');
+            return todo.split(/\r?\n/).some(line => line.trim().length > 0 && !line.startsWith('#'));
+        } catch {
+            return false;
+        }
     }
 
     /**

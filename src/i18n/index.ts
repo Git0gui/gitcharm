@@ -60,6 +60,12 @@ const zh: Record<string, string> = {
     'op.aborted': '操作已终止',
     'op.completed': '操作完成',
     'op.rebaseContinued': '变基已继续',
+    'op.emptyStop': '提交 {commit} 的改动现在是空的（通常是解决冲突时保留了对方已有的内容），操作停在了这一步。要怎么处理？',
+    'op.emptySkip': '跳过这个提交',
+    'op.emptyKeep': '保留这个空提交',
+    'op.emptySkipped': '已跳过提交 {commit}，操作继续',
+    'op.emptyKept': '已把空提交 {commit} 记进历史',
+    'op.emptyStopFailed': '处理这一步失败: {error}',
 
     // branch commands
     'branch.promptNewName': '输入新分支名称',
@@ -570,6 +576,12 @@ const en: Record<string, string> = {
     'op.aborted': 'Operation aborted',
     'op.completed': 'Operation completed',
     'op.rebaseContinued': 'Rebase continued',
+    'op.emptyStop': 'Commit {commit} now has no changes left (usually the conflict was resolved by keeping what the other side already had), so the operation stopped. What should be done with it?',
+    'op.emptySkip': 'Skip this commit',
+    'op.emptyKeep': 'Keep it as an empty commit',
+    'op.emptySkipped': 'Skipped commit {commit}, the operation continues',
+    'op.emptyKept': 'Recorded empty commit {commit}',
+    'op.emptyStopFailed': 'This step failed: {error}',
 
     // branch commands
     'branch.promptNewName': 'Enter new branch name',

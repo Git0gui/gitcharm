@@ -7,6 +7,7 @@ import {
     getBranchName,
     combineErrorText,
     tryHandleConflict,
+    tryHandleEmptyCommitStop,
     handleConflictLoop,
     openConflictFiles,
     extractWorktreePath
@@ -303,6 +304,8 @@ export function registerBranchCommands(
                     graphView.refresh();
                 } else {
                     const error: any = outcome.error;
+                    // An empty step also reads like a conflict, so ask first.
+                    if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                     const currentBranch = await gitService.getCurrentBranch().catch(() => undefined);
                     const handled = await tryHandleConflict(
                         error,
@@ -486,6 +489,11 @@ export function registerBranchCommands(
                     graphView.refreshBranchesOnly();
                 }
             } catch (error: any) {
+                // git's "this step came out empty" advice contains "could not
+                // apply", so it has to be asked about before the conflict
+                // handling below — otherwise the user is sent to resolve files
+                // that no longer have anything to resolve.
+                if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 // Check for pull-specific conflict errors first
                 const errorText = combineErrorText(error);
                 const lowerError = errorText.toLowerCase();
@@ -580,6 +588,11 @@ export function registerBranchCommands(
                 vscode.window.showInformationMessage(t('branch.updated', { name: branchName, detail: first ? `: ${first}` : '' }));
                 graphView.refresh();
             } catch (error: any) {
+                // git's "this step came out empty" advice contains "could not
+                // apply", so it has to be asked about before the conflict
+                // handling below — otherwise the user is sent to resolve files
+                // that no longer have anything to resolve.
+                if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 // Check for pull-specific conflict errors first
                 const errorText = combineErrorText(error);
                 const lowerError = errorText.toLowerCase();

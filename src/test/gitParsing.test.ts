@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -775,3 +775,95 @@ describe('redactUrlCredentials', () => {
         assert.equal(redactUrlCredentials('http://127.0.0.1:7890'), 'http://127.0.0.1:7890');
     });
 });
+
+// Verbatim from git 2.45.1.windows.1: 'git cherry-pick --continue' after the
+// conflict was resolved by keeping the side already upstream.
+const PICK_EMPTY_STOP = [
+    'On branch work',
+    'You are currently cherry-picking commit 95a1007.',
+    '  (all conflicts fixed: run "git cherry-pick --continue")',
+    '  (use "git cherry-pick --skip" to skip this patch)',
+    '',
+    'nothing to commit, working tree clean',
+    'The previous cherry-pick is now empty, possibly due to conflict resolution.',
+    'If you wish to commit it anyway, use:',
+    '',
+    '    git commit --allow-empty',
+    '',
+    "Otherwise, please use 'git cherry-pick --skip'"
+].join('\n');
+
+// Same stop from 'git revert --continue' — git prints the status header but
+// skips the advice block, so detection cannot key on the advice alone.
+const REVERT_EMPTY_STOP = [
+    'On branch work',
+    'You are currently reverting commit e964450.',
+    '  (all conflicts fixed: run "git revert --continue")',
+    '  (use "git revert --skip" to skip this patch)',
+    '',
+    'nothing to commit, working tree clean'
+].join('\n');
+
+// A pick that is merely stopped on conflicts: still unresolved, must not be
+// read as an empty step.
+const PICK_CONFLICT = [
+    'Auto-merging f.txt',
+    'CONFLICT (content): Merge conflict in f.txt',
+    'error: could not apply 6441c8c... m1',
+    'hint: "git cherry-pick --continue".',
+    "hint: You can instead skip this commit with 'git cherry-pick --skip'."
+].join('\n');
+
+describe('isEmptyCommitStop', () => {
+    it('recognises the cherry-pick advice block', () => {
+        assert.equal(isEmptyCommitStop(PICK_EMPTY_STOP), true);
+    });
+
+    it('recognises the terser revert stop', () => {
+        assert.equal(isEmptyCommitStop(REVERT_EMPTY_STOP), true);
+    });
+
+    it('recognises the same stop inside a rebase dump', () => {
+        assert.equal(isEmptyCommitStop(
+            'Rebasing (1/1) interactive rebase in progress; onto 53f9ca842 nothing to commit, working tree clean '
+            + 'The previous cherry-pick is now empty, possibly due to conflict resolution. '
+            + 'If you wish to commit it anyway, use: git commit --allow-empty '
+            + "Otherwise, please use 'git rebase --skip' Could not apply d9acd2da9..."), true);
+    });
+
+    it('does not mistake a stopped conflict for an empty step', () => {
+        assert.equal(isEmptyCommitStop(PICK_CONFLICT), false);
+    });
+
+    it('does not fire on a bare "nothing to commit"', () => {
+        assert.equal(isEmptyCommitStop('nothing to commit, working tree clean'), false);
+        assert.equal(isEmptyCommitStop('On branch main\nYou are currently cherry-picking commit 95a1007.'), false);
+    });
+});
+
+describe('emptyCommitStopInfo', () => {
+    it('reads the commit from the pick in progress', () => {
+        assert.deepEqual(emptyCommitStopInfo(PICK_EMPTY_STOP), { hash: '95a1007', subject: undefined });
+    });
+
+    it('reads the commit from a revert stop', () => {
+        assert.deepEqual(emptyCommitStopInfo(REVERT_EMPTY_STOP), { hash: 'e964450', subject: undefined });
+    });
+
+    it('reads hash and subject off the failure line a rebase prints', () => {
+        const info = emptyCommitStopInfo('Rebasing (1/1) interactive rebase in progress\r\nCould not apply d9acd2da9... 修复推送进度\r\nhint: ...');
+        assert.equal(info.hash, 'd9acd2da9');
+        assert.equal(info.subject, '修复推送进度');
+    });
+
+    it('keeps the subject on its own line only', () => {
+        const info = emptyCommitStopInfo('error: could not apply 6441c8c... m1\nOn branch work');
+        assert.equal(info.hash, '6441c8c');
+        assert.equal(info.subject, 'm1');
+    });
+
+    it('returns no hash when git named none', () => {
+        assert.deepEqual(emptyCommitStopInfo('The previous cherry-pick is now empty'), { hash: undefined, subject: undefined });
+    });
+});
+

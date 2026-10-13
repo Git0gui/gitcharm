@@ -2,19 +2,17 @@ import * as vscode from 'vscode';
 import { GitService, InProgressOperation } from '../services/gitService';
 import { formatGitError } from '../services/gitUtils';
 import { GraphViewProvider } from '../views/graphView';
-import { isConflictError, combineErrorText, openConflictFiles } from './helpers';
+import { isConflictError, combineErrorText, openConflictFiles, tryHandleEmptyCommitStop, abortInProgressOperation, inProgressLabel } from './helpers';
 import { t } from '../i18n';
 
 /**
- * The four key helpers below assume `op.<kind>`, `op.<kind>Completed` and
+ * `opCompletedKey` and `opAbortedKey` below assume `op.<kind>Completed` and
  * `op.<kind>Aborted` all exist for every kind — adding a kind to
- * InProgressOperation means adding those three keys in both dictionaries, and
- * the i18n parity test will fail until they are there.
+ * InProgressOperation means adding those keys in both dictionaries, and
+ * the i18n parity test will fail until they are there. The label key itself
+ * lives in commands/helpers (`inProgressLabel`) because the empty-step dialog
+ * needs the same mapping.
  */
-function opLabelKey(op: InProgressOperation): string {
-    return op === 'cherry-pick' ? 'op.cherryPick' : `op.${op}`;
-}
-
 function opCompletedKey(op: InProgressOperation): string {
     return op === 'cherry-pick' ? 'op.cherryPickCompleted' : `op.${op}Completed`;
 }
@@ -38,7 +36,7 @@ export function registerOperationCommands(
                     return;
                 }
 
-                const opLabel = t(opLabelKey(operation));
+                const opLabel = t(inProgressLabel(operation));
 
                 const confirm = await graphView.showDialog(
                     t('op.continueConfirm', { op: opLabel }),
@@ -53,13 +51,18 @@ export function registerOperationCommands(
                 } else if (operation === 'merge') {
                     await gitService.mergeContinue();
                 } else if (operation === 'cherry-pick') {
-                    await gitService.executeGitArgs(['cherry-pick', '--continue']);
+                    await gitService.cherryPickContinue();
                 } else if (operation === 'revert') {
                     await gitService.revertContinue();
                 }
                 vscode.window.showInformationMessage(t(opCompletedKey(operation)));
                 graphView.refresh();
             } catch (error: any) {
+                // A step that came out empty prints the conflict advice as well, so
+                // this has to be checked first — otherwise the user is sent to
+                // resolve conflicts that no longer exist.
+                if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
+
                 const errMsg = combineErrorText(error);
                 if (isConflictError(errMsg)) {
                     // Still has conflicts: bring the files up, then offer the way out
@@ -74,23 +77,17 @@ export function registerOperationCommands(
                     if (choice === t('conflict.abortAction')) {
                         try {
                             const currentOp = await gitService.getInProgressOperation();
-                            if (currentOp === 'rebase') {
-                                await gitService.rebaseAbort();
-                            } else if (currentOp === 'merge') {
-                                await gitService.mergeAbort();
-                            } else if (currentOp === 'cherry-pick') {
-                                await gitService.abortCherryPick();
-                            } else if (currentOp === 'revert') {
-                                await gitService.revertAbort();
+                            if (currentOp) {
+                                await abortInProgressOperation(gitService, currentOp);
                             }
                             vscode.window.showInformationMessage(t('op.aborted'));
                             graphView.refresh();
                         } catch (abortError: any) {
-                            vscode.window.showErrorMessage(t('op.abortFailed', { error: combineErrorText(abortError) }));
+                            vscode.window.showErrorMessage(t('op.abortFailed', { error: formatGitError(abortError) }));
                         }
                     }
                 } else {
-                    vscode.window.showErrorMessage(t('op.continueFailed', { error: errMsg }));
+                    vscode.window.showErrorMessage(t('op.continueFailed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -103,7 +100,7 @@ export function registerOperationCommands(
                     return;
                 }
 
-                const opLabel = t(opLabelKey(operation));
+                const opLabel = t(inProgressLabel(operation));
 
                 const confirm = await graphView.showDialog(
                     t('op.abortConfirm', { op: opLabel }),
@@ -113,19 +110,11 @@ export function registerOperationCommands(
 
                 if (confirm !== t('op.abort')) {return;}
 
-                if (operation === 'rebase') {
-                    await gitService.rebaseAbort();
-                } else if (operation === 'merge') {
-                    await gitService.mergeAbort();
-                } else if (operation === 'cherry-pick') {
-                    await gitService.abortCherryPick();
-                } else if (operation === 'revert') {
-                    await gitService.revertAbort();
-                }
+                await abortInProgressOperation(gitService, operation);
                 vscode.window.showInformationMessage(t(opAbortedKey(operation)));
                 graphView.refresh();
             } catch (error: any) {
-                vscode.window.showErrorMessage(t('op.abortFailed', { error: combineErrorText(error) }));
+                vscode.window.showErrorMessage(t('op.abortFailed', { error: formatGitError(error) }));
             }
         }),
 

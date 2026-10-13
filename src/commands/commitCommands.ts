@@ -8,6 +8,7 @@ import {
     isConflictError,
     combineErrorText,
     tryHandleConflict,
+    tryHandleEmptyCommitStop,
     openConflictFiles
 } from './helpers';
 import { t } from '../i18n';
@@ -140,6 +141,18 @@ export function registerCommitCommands(
                         await gitService.cherryPick(hash);
                         successCount++;
                     } catch (error: any) {
+                        // git's "this step came out empty" advice also contains
+                        // "Could not apply", so it must be asked about first —
+                        // otherwise the user is sent to resolve conflicts that
+                        // no longer exist.
+                        const step = await tryHandleEmptyCommitStop(error, gitService, graphView);
+                        if (step === 'skip') {continue;}
+                        if (step === 'keep') {
+                            successCount++;
+                            continue;
+                        }
+                        if (step) {break;}
+
                         const errText = combineErrorText(error);
                         
                         // Check if cherry-pick failed due to conflicts
@@ -285,6 +298,11 @@ export function registerCommitCommands(
                     try {
                         await gitService.revert(ordered[i]);
                     } catch (error: any) {
+                        // Ask about an empty step before the conflict path: the
+                        // advice text git prints for it contains "Could not apply".
+                        const step = await tryHandleEmptyCommitStop(error, gitService, graphView);
+                        if (step === 'skip' || step === 'keep') {continue;}
+                        if (step) {return;}
                         const handled = await tryHandleConflict(
                             error,
                             gitService,
@@ -365,6 +383,9 @@ export function registerCommitCommands(
                     graphView.refresh();
                 }
             } catch (error: any) {
+                // Before the conflict handler: git's empty-step advice reads as a
+                // conflict but has nothing left to resolve.
+                if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 const handled = await tryHandleConflict(
                     error,
                     gitService,

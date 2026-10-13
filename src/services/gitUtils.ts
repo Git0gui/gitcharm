@@ -717,6 +717,40 @@ export function classifyGitNetworkFailure(text: string): GitNetworkFailure {
 }
 
 /**
+ * A sequencer stop caused by a step whose changes turned out to be empty —
+ * typically after the user resolved a conflict by keeping the other side. git
+ * answers this with a wall of advice (`The previous cherry-pick is now empty, …
+ * git commit --allow-empty … Otherwise, please use 'git cherry-pick --skip'`),
+ * which is exactly the three choices the user has; ask for one instead.
+ *
+ * Measured on git 2.45.1: cherry-pick and rebase print that advice block, while
+ * `git revert --continue` prints only the status header and
+ * `nothing to commit, working tree clean` — the same stop, less talkative. Both
+ * shapes are matched here; a plain "nothing to commit" on its own is not, and
+ * neither is any stop that still has unmerged paths (git lists those under
+ * "Unmerged paths:" instead of reporting a clean tree).
+ */
+export function isEmptyCommitStop(text: string): boolean {
+    const lower = text.toLowerCase();
+    if (lower.includes('is now empty') && lower.includes('allow-empty')) {return true;}
+    return lower.includes('all conflicts fixed') && lower.includes('nothing to commit, working tree clean');
+}
+
+/**
+ * Which commit the empty stop is about. git names it either as the pick in
+ * progress (`You are currently cherry-picking commit a3c2a35.`) or in the
+ * failure line of the same run (`Could not apply d9acd2da9... subject`); a
+ * rebase says the latter and a bare cherry-pick the former.
+ */
+export function emptyCommitStopInfo(text: string): { hash?: string; subject?: string } {
+    const picking = /currently (?:cherry-picking|reverting|applying) commit ([0-9a-f]{7,40})/i.exec(text);
+    const applied = /could not apply ([0-9a-f]{7,40})\.\.\.[ \t]*([^\r\n]*)/i.exec(text);
+    const hash = picking?.[1] ?? applied?.[1];
+    const subject = applied?.[2]?.trim();
+    return { hash, subject: subject ? subject : undefined };
+}
+
+/**
  * Hide credentials a proxy URL or remote URL may carry — only the host part is
  * ever worth putting in front of the user.
  */
