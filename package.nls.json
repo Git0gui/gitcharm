@@ -26,6 +26,19 @@
     "cmd.commitBranch": "Commit...",
     "cmd.viewFileHistory": "View File History",
     "cmd.initRepository": "Initialize a Git Repository in This Folder",
+    "cmd.revertCommit": "Revert Commits (Create Undoing Commits)",
+    "cmd.amendCommit": "Amend Last Commit (Fold Current Changes In)",
+    "cmd.openCommitOnRemote": "Open Commit on Remote Web",
+    "cmd.openBranchOnRemote": "Open Branch on Remote Web",
+    "cmd.createTag": "Create Tag on Commit (Lightweight or Annotated)",
+    "cmd.deleteTag": "Delete Local Tag",
+    "cmd.pushTag": "Push Tag to Remote",
+    "cmd.stashSave": "Stash Current Changes",
+    "cmd.stashApply": "Apply Stash (keep entry)",
+    "cmd.stashPop": "Pop Stash (remove entry)",
+    "cmd.stashDrop": "Drop Stash",
+    "cmd.showReflog": "Show Reflog (recover lost commits)",
+    "cmd.selectRepository": "Switch Repository (workspaces holding several repositories)",
     "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "Enable branch info caching for faster startup (cache is persisted and only updated on repository changes or Git operations)",
     "config.pullStrategy": "Update strategy when pulling a remote branch",
@@ -35,5 +48,6 @@
     "config.language.auto": "Follow the VSCode display language",
     "config.language.zh-cn": "Chinese (Simplified)",
     "config.language.en": "English",
-    "config.debug": "Enable debug logging (written to the extension host console for troubleshooting)"
+    "config.debug": "Enable debug logging (written to the extension host console for troubleshooting)",
+    "config.autoFetchMinutes": "Fetch from the remote every N minutes while the GitCharm panel is open. 0 (the default) disables it. Silent: no credential prompt, no error toast."
 }

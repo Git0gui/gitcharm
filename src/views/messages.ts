@@ -1,4 +1,4 @@
-import { GraphCommit, CommitDetail, FileStat } from '../services/gitService';
+import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry, RepositoryOption } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 
 /**
@@ -7,7 +7,7 @@ import { FileIconPack } from '../services/fileIconTheme';
  * (media/webview.js) mirrors these shapes by convention — keep them in sync.
  */
 
-export type OperationKind = 'rebase' | 'merge' | 'cherry-pick';
+export type OperationKind = 'rebase' | 'merge' | 'cherry-pick' | 'revert';
 
 /**
  * What the panel can meaningfully show right now. Anything other than 'ready'
@@ -39,6 +39,12 @@ export interface PersistedViewState {
     graphVisible?: boolean;
     /** Epoch ms stamped by the host when the snapshot is flushed; drives the session-restore TTL window. */
     savedAt?: number;
+    /**
+     * Repository the snapshot was taken in, stamped by the host. A mismatch means
+     * it belongs to another root of a multi-folder workspace and must not be
+     * replayed there — branch names and hashes collide between projects.
+     */
+    repoPath?: string;
 }
 
 export interface PushDialogCommit {
@@ -67,7 +73,20 @@ export type ExtToWebviewMessage =
         searchContext?: { query?: string; resultCount?: number };
     }
     | { command: 'setBranches'; local: string[]; remote: string[]; currentBranch?: string }
-    | { command: 'setRepoState'; state: RepoUiState; files?: number; folder?: string }
+    | { command: 'setStashes'; stashes: StashEntry[] }
+    | {
+        command: 'setRepoState';
+        state: RepoUiState;
+        files?: number;
+        folder?: string;
+        /**
+         * Every repository of the workspace. Only more than one of these turns the
+         * switcher on — a single-root workspace never sees the control.
+         */
+        repositories?: RepositoryOption[];
+        /** Repository the panel is showing right now, out of `repositories`. */
+        currentRepository?: string;
+    }
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'setHeadHash'; headHash: string }
@@ -96,6 +115,12 @@ export type ExtToWebviewMessage =
         history: Array<{ hash: string; shortHash: string; author: string; date: string; message: string }>;
     }
     | {
+        command: 'showReflog';
+        /** Which rev's reflog this is, shown as the dialog subtitle. */
+        scope: string;
+        entries: ReflogEntry[];
+    }
+    | {
         command: 'showCompareDialog';
         branchName: string;
         currentBranch: string;
@@ -117,6 +142,10 @@ export type WebviewAction =
     | 'checkout' | 'push' | 'pull' | 'fetch' | 'merge' | 'rebase' | 'update'
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
+    | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
+    | 'newTag' | 'deleteTag' | 'pushTag'
+    | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
+    | 'reflog'
     | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
@@ -127,11 +156,12 @@ export type WebviewToExtMessage =
     | { command: 'refreshBranches' }
     | { command: 'initRepository' }
     | { command: 'recheckRepository' }
+    | { command: 'selectRepository'; path: string }
     | { command: 'openScmView' }
     | { command: 'refreshFiles'; hash: string }
     | { command: 'showNotification'; message: string; type?: string }
     | { command: 'showStatusBarMessage'; message: string; timeout?: number }
-    | { command: 'setFilters'; text?: string; author?: string; from?: string; to?: string }
+    | { command: 'setFilters'; text?: string; author?: string; from?: string; to?: string; path?: string }
     | { command: 'loadMore' }
     | { command: 'selectCommit'; hash: string; force?: boolean }
     | { command: 'selectCommits'; hashes: string[] }
@@ -143,6 +173,8 @@ export type WebviewToExtMessage =
         hashes?: string[];
         path?: string;
         remainingHashes?: string[];
+        /** Stash stack position (`stash@{n}`), for the stash tree section's actions. */
+        stash?: number;
     }
     | { command: 'dialogAction'; action: string }
     | { command: 'squashMessageResponse'; message?: string }

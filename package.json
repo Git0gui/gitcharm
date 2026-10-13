@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -164,6 +164,71 @@
         "command": "idea-git.initRepository",
         "title": "%cmd.initRepository%",
         "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.revertCommit",
+        "title": "%cmd.revertCommit%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.amendCommit",
+        "title": "%cmd.amendCommit%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.openCommitOnRemote",
+        "title": "%cmd.openCommitOnRemote%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.openBranchOnRemote",
+        "title": "%cmd.openBranchOnRemote%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.createTag",
+        "title": "%cmd.createTag%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.deleteTag",
+        "title": "%cmd.deleteTag%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.pushTag",
+        "title": "%cmd.pushTag%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashSave",
+        "title": "%cmd.stashSave%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashApply",
+        "title": "%cmd.stashApply%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashPop",
+        "title": "%cmd.stashPop%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.stashDrop",
+        "title": "%cmd.stashDrop%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.showReflog",
+        "title": "%cmd.showReflog%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.selectRepository",
+        "title": "%cmd.selectRepository%",
+        "category": "GitCharm"
       }
     ],
     "viewsContainers": {
@@ -302,6 +367,12 @@
           "type": "boolean",
           "default": false,
           "description": "%config.debug%"
+        },
+        "idea-git.autoFetchMinutes": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "%config.autoFetchMinutes%"
         }
       }
     }

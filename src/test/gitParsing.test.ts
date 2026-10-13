@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo } from '../services/gitUtils';
+import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
     it('parses ahead and behind counts', () => {
@@ -204,6 +205,7 @@ describe('operationFromStateFiles', () => {
     it('maps each state file to its operation', () => {
         assert.equal(operationFromStateFiles(present('MERGE_HEAD')), 'merge');
         assert.equal(operationFromStateFiles(present('CHERRY_PICK_HEAD')), 'cherry-pick');
+        assert.equal(operationFromStateFiles(present('REVERT_HEAD')), 'revert');
         assert.equal(operationFromStateFiles(present('rebase-merge')), 'rebase');
         assert.equal(operationFromStateFiles(present('rebase-apply')), 'rebase');
     });
@@ -218,11 +220,18 @@ describe('operationFromStateFiles', () => {
     it('lets cherry-pick win over merge', () => {
         assert.equal(operationFromStateFiles(present('CHERRY_PICK_HEAD', 'MERGE_HEAD')), 'cherry-pick');
     });
+
+    it('reads a conflicted revert as revert, not merge', () => {
+        // Empirically a conflicted revert writes REVERT_HEAD (+ MERGE_MSG,
+        // AUTO_MERGE) but never MERGE_HEAD; a revert inside a rebase is a rebase.
+        assert.equal(operationFromStateFiles(present('REVERT_HEAD', 'MERGE_HEAD')), 'revert');
+        assert.equal(operationFromStateFiles(present('REVERT_HEAD', 'rebase-apply')), 'rebase');
+    });
 });
 
 describe('isOperationStateFile', () => {
-    it('accepts exactly the four files git removes when an operation settles', () => {
-        for (const name of ['rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'MERGE_HEAD']) {
+    it('accepts exactly the files git removes when an operation settles', () => {
+        for (const name of ['rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'MERGE_HEAD']) {
             assert.equal(isOperationStateFile(name), true, name);
         }
     });
@@ -232,4 +241,629 @@ describe('isOperationStateFile', () => {
             assert.equal(isOperationStateFile(name), false, name);
         }
     });
+
+    it('rejects the byproduct files an operation leaves next to the head files', () => {
+        // These outlive the operation (or appear without one), so treating them as
+        // state would keep the in-progress bar up forever.
+        for (const name of ['MERGE_MSG', 'AUTO_MERGE', 'SQUASH_MSG', 'sequencer']) {
+            assert.equal(isOperationStateFile(name), false, name);
+        }
+    });
 });
+
+describe('remoteUrlToWebBase', () => {
+    it('handles the scp-like form GitHub uses', () => {
+        assert.equal(remoteUrlToWebBase('git@github.com:Git0gui/gitcharm.git'), 'https://github.com/Git0gui/gitcharm');
+    });
+
+    it('handles ssh URLs with a user and port, and a trailing slash', () => {
+        assert.equal(remoteUrlToWebBase('ssh://git@github.com:22/Git0gui/gitcharm/'), 'https://github.com/Git0gui/gitcharm');
+    });
+
+    it('handles https URLs with credentials and a port', () => {
+        assert.equal(remoteUrlToWebBase('https://user@gitea.example.com:8443/team/repo.git'), 'https://gitea.example.com/team/repo');
+    });
+
+    it('keeps GitLab subgroups intact', () => {
+        assert.equal(remoteUrlToWebBase('git@gitlab.com:group/sub/project.git'), 'https://gitlab.com/group/sub/project');
+    });
+
+    it('returns undefined for local paths — there is no web UI to open', () => {
+        for (const url of ['/srv/git/repo.git', 'C:/Users/me/repo', '\\\\server\\share\\repo', '', '   ']) {
+            assert.equal(remoteUrlToWebBase(url), undefined, url);
+        }
+    });
+});
+
+describe('commitWebUrl / branchWebUrl', () => {
+    it('append the commit and tree routes', () => {
+        assert.equal(commitWebUrl('https://github.com/o/r', 'abc123'), 'https://github.com/o/r/commit/abc123');
+        assert.equal(branchWebUrl('https://github.com/o/r', 'main'), 'https://github.com/o/r/tree/main');
+    });
+
+    it('stay undefined when the remote has no web base', () => {
+        assert.equal(commitWebUrl(undefined, 'abc123'), undefined);
+        assert.equal(branchWebUrl(undefined, 'main'), undefined);
+    });
+});
+
+describe('parseGitConfigRemoteUrl', () => {
+    it('prefers the requested remote over the first one listed', () => {
+        const raw = [
+            '[core]',
+            ' repositoryformatversion = 0',
+            '[remote "up"]',
+            '\turl = git@github.com:other/up.git',
+            '\tfetch = +refs/heads/*:refs/remotes/up/*',
+            '[remote "origin"]',
+            '\turl = git@github.com:Git0gui/gitcharm.git',
+        ].join('\n');
+        assert.equal(parseGitConfigRemoteUrl(raw), 'git@github.com:Git0gui/gitcharm.git');
+        assert.equal(parseGitConfigRemoteUrl(raw, 'up'), 'git@github.com:other/up.git');
+    });
+
+    it('falls back to the first remote when the preferred one is absent', () => {
+        const raw = '[remote "fork"]\nurl = https://github.com/me/repo.git\n';
+        assert.equal(parseGitConfigRemoteUrl(raw), 'https://github.com/me/repo.git');
+    });
+
+    it('accepts an unquoted section name and a bare url value', () => {
+        assert.equal(parseGitConfigRemoteUrl('[remote origin]\n  url=git@github.com:o/r.git'), 'git@github.com:o/r.git');
+    });
+
+    it('ignores urls outside remote sections and keeps the first url of a section', () => {
+        const raw = ['[branch "main"]', ' remote = origin', '[remote "origin"]', 'url = a', 'url = b'].join('\n');
+        assert.equal(parseGitConfigRemoteUrl(raw), 'a');
+    });
+
+    it('returns undefined when the repo has no remote', () => {
+        assert.equal(parseGitConfigRemoteUrl('[core]\n\tbare = false\n'), undefined);
+    });
+});
+
+describe('tagNameProblem', () => {
+    it('accepts names git accepts, ignoring surrounding spaces', () => {
+        for (const name of ['v1.0.0', '1.0', 'release/2026-10', 'a.b.c', '释放v1', '  v1.0  ']) {
+            assert.equal(tagNameProblem(name), undefined, name);
+        }
+    });
+
+    it('rejects an empty name', () => {
+        assert.equal(tagNameProblem(''), t('tag.nameEmpty'));
+        assert.equal(tagNameProblem('   '), t('tag.nameEmpty'));
+    });
+
+    it('rejects ref-illegal punctuation and leading dashes', () => {
+        for (const name of ['a b', 'a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', '..ref', 'user@{0}', '-tag']) {
+            assert.equal(tagNameProblem(name), t('tag.nameChars'), name);
+        }
+    });
+
+    it('rejects a trailing dot and dot-prefixed path components', () => {
+        // Probed against `git check-ref-format refs/tags/…`; the trailing dot of
+        // "a./b" is fine, only a component that *starts* with a dot is not.
+        assert.equal(tagNameProblem('end.'), t('tag.nameDot'));
+        assert.equal(tagNameProblem('.hidden'), t('tag.nameDot'));
+        assert.equal(tagNameProblem('a/.hidden'), t('tag.nameDot'));
+        assert.equal(tagNameProblem('a./b'), undefined);
+    });
+
+    it('rejects a .lock suffix', () => {
+        assert.equal(tagNameProblem('v1.lock'), t('tag.nameLock'));
+    });
+
+    it('rejects a name that is already taken', () => {
+        assert.equal(tagNameProblem('v1', ['v1', 'v2']), t('tag.nameExists', { name: 'v1' }));
+        assert.equal(tagNameProblem(' v1 ', ['v1']), t('tag.nameExists', { name: 'v1' }));
+        assert.equal(tagNameProblem('v3', ['v1']), undefined);
+    });
+});
+
+describe('peeledCommitFromTagObject', () => {
+    const commit = 'ba88db9f8714fa62ef566f6655e5775276d8616c';
+    // Layout verified against a real loose tag object: `tag <size>` NUL, header
+    // lines, a blank line, then the message.
+    const tagObject = `tag 112\u0000object ${commit}\ntype commit\ntag v1.0.0\ntagger A <a@a> 1700000000 +0800\n\nrelease notes\n`;
+
+    it('returns the tagged commit of an annotated tag', () => {
+        assert.equal(peeledCommitFromTagObject(tagObject), commit);
+    });
+
+    it('ignores a body that mentions another object', () => {
+        // Only the header counts: the message is cut at its leading blank line.
+        const forged = `tag 200\u0000object ${commit}\ntype commit\n\nobject 0000000000000000000000000000000000000000\n`;
+        assert.equal(peeledCommitFromTagObject(forged), commit);
+    });
+
+    it('returns undefined for commit objects and malformed input', () => {
+        assert.equal(peeledCommitFromTagObject(`commit 200\u0000tree ${commit}\nparent ${commit}\n`), undefined);
+        assert.equal(peeledCommitFromTagObject(`tag 100\u0000type commit\n\u0000`), undefined);
+        assert.equal(peeledCommitFromTagObject(`tag 100\u0000object zzz\n\u0000`), undefined);
+        assert.equal(peeledCommitFromTagObject(`object ${commit}\n`), undefined);
+        assert.equal(peeledCommitFromTagObject(''), undefined);
+    });
+});
+
+describe('parseStashList', () => {
+    const nul = '\0';
+    const row = (ref: string, subject: string, date: string) => [ref, subject, date].join(nul);
+
+    it('parses index, subject and date', () => {
+        const out = parseStashList(row('stash@{0}', 'On main: reworking login', '2026-10-12T23:20:07+08:00') + '\n');
+        assert.deepEqual(out, [{ index: 0, message: 'On main: reworking login', date: '2026-10-12T23:20:07+08:00' }]);
+    });
+
+    it('keeps a pipe inside the subject intact', () => {
+        // The fields are NUL-separated precisely because git subjects carry pipes.
+        const out = parseStashList(row('stash@{1}', 'WIP on main: 1a2b3c4 fix a|b', '2026-10-01T10:00:00+08:00'));
+        assert.equal(out[0].message, 'WIP on main: 1a2b3c4 fix a|b');
+        assert.equal(out[0].index, 1);
+    });
+
+    it('reads every entry, newest first, and skips CRLF noise', () => {
+        const raw = [
+            row('stash@{0}', 'newest', '2026-10-12T00:00:00+08:00'),
+            row('stash@{2}', 'oldest', '2026-10-01T00:00:00+08:00')
+        ].join('\r\n');
+        const out = parseStashList(raw);
+        assert.deepEqual(out.map(e => e.index), [0, 2]);
+        assert.deepEqual(out.map(e => e.message), ['newest', 'oldest']);
+    });
+
+    it('tolerates missing trailing fields', () => {
+        const out = parseStashList('stash@{0}');
+        assert.deepEqual(out, [{ index: 0, message: '', date: '' }]);
+    });
+
+    it('returns no entries for empty output or a line without a stash refname', () => {
+        assert.deepEqual(parseStashList(''), []);
+        assert.deepEqual(parseStashList('\n  \n'), []);
+        assert.deepEqual(parseStashList([
+            row('HEAD@{3}', 'not a stash line', '2026-10-01T00:00:00+08:00'),
+            row('stash@{1}', 'kept', '2026-10-02T00:00:00+08:00')
+        ].join('\n')), [{ index: 1, message: 'kept', date: '2026-10-02T00:00:00+08:00' }]);
+    });
+});
+
+describe('parsePathFilter', () => {
+    it('splits comma-separated pathspecs and trims each', () => {
+        assert.deepEqual(parsePathFilter(' src/a.ts, media , x '), ['src/a.ts', 'media', 'x']);
+    });
+
+    it('passes globs and repo-relative paths through untouched', () => {
+        assert.deepEqual(parsePathFilter('src/*.ts, media/webview.js'), ['src/*.ts', 'media/webview.js']);
+    });
+
+    it('returns nothing for empty input', () => {
+        assert.deepEqual(parsePathFilter(undefined), []);
+        assert.deepEqual(parsePathFilter(''), []);
+        assert.deepEqual(parsePathFilter(' , , '), []);
+    });
+
+    it('drops segments containing control characters', () => {
+        assert.deepEqual(parsePathFilter('ok.ts, bad\u0000.ts'), ['ok.ts']);
+    });
+
+    it('keeps a leading dash: the caller appends these only after a -- separator', () => {
+        assert.deepEqual(parsePathFilter('--not-an-option'), ['--not-an-option']);
+    });
+
+    it('keeps unicode path segments untouched', () => {
+        assert.deepEqual(parsePathFilter('文档/测试.txt'), ['文档/测试.txt']);
+    });
+});
+
+describe('mergeCommitFileStats', () => {
+    const f = (status: string, path: string, added = 1, deleted = 0) => ({ status, path, added, deleted });
+
+    it('collapses one path into a single row and accumulates the line counts', () => {
+        const merged = mergeCommitFileStats([[f('M', 'a.ts', 3, 1)], [f('M', 'a.ts', 2, 0)]]);
+        assert.deepEqual(merged, [{ status: 'M', path: 'a.ts', added: 5, deleted: 1 }]);
+    });
+
+    it('keeps a file created by the selection as added when a later commit edits it', () => {
+        const merged = mergeCommitFileStats([[f('A', 'new.ts')], [f('M', 'new.ts', 4, 2)]]);
+        assert.deepEqual(merged[0], { status: 'A', path: 'new.ts', added: 5, deleted: 2 });
+    });
+
+    it('reports the removal when a later commit deletes it', () => {
+        assert.equal(mergeCommitFileStats([[f('M', 'gone.ts')], [f('D', 'gone.ts')]])[0].status, 'D');
+        assert.equal(mergeCommitFileStats([[f('A', 'temp.ts')], [f('D', 'temp.ts')]])[0].status, 'D');
+    });
+
+    it('orders by path so the click order cannot shuffle the list', () => {
+        const merged = mergeCommitFileStats([[f('M', 'z/b.ts')], [f('M', 'a.ts')], [f('M', 'z/a.ts')]]);
+        assert.deepEqual(merged.map(x => x.path), ['a.ts', 'z/a.ts', 'z/b.ts']);
+    });
+
+    it('never rewrites the caller entries, which come from the host file cache', () => {
+        const first = [f('M', 'a.ts', 1, 0)];
+        mergeCommitFileStats([first, [f('M', 'a.ts', 2, 0)]]);
+        assert.deepEqual(first[0], { status: 'M', path: 'a.ts', added: 1, deleted: 0 });
+    });
+
+    it('passes option-looking and unicode paths through verbatim', () => {
+        const merged = mergeCommitFileStats([[f('A', '文档/-rf.md')]]);
+        assert.equal(merged[0].path, '文档/-rf.md');
+    });
+
+    it('returns nothing for an empty selection', () => {
+        assert.deepEqual(mergeCommitFileStats([]), []);
+        assert.deepEqual(mergeCommitFileStats([[]]), []);
+    });
+});
+
+describe('parseReflogList', () => {
+    const nul = '\0';
+    const row = (ref: string, hash: string, subject: string, date: string) => [ref, hash, subject, date].join(nul);
+
+    it('splits the action off the first colon only', () => {
+        const out = parseReflogList(row('HEAD@{1}', '6e3f2a1b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f', 'commit: fix: keep a colon in the message', '2026-10-12T10:00:00+08:00'));
+        assert.equal(out.length, 1);
+        assert.equal(out[0].ref, 'HEAD@{1}');
+        assert.equal(out[0].action, 'commit');
+        assert.equal(out[0].message, 'fix: keep a colon in the message');
+        assert.equal(out[0].shortHash, '6e3f2a1');
+    });
+
+    it('keeps a parenthesised action as one action', () => {
+        const out = parseReflogList(row('HEAD@{0}', 'aaaaaaaabbbbbbbb', 'commit (amend): 重写消息', '2026-10-12T10:00:00+08:00'));
+        assert.deepEqual([out[0].action, out[0].message], ['commit (amend)', '重写消息']);
+    });
+
+    it('leaves the message empty when the subject has no colon', () => {
+        const out = parseReflogList(row('main@{2}', 'bbbbbbbbcccccccc', ' Branch created', '2026-10-10T08:00:00+08:00'));
+        assert.deepEqual([out[0].action, out[0].message], ['Branch created', '']);
+        assert.equal(out[0].date, '2026-10-10T08:00:00+08:00');
+    });
+
+    it('handles checkout and reset subjects, CRLF and blank lines', () => {
+        const raw = [
+            row('HEAD@{0}', '1111111122222222', 'checkout: moving from main to feat/x', '2026-10-12T09:00:00+08:00'),
+            '',
+            row('HEAD@{1}', '3333333344444444', 'reset: moving to HEAD~1', '2026-10-11T09:00:00+08:00')
+        ].join('\r\n');
+        const out = parseReflogList(raw);
+        assert.deepEqual(out.map(e => e.action), ['checkout', 'reset']);
+        assert.deepEqual(out.map(e => e.message), ['moving from main to feat/x', 'moving to HEAD~1']);
+    });
+
+    it('returns nothing for empty output or a line without a hash', () => {
+        assert.deepEqual(parseReflogList(''), []);
+        assert.deepEqual(parseReflogList('\n   \n'), []);
+        assert.deepEqual(parseReflogList('HEAD@{0}'), []);
+        assert.deepEqual(parseReflogList(row('HEAD@{0}', '', 'commit: x', '2026-10-12T09:00:00+08:00')), []);
+    });
+});
+
+describe('parseGitConfigRemoteNames', () => {
+    it('collects every remote section in file order', () => {
+        const raw = [
+            '[core]',
+            '\trepositoryformatversion = 0',
+            '[remote "origin"]',
+            '\turl = git@github.com:Git0gui/gitcharm.git',
+            '[branch "main"]',
+            '\tremote = origin',
+            '[remote "fork"]',
+            '\turl = https://github.com/me/repo.git',
+        ].join('\n');
+        assert.deepEqual(parseGitConfigRemoteNames(raw), ['origin', 'fork']);
+    });
+
+    it('accepts an unquoted section name and de-duplicates repeats', () => {
+        const raw = '[remote upstream]\nurl = a\n[remote "upstream"]\nurl = b';
+        assert.deepEqual(parseGitConfigRemoteNames(raw), ['upstream']);
+    });
+
+    it('ignores comments, blanks and non-remote sections', () => {
+        const raw = ['# [remote "x"]', '', '  ; [remote "y"]', '[submodule "vendor"]', '[remote "z"]'].join('\n');
+        assert.deepEqual(parseGitConfigRemoteNames(raw), ['z']);
+    });
+
+    it('returns an empty list when the repo has no remote', () => {
+        assert.deepEqual(parseGitConfigRemoteNames('[core]\n\tbare = false\n'), []);
+        assert.deepEqual(parseGitConfigRemoteNames(''), []);
+    });
+});
+
+describe('pickFetchRemote', () => {
+    it('prefers origin wherever it appears', () => {
+        assert.equal(pickFetchRemote(['fork', 'origin']), 'origin');
+    });
+
+    it('falls back to the first remote without origin', () => {
+        assert.equal(pickFetchRemote(['upstream', 'fork']), 'upstream');
+    });
+
+    it('returns an empty string for no remotes', () => {
+        assert.equal(pickFetchRemote([]), '');
+    });
+});
+
+describe('repositoryKey', () => {
+    it('unifies separators and drops trailing ones', () => {
+        assert.equal(repositoryKey('D:\\Work\\repo\\', false), 'D:/Work/repo');
+        assert.equal(repositoryKey('/home/me/repo/', false), '/home/me/repo');
+    });
+
+    it('folds case only for a case-insensitive filesystem', () => {
+        assert.equal(repositoryKey('D:/Work/Repo', true), 'd:/work/repo');
+        assert.equal(repositoryKey('/home/Me/Repo', false), '/home/Me/Repo');
+    });
+
+    it('treats two spellings of one root as the same repository', () => {
+        assert.equal(repositoryKey('D:/Work/GitCharm', true), repositoryKey('d:\\work\\gitcharm\\', true));
+    });
+});
+
+describe('collectRepositoryRoots', () => {
+    const roots: Record<string, string | undefined> = {
+        'D:/Work/app': 'D:/Work/app',
+        'D:/Work/app/src': 'D:/Work/app',
+        'D:/Work/lib': 'D:/Work/lib',
+        'D:/Notes': undefined          // not a repository
+    };
+    const probe = (dir: string): string | undefined => roots[dir];
+
+    it('keeps workspace order and skips folders that are not repositories', () => {
+        assert.deepEqual(collectRepositoryRoots(['D:/Work/lib', 'D:/Notes', 'D:/Work/app'], probe, false),
+            ['D:/Work/lib', 'D:/Work/app']);
+    });
+
+    it('collapses several folders of one repository into a single entry', () => {
+        assert.deepEqual(collectRepositoryRoots(['D:/Work/app', 'D:/Work/app/src'], probe, false), ['D:/Work/app']);
+    });
+
+    it('dedupes case-insensitively only when the filesystem is', () => {
+        const mixed = ['D:/Work/app', 'd:/work/APP'];
+        assert.deepEqual(collectRepositoryRoots(mixed, dir => dir, true).length, 1);
+        assert.deepEqual(collectRepositoryRoots(mixed, dir => dir, false).length, 2);
+    });
+
+    it('returns nothing for an empty workspace', () => {
+        assert.deepEqual(collectRepositoryRoots([], probe, false), []);
+    });
+});
+
+describe('discoverRepositoryRoots', () => {
+    const join = (dir: string, child: string) => `${dir}/${child}`;
+
+    /**
+     * Drive the scan over a fake tree: `dirs` maps a directory to its child
+     * names, `repos` lists the ones that hold a `.git`. `visited` collects every
+     * directory whose children were listed, which is what costs real I/O.
+     */
+    function scan(
+        startDirs: string[],
+        dirs: Record<string, string[]>,
+        repos: string[],
+        options?: { maxDepth?: number; budget?: number },
+        visited?: string[]
+    ): string[] {
+        const known = new Set(repos);
+        return discoverRepositoryRoots(startDirs, join, dir => known.has(dir), dir => {
+            visited?.push(dir);
+            return dirs[dir] ?? [];
+        }, options, false);
+    }
+
+    it('finds the sibling repositories below a plain parent folder', () => {
+        assert.deepEqual(scan(['D:/Work'], {
+            'D:/Work': ['app', 'lib', 'Notes'],
+            'D:/Work/Notes': ['scratch']
+        }, ['D:/Work/lib', 'D:/Work/app']), ['D:/Work/app', 'D:/Work/lib']);
+    });
+
+    it('never lists inside a repository it already found', () => {
+        const visited: string[] = [];
+        scan(['D:/Work'], {
+            'D:/Work': ['app'],
+            'D:/Work/app': ['deep', 'nested', 'src', 'test', 'docs']
+        }, ['D:/Work/app'], undefined, visited);
+        assert.deepEqual(visited, ['D:/Work']);
+    });
+
+    it('skips dependency, build and hidden directories', () => {
+        assert.deepEqual(scan(['D:/Work'], {
+            'D:/Work': ['node_modules', '.cache', 'dist', 'real']
+        }, ['D:/Work/node_modules/left-pad', 'D:/Work/.cache/probe', 'D:/Work/dist/x', 'D:/Work/real']),
+        ['D:/Work/real']);
+    });
+
+    it('respects the depth limit', () => {
+        const dirs = {
+            'D:/Work': ['team'],
+            'D:/Work/team': ['sandbox'],
+            'D:/Work/team/sandbox': ['repo']
+        };
+        const repos = ['D:/Work/team/sandbox/repo'];
+        assert.deepEqual(scan(['D:/Work'], dirs, repos, { maxDepth: 2 }), []);
+        assert.deepEqual(scan(['D:/Work'], dirs, repos, { maxDepth: 3 }), repos);
+    });
+
+    it('reports the start directory itself when it is a repository', () => {
+        const visited: string[] = [];
+        assert.deepEqual(scan(['D:/Work/app'], { 'D:/Work/app': ['src'] }, ['D:/Work/app'], undefined, visited),
+            ['D:/Work/app']);
+        assert.deepEqual(visited, []);
+    });
+
+    it('dedupes a repository reachable from two start directories', () => {
+        assert.deepEqual(scan(['D:/Work', 'D:/Work/team'], {
+            'D:/Work': ['team'],
+            'D:/Work/team': ['app']
+        }, ['D:/Work/team/app']), ['D:/Work/team/app']);
+    });
+
+    it('stops listing once the budget is spent', () => {
+        assert.deepEqual(scan(['D:/Work'], { 'D:/Work': ['app'] }, ['D:/Work/app'], { budget: 0 }), []);
+    });
+});
+
+/** Reproduced from the user's own failing fetch (github.com unreachable directly). */
+const UNREACHABLE = "fatal: unable to access 'https://github.com/sveltejs/svelte/': Failed to connect to github.com port 443 after 21125 ms: Couldn't connect to server";
+
+describe('formatGitError', () => {
+    it('drops the Error wrapper and the stderr copy git already put in message', () => {
+        const error = { message: UNREACHABLE, stderr: UNREACHABLE, stdout: '' };
+        assert.equal(formatGitError(error),
+            "unable to access 'https://github.com/sveltejs/svelte/': Failed to connect to github.com port 443 after 21125 ms: Couldn't connect to server");
+    });
+
+    it('strips the fatal/error prefix but keeps the git wording', () => {
+        assert.equal(formatGitError(new Error('error: pathspec \'-rf\' did not match any file(s)')),
+            "pathspec '-rf' did not match any file(s)");
+    });
+
+    it('accepts a bare string and returns empty when there is nothing usable', () => {
+        assert.equal(formatGitError('nothing to commit'), 'nothing to commit');
+        assert.equal(formatGitError(undefined), '');
+    });
+
+    it('keeps non-ASCII and awkward file names verbatim', () => {
+        assert.equal(formatGitError({ message: 'fatal: 无法写入 测试.txt' }), '无法写入 测试.txt');
+        assert.equal(formatGitError({ message: 'fatal: bad object 100%.md' }), 'bad object 100%.md');
+    });
+
+    it('caps the number of lines and the total length', () => {
+        const many = formatGitError({ message: 'a\nb\nc\nd\ne\nf' }, 2);
+        assert.equal(many, 'a b');
+        const long = formatGitError({ message: 'x'.repeat(500) }, 4, 40);
+        assert.equal(long.length, 40);
+        assert.ok(long.endsWith('…'));
+    });
+});
+
+describe('classifyGitNetworkFailure', () => {
+    it('separates a dead connection from an auth rejection', () => {
+        assert.equal(classifyGitNetworkFailure(UNREACHABLE), 'unreachable');
+        assert.equal(classifyGitNetworkFailure(
+            'fatal: could not read Username for \'https://github.com\': terminal prompts disabled'), 'auth');
+        assert.equal(classifyGitNetworkFailure('git@github.com: Permission denied (publickey).'), 'auth');
+        assert.equal(classifyGitNetworkFailure('The requested URL returned error: 403'), 'auth');
+    });
+
+    it('recognises a certificate problem, which git reports as a connect failure', () => {
+        assert.equal(classifyGitNetworkFailure(
+            'fatal: unable to access \'https://ghe.corp/r/\': SSL certificate problem: unable to get local issuer certificate'), 'tls');
+    });
+
+    it('leaves local failures alone', () => {
+        assert.equal(classifyGitNetworkFailure('nothing to commit, working tree clean'), 'unknown');
+    });
+});
+
+describe('gitFailureHost', () => {
+    it('reads the host out of an https failure', () => {
+        assert.equal(gitFailureHost(UNREACHABLE), 'github.com');
+    });
+
+    it('reads the host out of an ssh-style remote without leaking credentials', () => {
+        const host = gitFailureHost("fatal: unable to access 'https://bot:hunter2@git.corp.example/svc.git'");
+        assert.equal(host, 'git.corp.example');
+    });
+
+    it('returns undefined when git names no host', () => {
+        assert.equal(gitFailureHost('nothing to commit, working tree clean'), undefined);
+    });
+});
+
+describe('redactUrlCredentials', () => {
+    it('hides the userinfo a proxy URL may carry', () => {
+        assert.equal(redactUrlCredentials('http://user:pass@127.0.0.1:7890'), 'http://127.0.0.1:7890');
+        assert.equal(redactUrlCredentials('http://127.0.0.1:7890'), 'http://127.0.0.1:7890');
+    });
+});
+
+// Verbatim from git 2.45.1.windows.1: 'git cherry-pick --continue' after the
+// conflict was resolved by keeping the side already upstream.
+const PICK_EMPTY_STOP = [
+    'On branch work',
+    'You are currently cherry-picking commit 95a1007.',
+    '  (all conflicts fixed: run "git cherry-pick --continue")',
+    '  (use "git cherry-pick --skip" to skip this patch)',
+    '',
+    'nothing to commit, working tree clean',
+    'The previous cherry-pick is now empty, possibly due to conflict resolution.',
+    'If you wish to commit it anyway, use:',
+    '',
+    '    git commit --allow-empty',
+    '',
+    "Otherwise, please use 'git cherry-pick --skip'"
+].join('\n');
+
+// Same stop from 'git revert --continue' — git prints the status header but
+// skips the advice block, so detection cannot key on the advice alone.
+const REVERT_EMPTY_STOP = [
+    'On branch work',
+    'You are currently reverting commit e964450.',
+    '  (all conflicts fixed: run "git revert --continue")',
+    '  (use "git revert --skip" to skip this patch)',
+    '',
+    'nothing to commit, working tree clean'
+].join('\n');
+
+// A pick that is merely stopped on conflicts: still unresolved, must not be
+// read as an empty step.
+const PICK_CONFLICT = [
+    'Auto-merging f.txt',
+    'CONFLICT (content): Merge conflict in f.txt',
+    'error: could not apply 6441c8c... m1',
+    'hint: "git cherry-pick --continue".',
+    "hint: You can instead skip this commit with 'git cherry-pick --skip'."
+].join('\n');
+
+describe('isEmptyCommitStop', () => {
+    it('recognises the cherry-pick advice block', () => {
+        assert.equal(isEmptyCommitStop(PICK_EMPTY_STOP), true);
+    });
+
+    it('recognises the terser revert stop', () => {
+        assert.equal(isEmptyCommitStop(REVERT_EMPTY_STOP), true);
+    });
+
+    it('recognises the same stop inside a rebase dump', () => {
+        assert.equal(isEmptyCommitStop(
+            'Rebasing (1/1) interactive rebase in progress; onto 53f9ca842 nothing to commit, working tree clean '
+            + 'The previous cherry-pick is now empty, possibly due to conflict resolution. '
+            + 'If you wish to commit it anyway, use: git commit --allow-empty '
+            + "Otherwise, please use 'git rebase --skip' Could not apply d9acd2da9..."), true);
+    });
+
+    it('does not mistake a stopped conflict for an empty step', () => {
+        assert.equal(isEmptyCommitStop(PICK_CONFLICT), false);
+    });
+
+    it('does not fire on a bare "nothing to commit"', () => {
+        assert.equal(isEmptyCommitStop('nothing to commit, working tree clean'), false);
+        assert.equal(isEmptyCommitStop('On branch main\nYou are currently cherry-picking commit 95a1007.'), false);
+    });
+});
+
+describe('emptyCommitStopInfo', () => {
+    it('reads the commit from the pick in progress', () => {
+        assert.deepEqual(emptyCommitStopInfo(PICK_EMPTY_STOP), { hash: '95a1007', subject: undefined });
+    });
+
+    it('reads the commit from a revert stop', () => {
+        assert.deepEqual(emptyCommitStopInfo(REVERT_EMPTY_STOP), { hash: 'e964450', subject: undefined });
+    });
+
+    it('reads hash and subject off the failure line a rebase prints', () => {
+        const info = emptyCommitStopInfo('Rebasing (1/1) interactive rebase in progress\r\nCould not apply d9acd2da9... 修复推送进度\r\nhint: ...');
+        assert.equal(info.hash, 'd9acd2da9');
+        assert.equal(info.subject, '修复推送进度');
+    });
+
+    it('keeps the subject on its own line only', () => {
+        const info = emptyCommitStopInfo('error: could not apply 6441c8c... m1\nOn branch work');
+        assert.equal(info.hash, '6441c8c');
+        assert.equal(info.subject, 'm1');
+    });
+
+    it('returns no hash when git named none', () => {
+        assert.deepEqual(emptyCommitStopInfo('The previous cherry-pick is now empty'), { hash: undefined, subject: undefined });
+    });
+});
+

@@ -41,14 +41,17 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 命令输出是 `Buffer`，必须显式 `toString('utf8')`，避免 StringDecoder 拼接错误。
 - 查询优先用 plumbing 并带机器友好格式：`status -z`、`blame --porcelain`、`ls-files -u`、`for-each-ref --format=...`，解析 `-z` 输出按 NUL 分隔。
 - 写提交消息类内容用 `-F`（文件）或 stdin，**禁止拼进命令行**（注入风险 + 编码问题）。
+- **pathspec（路径过滤）一律追加在 `--` 之后**：`… -- <path>…`。有 `--` 兜底，前导 `-` 不可能被 git 当选项，所以不必再拒绝这类字符（那是仓库内真实存在的文件名）；把 pathspec 混在选项区里则等于开注入面。注意带 pathspec 的 `git log` 会做**按路径的历史简化**，未触及这些路径的 merge 提交不再出现，这是预期语义不是 bug。
 - rebase/squash 等需要编辑器的操作：用 `env` + `cp` 作为 GIT_EDITOR/GIT_SEQUENCE_EDITOR，不要依赖交互式编辑器。
+- **用户可见的 git 失败文案一律走 `formatGitError`（src/services/gitUtils.ts）**，不要 `String(error)`：那会带上 `Error: ` 包装，而 `GitCommandRunner` 把同一句 stderr 同时写进 `message` 与 `stderr`，直接拼就是"Error: fatal: …"重复两遍。显示文本有 4 行／400 字上限，所以**按关键词判定失败类型时用 `combineErrorText`（或 `error.message`）的原文**，只把 `formatGitError` 的结果交给用户——判在截断后的文本上，将来任何一条长 dump 都会让判定悄悄失效。
+- **网络类失败由 `GitService._explainNetworkFailure` 分类补一句可执行提示**（凭据／证书／连不上）。"连不上"要先读 `git config --get http.proxy`（键不存在时 git 非零退出，按未配置处理）再决定提示：没配 → 让用户给 git 配代理；配了 → 让它检查代理是否还活着。代理 URL 可能带 `user:pass@`，展示前必须过 `redactUrlCredentials`。提示写在**第一行**——通知条截的是尾部，能行动的半句不能被截掉。
 
 ### 禁止依赖 vscode.git（已彻底移除）
 
 - **不得再调用内置 git 扩展的任何 API**：`extensions.getExtension('vscode.git')`、`gitExt.activate()`、`getAPI(1)`、`repo.state` / `repo.getRefs()` / `repo.log()`，全部禁止；`package.json` 也不再有 `extensionDependencies`。回归测试 `src/test/noVscodeGit.test.ts` 会扫 `src/**` 拦住这类用法。
 - **原因**：激活 vscode.git 是多 spawn 的仓库扫描（大仓库秒级），且它的 refs/HEAD 缓存滞后于真实变更；`repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定，踩坑成本高于收益。
 - **原本从 vscode.git 拿的数据一律走本地实现**：分支名 → `RefsReader`（读 refs 文件）；upstream/ahead/behind → `_getBranchTrackInfo()`（单条 `for-each-ref`）；当前分支 → 读 `HEAD`；工作区是否干净 → `getWorkingTreeSummary()`（`status --porcelain -z`）；缓存失效 → `GitService.watchRepositoryChanges()`（`fs.watch` git 目录）。
-- **不再注册自有 SCM Provider**：源代码管理面板完全交回内置 Git 扩展，GitCharm 不在那里出现（曾实现过 `src/scm/sourceControlProvider.ts`，已按用户要求整体移除，不要复活）。暂存/取消暂存/丢弃/状态条目只作为**服务层能力**保留：`GitService.add/stage/unstage/discard/getStatusEntries`（`src/services/gitService.ts`），由冲突处理等命令层调用。差异基线一律走 `idea-git-diff` 虚拟文档：索引内容用伪 ref `index` / `index:<stage>`（`_objectSpec` 翻译成 git 的 `:path` / `:1:path`）——**不要写 `0:path`**，实测 `git show 0:path` 直接 invalid object name，索引语法的前导冒号不能省。
+- **不再注册自有 SCM Provider**：源代码管理面板完全交回内置 Git 扩展，GitCharm 不在那里出现（曾实现过 `src/scm/sourceControlProvider.ts`，已按用户要求整体移除，不要复活）。暂存/取消暂存/丢弃/状态条目只作为**服务层能力**保留：`GitService.add/stage/unstage/discard/getStatusEntries`（`src/services/gitService.ts`），由冲突处理等命令层调用。差异基线一律走 `idea-git-diff` 虚拟文档：索引内容用伪 ref `index` / `index:<stage>`（`_objectSpec` 翻译成 git 的 `:path` / `:1:path`）——**不要写 `0:path`**，实测 `git show 0:path` 直接 invalid object name，索引语法的前导冒号不能省。虚拟文档 provider 里**不要对 `uri.path` 再 `decodeURIComponent`**：`Uri` 的各段本来就是解码值（`toString()` 才是编码那一步），二次解码会把文件名里的 `%20` 读成空格，遇到真名含 `%` 的文件（`100%.md`）更是直接抛 `URIError`、差异框一片空白。
 - **凭据提示由自有 `GIT_ASKPASS` 承担**（`src/services/askpass.ts` + `media/askpass/`）：git 直接 exec 那个 sh 脚本（实测 Git for Windows 会按 shebang 执行并把 prompt 作为 argv[1]），脚本用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 跑 `askpass-main.js`，把 prompt POST 回扩展宿主的 **127.0.0.1 + 随机 token** 一次性服务，答案来自 `showInputBox`。新增走远端的命令（push/pull/fetch 之外的一切网络调用）必须走 `GitService._execNetwork`，否则既没有 askpass 也没有 `timeoutMs: 0`。用户取消 → 204 → git 退出 128，`_explainAuthFailure` 负责补一句"配置凭据助手/改用 SSH"，不要把 `GIT_TERMINAL_PROMPT=0` 改成 1（会把提示词丢进不可见的宿主终端）。
 - git 目录一律用 `resolveGitDir()` / `resolveCommonDir()`（src/services/gitPaths.ts）定位：linked worktree 的 `.git` 是 `gitdir:` 指针文件，refs 还可能在 `commondir` 指向的公共目录，直接拼 `.git/refs` 会读空。
 
@@ -74,12 +77,14 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 ## 6. Webview 规范
 
 - **消息协议必须类型化**：所有扩展↔webview 消息在 `src/views/messages.ts` 定义为判别联合（`command` 字段），禁止 `as any`。
-- **扩展→webview 首屏消息必须等 `ready` 握手**再投递（html 设置后立即 postMessage 会丢失）；等待期间缓冲，ready 时 flush。
+- **扩展→webview 首屏消息必须等 `ready` 握手**再投递（html 设置后立即 postMessage 会丢失）；等待期间缓冲，ready 时 flush。缓冲集中在 `GraphViewProvider._post`：刷屏类消息（`SCREEN_COMMANDS` 列出的那些）按 command 只留最新值，`case 'ready'` 里先 `_flushScreen()` 再 `_postRepoState()`。**隐藏视图即 DOM 销毁，`onDidChangeVisibility` 必须把 `_webviewReady` 置回 false 并清空缓冲**，否则消息打进已死的帧——多仓库冷启动走缓存快路径就会赢下这条竞态，分支与提交全丢、面板永卡骨架屏（第三栏反而有数据，因为它走的是握手后的往返）。
 - **内联 JS 在 TS 模板串里要双重转义**：`\n` 等序列会静默杀死整段内联脚本。
 - **XSS 防线**：所有插入 HTML 的动态文本走统一的 `esc()`（webview.js 内集中实现），禁止字符串拼接原始数据。
 - **tooltip 用 `data-title` + 自定义浮层**，不用原生 `title`（白色原生 tooltip 会与主题浮层重叠）；多行内容 CSS 需 `white-space: pre-wrap`；`contextmenu` 时调 `window._hideTooltip()` 避免与右键菜单叠层。
-- **主题**：对话框、下拉等全部使用 VSCode 主题变量（`var(--vscode-*)`），不用原生 API 弹窗；HTML5 `datalist` 已弃用（暗色主题不可控），作者筛选用自定义下拉组件。
-- **渲染性能**：行选中用 `applyRowSelection()` 原地切 class，只有 setData/setCommits/appendCommits 才全量 `renderRows()`。
+- **浮动层层级是固定序**：对话框遮罩 `.push-dialog-overlay` = 2000，tooltip = 10000，`.context-menu` = 10001（必须盖过前两者）。菜单/浮层一律 append 到 `document.body`，任何"右键没反应/菜单不见了"先查层级再查逻辑——对话框内弹菜单曾因 1000 < 2000 画在遮罩底下。新增遮罩不得高于 10001，除非同时抬高菜单。日期浮层用 9000（在对话框遮罩之上、tooltip 之下）。
+- **浮层定位要"先摆再校"，不能只信算出来的边界**：宿主可以开缩放（`window.zoomLevel`／鼠标缩放），此时 CSS px 与 `getBoundingClientRect()` 的 px 不是一个尺度（实测 `width: 252px` 的框量出来 239.4），按数值 clamp 的右边界会差出零点几像素、刚好露出屏幕外。写法是先按估算位置摆好，再用真实渲染出的矩形对 `innerWidth/innerHeight` 复核并回挪（两趟足够）。
+- **主题**：对话框、下拉等全部使用 VSCode 主题变量（`var(--vscode-*)`），不用原生 API 弹窗；HTML5 `datalist` 已弃用（暗色主题不可控），作者筛选用自定义下拉组件。原生 `input[type=date]` 同理已弃用——它的日历弹层归操作系统管，主题变量够不到，日期筛选现在是自绘的月历浮层（见 §7）。
+- **渲染性能**：行选中用 `applyRowSelection()` 原地切 class，只有 setData/setCommits/appendCommits 才全量 `renderRows()`。**拖动/悬停类浮层同一条规则，而且这是功能性的**：日历网格在按住拖动期间只能原地 toggle class，绝不能重写 `innerHTML`——按下那个元素一旦脱离文档，浮层上"按在外部就关闭"的 `contains()` 判定就把这次按下读成"没点在浮层里"，拖动当场中断（现象是"根本拖不动"，静态读代码看不出来）。
 - WebviewView 无 `retainContextWhenHidden`——隐藏即销毁 DOM，靠视图状态持久化恢复。
 
 ## 7. UI/UX 约定（对标 IDEA）
@@ -87,21 +92,25 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 交互视觉：圆角 6–12px、`cubic-bezier` 过渡、悬停微动效、入场动画。
 - 提交列表只显示消息**第一行**，完整信息放 tooltip；tooltip 结构化分行（作者/时间/本地/远程分支）。
 - **所有搜索输入框（提交消息/作者/日期）回车触发**，不用 input 实时搜索；搜索结果用 `setStatusBarMessage`/`showInformationMessage` 系统提示，不做自定义 hint UI。
-- 日期选择器联动：选完开始日期自动聚焦结束日期，强制 end ≥ start。
+- **日期筛选是一个范围按钮 + 自绘月历**（`#date-trigger` → `.date-popover`）：按住拖动圈选一段时间，反着拖自动归正；不想拖就先点起始日再点结束日（`datePick.pending`，提示语跟着变）。网格固定 6 周，所以跨月拖动落在同一格里、浮层高度不会中途跳动。端点在 webview 内就排好序再发出，**宿主收到的格式不变**（`YYYY-MM-DDT00:00:00` / `T23:59:59`，git 侧仍按 §8 把 `T` 换成空格）；因为结构性选不反，原先的 `w.endBeforeStart` 校验已删。快捷区间 今天／近 7 天／近 30 天／近 1 年，点标题切年视图。**松手只有落在日历内才算完成**：`mouseup` 在浮层外一律视为放弃，否则按下去之后把鼠标移出窗口松手留下的 `dragging`，会在用户下一次点任何东西时提交成一个莫名其妙的区间。
 - 树节点：文件夹单击展开、分支双击切换；折叠指示器用内联 SVG chevron（`currentColor`），不用 ASCII；分支叶子只显示最后一段路径（`data-branch`/tooltip 保留全名，操作用完整 ref）。
 - 右键菜单按类型区分：本地分支 7 项、远程分支 4 项精简。
 - tag 显示为 IDEA 风格黄色徽章。
-- 提交时间：<24h 显示相对时间，≥24h 显示 `YYYY-MM-DD HH:mm:ss`；**git log 一律用作者时间（%ai/%ar）**，不用 %ci/%cr；committer≠author 时详情额外显示"合入"行。
+- 提交时间：<24h 显示相对时间，≥24h 显示 `YYYY-MM-DD HH:mm:ss`；**git log 一律用作者时间（%ai/%ar）**，不用 %ci/%cr（这只管**显示**哪一天；判一组提交谁先谁后见 §8 的 `orderCommitsByHistory`）；committer≠author 时详情额外显示"合入"行。
 - 确认对话框保持简洁（标题+按钮），不堆技术细节。
 
 ## 8. Git 操作行为约定
 
-- **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。
+- **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。**网络类（push/pull/手动 fetch）尤其：`_execNetwork` 刻意不设子进程超时（大仓库不能被 30s 掐断），凭据又要等用户在自己的输入框里填，没有进度指示就等于"界面卡死"**；进度一律 `cancellable: false`（git 子进程没有取消通道，别给假按钮）。
+- **作者时间不能用来判一组提交的早晚**：cherry-pick / rebase / amend 会保留原作者时间、落地顺序却相反——实测 bouncePy 里 `cfccce3`（author 13:39）是 `5f8c82d`（author 14:48）的**子**提交（committer 16:09）。按 `%ai` 排会把"最早^ ↔ 最晚"算成同一个提交跟自己比（差异恒空，看着就像视图坏了），回退/挑拣/压缩的参数顺序与 squash 的 `baseRef` 也会取错端点。判早晚统一走 `GitService.orderCommitsByHistory`（`rev-list --no-walk --topo-order`，一次子进程，与点击顺序无关）；面板列表本身的顺序就是 git log 的顺序，两者一致。
+- **多选提交的合并文件列表必须在宿主合并**（`mergeCommitFileStats`，`src/services/gitUtils.ts`），webview 只渲染。两条不变量：批次必须按**历史顺序旧→新**排好再进去（`orderCommitsByHistory`，**不是作者时间**，见上一条）（状态取净效果：选择内新建的保持 `A`、之后被删则 `D`；点击顺序进来的话同一个文件会一会儿 `A` 一会儿 `M`）；条目必须**复制后再累加行数**——`getCommitFilesWithStats` 返回 `_filesCache` 里的同一批对象，原地加数字会让下一次多选变成双倍。
+- **多选提交里双击文件 = 跨这一组提交的双栏对比**：左边取**最早**提交的父版本（`oldest^`），右边取**最晚**提交的版本，组里每个提交的改动才会都落在同一份 diff 里（只带最后点选的 `selectedHash` 就只看得到一个提交）。早/晚由 `orderCommitsByHistory` 按**历史顺序**判定（作者时间在这组数据里正好是反的，见上一条）。双栏只能放两个版本，选中项之间那些没被选的提交会一起出现在差异里——这是用户要的效果。**不要改成"逐提交补丁拼一份只读文档"**（已实现并被否掉，见 commit `6b098bf`）：用户要的一直是熟悉的左右对比，不是补丁文本。修好顺序后，用户那组选择的差异是 `+2 -1`，与第三栏合并文件行显示的数字一致。
 - **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防止乐观结果被过期快照盖掉）；删除时若正在查看该分支的提交则切回当前分支。
 - 重命名/删除后必须同步内部状态（`_branch`、`selectedBranch`），否则后续命令报 `unknown revision`。
 - push 允许无 upstream 分支：`getUpstream` 包 try-catch；无 upstream 时用 `git log remote..local` 取待推送提交；推送对话框提交列表与箭头共用 `getBranchesWithDetails` 同一数据源，区分首次推送/已最新/有待推送三态，提交分页（首屏 20 条 + 加载更多）。
 - `updateBranch`：远程存在同名分支时自动建立跟踪。
 - **冲突处理（merge/rebase/cherry-pick）直接打开冲突文件**（`openConflictFiles`，上限 10 个 tab），解决靠核心 merge-conflict 扩展的 Accept Current/Incoming 代码透镜——它不依赖 vscode.git；插件只提供继续/终止入口和顶部持久化状态栏，**不再 `executeCommand('workbench.view.scm')` 把用户踢去内置 Git 的 SCM 视图**。冲突检测合并 stderr+stdout，扫 `unmerged files`、cherry-pick failed 等关键词，`isConflictError` 入参必须是字符串。
+- **一步"改动变空"必须先于冲突判定处理**（`isEmptyCommitStop`/`emptyCommitStopInfo` + `tryHandleEmptyCommitStop`）：解决冲突时保留对面已有内容会让这一步补丁变空，git 停下打印整段 advice，那三行就是用户能做的三个选择——改为弹"跳过这个提交／保留这个空提交／终止"。接入点（继续操作、cherry-pick、revert、交互式变基、变基到某分支、拉取/更新分支）**一律排在 `isConflictError` 之前**：advice 含 `Could not apply`，先判冲突会把用户赶去解决已经不存在的冲突。实测（git 2.45.1.windows.1）：cherry-pick 与 rebase 打印 advice 块，`git revert --continue` 只打印状态头 + `nothing to commit, working tree clean`，判据两种形状都要认；`.git/sequencer/todo` 不随执行消耗（进度记在别处），所以"保留空提交"（`commit --allow-empty --no-edit`，会复用准备好的消息）之后必须再 `--continue` 才跑得完剩余队列——单条 pick 不留 `sequencer` 目录，多条才留，用 `hasPendingSequencerSteps()` 分辨；续跑时撞上下一步的真冲突要走既有冲突路径，不能报"处理这一步失败"。所有 `--continue` 都要带 `GIT_EDITOR=true`（宿主没有终端可交给交互式编辑器）。
 - 分支刷新按钮只刷分支树，不动中间提交列表；拉取其他分支时不触发 `_reload()`。
 - 外部分支变更检测：**`fs.watch` 监听 git 目录本身**（用 `resolveGitDir()` 定位）并按 `filename === 'HEAD'` 过滤 + 300ms 防抖，**不要监听 HEAD 文件本身**——git 以 `HEAD.lock` + rename 覆写 HEAD，Windows 上文件级 watcher 仍可靠（实测三次 checkout 都收到事件），但 macOS/Linux 的 inotify 绑的是 inode，rename 覆盖后就成了孤儿监听，不可移植。轮询（2s，读 HEAD 零子进程）**常开**作兜底，不能只在 watcher `error` 时启用（孤儿监听不会报错，只是从此静默无事件）。仅 webview 可见时启用；`pauseBranchCheck` 冷却语义保留。
 - 同一目录级 watcher 上还须按 `isOperationStateFile()` 分流到**进行中操作复检**（`MERGE_HEAD`/`CHERRY_PICK_HEAD`/`rebase-merge`/`rebase-apply`），否则外部解决冲突后分支上方的"继续/终止"不会自动收起。判定以**状态文件被清掉**为准：`git add` 全部解决但还没 commit 时 `MERGE_HEAD` 仍在，状态栏必须保留；`rebase-*` 优先级高于 `CHERRY_PICK_HEAD` 高于 `MERGE_HEAD`（rebase 内部就是 cherry-pick）。空闲态只准用 `detectOperationFromFiles()`（纯 `fs.existsSync`，零子进程），只有"已知在进行中"才调 `getInProgressOperation()`——它会 spawn `ls-files -u` 兜住无状态文件的未合并索引。任何走 `setData` 的刷新都要把 `_lastInProgress` 与新算出的值同步，否则复检会把刚投递下去的状态当成"变化"再发一次。
@@ -109,6 +118,10 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 自动刷新必须带 `preserveSelection`：webview 只在所选提交仍存在于新列表时保留选中项、详情、折叠态与滚动位置，否则退回全量重置——不带这个标志，用户在终端每提交一次面板就跳回顶部、第三栏清空。
 - 日期筛选：git 的 `--since/--until` 不认 ISO 8601 的 `T`，转换为空格分隔格式。
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
+- **切换仓库只准走 `GraphViewProvider.switchRepository`**：面板切换器与 `idea-git.selectRepository` 命令共用这一条路径，保证重置的是同一批状态（`_branch`、选中提交、`_lastInProgress`、待落盘的视图快照，并按新 git 目录重新挂 watcher / auto-fetch）。git 允许不同项目重名分支与相同短哈希，任何一处"自己换个 root 就完事"都会把上一个项目的状态带进新仓库。文本过滤器是用户输入而非仓库状态，切换时**必须保留**，否则输入框与宿主过滤条件不一致。
+- **仓库发现是"向上 + 向下"两条路**：`_findGitRoot` 的向上探测解决"文件夹在仓库里面"，但真实工作区更常见的是**一个普通父目录并排十几个独立仓库**——向上探不到，切换器就会数出 1 个仓库、干脆不出现。向下扫（`discoverRepositoryRoots`）必须带三条护栏：命中仓库即停（不再往里 list，这是成本的主要来源）、跳过点目录与依赖/构建树、深度与目录预算上限；结果缓存在 `_discoveredRoots`，只在 `_resetRootDiscovery()`（文件夹增减、`git init`、克隆出现/消失）时失效。实测十几个仓库 5ms。
+- **缓存与快照必须能识别自己属于哪个仓库**：钉住的仓库写在 `workspaceState`（`idea-git.selectedRepository`），启动时用 `_hasGitDir` 校验，目录搬走就交给自动发现；持久化视图快照由宿主盖 `repoPath`，与当前仓库不匹配即丢弃（同 `PersistedBranchCache` 的 repoPath 校验思路）。
+- **后台 / 定时任务禁止走 `_execNetwork`**：它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框。自动 fetch 用 `fetchSilent()`（绕开 askpass + `GIT_TERMINAL_PROMPT=0` + 有限超时 + 失败只记 `logger.debug`），且先用 fs 读 `.git/config` 判断有没有远端——没远端一个子进程都不 spawn。这类任务还要绑"面板可见"条件，与分支 watcher 同起同停。
 
 ## 9. Git 工作流约束（AI 协作红线）
 

@@ -166,22 +166,11 @@ function handleAuthorKeydown(e) {
     }
 }
 
-/**
- * Check if a ref name looks like a tag (common conventions)
- * Tags are usually short names without slashes, or match patterns like v1.0.0, release-*, etc.
- */
-function isTagName(name) {
-    // Common tag patterns: v1.0.0, 1.0.0, release-*, etc.
-    // Also check if it's in refs/tags/ namespace (would come from git as just the name)
-    return /^v?\d+\.\d+/.test(name) || 
-           /^(release|tag)[-_]/i.test(name) ||
-           /^[A-Z][a-z]+-\d/.test(name); // e.g., "Version-1"
-}
-
 var state = {
     commits: INITIAL.commits || [],
     local: INITIAL.local || [],
     remote: INITIAL.remote || [],
+    stashes: [],
     divergence: {},
     detailVisible: false,
     current: INITIAL.currentBranch || '',
@@ -206,6 +195,8 @@ var state = {
     repoState: 'ready',
     repoFolder: '',
     repoPendingFiles: 0,
+    repositories: [],
+    currentRepository: '',
     iconPack: null,
     _pendingScrollTop: null,
     _pendingRestore: null
@@ -447,6 +438,8 @@ var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stro
 // Same silhouette with filled nodes: the checked-out branch has to stand out in the tree.
 var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="4.5" cy="12.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="11.5" cy="5.5" r="2" fill="currentColor" stroke-width="1"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
+// Archive box: the lid, the body and the slot a stash is put through.
+var I_STASH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>';
 // Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
 // the stroke-based carets used across the panel. currentColor keeps it theme aware.
 var I_FOLDER = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
@@ -591,6 +584,26 @@ function renderTree() {
         }
         return s;
     }
+    // Stash rows carry no branch, so they are not .bitem: the tree's dblclick ->
+    // checkout handler must never fire on them.
+    function stashItem(entry) {
+        var ref = 'stash@{' + entry.index + '}';
+        var label = entry.message || ref;
+        var when = fmtRelativeTime(entry.date);
+        var tooltip = ref + '\n' + label + (when ? '\n' + when : '');
+        return '<div class="sitem" data-stash="' + entry.index + '" data-title="' + esc(tooltip) + '" style="padding-left:20px">' +
+            I_STASH + '<span class="bname">' + esc(label) + '</span>' +
+            (when ? '<span class="sdate">' + esc(when) + '</span>' : '') + '</div>';
+    }
+    function stashSection() {
+        if (state.stashes.length === 0) {return '';}
+        var visible = state.stashes.filter(function (s) { return match(s.message || ''); });
+        var s = header('stash', T('w.stashSection'), visible.length);
+        if (!state.collapsedSec['stash']) {
+            visible.forEach(function (entry) { s += stashItem(entry); });
+        }
+        return s;
+    }
     var head = '';
     if (state.current) {
         var resumeHtml = '';
@@ -606,7 +619,8 @@ function renderTree() {
     document.getElementById('btree').innerHTML =
         '<div id="btree-inner">' + head +
         section('local', T('common.local'), state.local, I_BRANCH) +
-        section('remote', T('common.remote'), state.remote, I_CLOUD) + '</div>';
+        section('remote', T('common.remote'), state.remote, I_CLOUD) +
+        stashSection() + '</div>';
 }
 
 /* ---------- center commit list ---------- */
@@ -694,11 +708,12 @@ function renderRows() {
         (c.refs || []).forEach(function (r) {
             if (r === 'HEAD') return;
             
-            // Determine ref type for styling
-            var isBranch = !r.includes('/') && !isTagName(r);
+            // Determine ref type for styling. Tags are known by the host (it read
+            // refs/tags), so the badge never guesses from the name's shape.
+            var isTag = (c.tags || []).indexOf(r) >= 0;
+            var isBranch = !r.includes('/') && !isTag;
             var isRemote = r.indexOf('origin/') === 0 || r.indexOf('remotes/') === 0;
-            var isTag = isTagName(r);
-            
+
             var cls = 'chip';
             if (isTag) {
                 cls += ' tag'; // Yellow badge for tags
@@ -813,10 +828,10 @@ function renderMultiCommitDetail(info, filesBox) {
     header += '<span class="multi-count">' + T('common.commitCount', { n: commits.length }) + '</span>';
     header += '</div>';
     
-    // Show all commit messages in chronological order (oldest first)
-    var sorted = commits.slice().reverse(); // Reverse to show oldest first
+    // The host returns these oldest → newest, so the order the user clicked
+    // (Ctrl+click picks in any order at all) never reaches the display.
     var msgHtml = '<div class="multi-commit-list">';
-    sorted.forEach(function(c) {
+    commits.forEach(function(c) {
         msgHtml += '<div class="multi-commit-item" data-hash="' + esc(c.hash) + '">';
         msgHtml += '<span class="hashchip">' + esc(c.shortHash) + '</span>';
         msgHtml += '<span class="cmsg">' + esc(c.message || T('commit.noMessage')) + '</span>';
@@ -827,17 +842,8 @@ function renderMultiCommitDetail(info, filesBox) {
     
     info.innerHTML = header + msgHtml;
     
-    // Show merged files (deduplicated)
-    var allFiles = state.multiFiles || [];
-    var fileMap = {};
-    allFiles.forEach(function(f) {
-        if (!fileMap[f.path]) {
-            fileMap[f.path] = { path: f.path, added: 0, deleted: 0, status: f.status };
-        }
-        fileMap[f.path].added += f.added || 0;
-        fileMap[f.path].deleted += f.deleted || 0;
-    });
-    var mergedFiles = Object.values(fileMap);
+    // One row per path, already merged, counted and ordered by the host.
+    var mergedFiles = state.multiFiles || [];
     
     if (mergedFiles.length === 0) {
         filesBox.innerHTML = '<div class="empty">' + T('common.noFileChanges') + '</div>';
@@ -1173,21 +1179,334 @@ function showMenu(x, y, items, onPick) {
     }, 0);
 }
 
+/* ---------- date range filter (calendar popover, drag to circle a period) ---------- */
+// Press the first day, drag to the last one, let go. Clicking works too: the first
+// click is the start, the next one closes the range — which is how a period that
+// needs a month navigation stays a single action instead of two typed endpoints.
+var dateRange = { from: '', to: '' };
+var datePick = { year: 0, month: 0, view: 'month', anchor: '', hover: '', dragging: false, pending: false };
+var dateUi = null;
+
+function pad2(n) { return n < 10 ? '0' + n : String(n); }
+function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+function todayYmd() { var d = new Date(); d.setHours(0, 0, 0, 0); return ymd(d); }
+function dayShiftBack(days) {
+    var d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - days);
+    return ymd(d);
+}
+
+function syncDateTrigger() {
+    var el = document.getElementById('dr-text');
+    if (el) {
+        if (dateRange.from || dateRange.to) {
+            el.textContent = (dateRange.from || '…') + ' → ' + (dateRange.to || '…');
+            el.className = 'dr-text';
+        } else {
+            el.textContent = T('ui.dateRange');
+            el.className = 'dr-text placeholder';
+        }
+    }
+    syncDateClr();
+}
+
+/** Endpoints are stored ordered, so "start after end" cannot happen by dragging. */
+function applyDateRange(a, b) {
+    var lo = a <= b ? a : b;
+    var hi = a <= b ? b : a;
+    dateRange.from = lo;
+    dateRange.to = hi;
+    datePick.dragging = false;
+    datePick.pending = false;
+    syncDateTrigger();
+    pushFilters();
+}
+
+function clearDateRange() {
+    dateRange.from = '';
+    dateRange.to = '';
+    datePick.dragging = false;
+    datePick.pending = false;
+    syncDateTrigger();
+    if (dateUi && dateUi.isOpen) { renderDateGrid(); }
+}
+
+function buildDatePopover() {
+    var pop = document.createElement('div');
+    pop.className = 'date-popover';
+    var weeks = T('date.weekdays').split(',').map(function (w) {
+        return '<span>' + esc(w.trim()) + '</span>';
+    }).join('');
+    var chips = [
+        [T('date.today'), 0],
+        [T('date.last7Days'), 6],
+        [T('date.last30Days'), 29],
+        [T('date.last365Days'), 364]
+    ].map(function (c) {
+        return '<button class="dp-chip" type="button" data-days="' + c[1] + '">' + esc(c[0]) + '</button>';
+    }).join('');
+    pop.innerHTML =
+        '<div class="dp-head">' +
+        '<button class="dp-nav" type="button" data-nav="-1">&#8249;</button>' +
+        '<button class="dp-title" type="button" data-act="switch"></button>' +
+        '<button class="dp-nav" type="button" data-nav="1">&#8250;</button>' +
+        '</div>' +
+        '<div class="dp-week">' + weeks + '</div>' +
+        '<div class="dp-grid"></div>' +
+        '<div class="dp-chips">' + chips + '</div>' +
+        '<div class="dp-foot"><span class="dp-hint"></span>' +
+        '<button class="dp-clear" type="button" data-act="clear">' + esc(T('ui.clear')) + '</button></div>';
+    document.body.appendChild(pop);
+    return pop;
+}
+
+function datePreviewBounds() {
+    if (datePick.dragging || datePick.pending) {
+        var a = datePick.anchor;
+        var b = datePick.hover || datePick.anchor;
+        return [a <= b ? a : b, a <= b ? b : a];
+    }
+    return [dateRange.from, dateRange.to];
+}
+
+/**
+ * Rebuild the cells only when the displayed month/year or the view changes, and
+ * paint the selection by toggling classes in place. Re-rendering on every move
+ * would detach the cell under the button, and the outside-click guard then reads
+ * the press as "clicked nothing in here" and closes the popover mid-drag.
+ */
+function renderDateGrid() {
+    if (!dateUi) {return;}
+    var pop = dateUi.pop;
+    var grid = pop.querySelector('.dp-grid');
+    var isYear = datePick.view === 'year';
+    var key = datePick.view + ':' + datePick.year + ':' + datePick.month;
+    if (grid.getAttribute('data-key') !== key) {
+        buildDateCells(grid, isYear);
+        grid.setAttribute('data-key', key);
+    }
+    pop.querySelectorAll('.dp-nav').forEach(function (nav) {
+        var back = nav.getAttribute('data-nav') === '-1';
+        nav.setAttribute('data-title', T(isYear ? (back ? 'date.prevYear' : 'date.nextYear') : (back ? 'date.prevMonth' : 'date.nextMonth')));
+    });
+    pop.querySelector('.dp-title').textContent = isYear
+        ? T('date.yearTitle', { y: datePick.year })
+        : T('date.monthTitle', { y: datePick.year, m: datePick.month + 1 });
+    var bounds = datePreviewBounds();
+    if (isYear) {
+        pop.querySelectorAll('.dp-month').forEach(function (cell) {
+            cell.classList.toggle('sel', Number(cell.getAttribute('data-month')) === datePick.month);
+        });
+    } else {
+        pop.querySelectorAll('.dp-day').forEach(function (cell) {
+            var iso = cell.getAttribute('data-date');
+            var end = !!bounds[0] && (iso === bounds[0] || iso === bounds[1]);
+            cell.classList.toggle('sel', end);
+            cell.classList.toggle('mid', !end && !!bounds[0] && !!bounds[1] && iso > bounds[0] && iso < bounds[1]);
+        });
+    }
+    pop.querySelector('.dp-hint').textContent = T(datePick.pending ? 'date.pickEndHint' : 'date.dragHint');
+}
+
+function buildDateCells(grid, isYear) {
+    grid.className = isYear ? 'dp-grid dp-months' : 'dp-grid';
+    if (isYear) {
+        var months = T('date.months').split(',');
+        var cells = '';
+        for (var i = 0; i < 12; i++) {
+            cells += '<div class="dp-cell dp-month" data-month="' + i + '">' + esc((months[i] || '').trim()) + '</div>';
+        }
+        grid.innerHTML = cells;
+        return;
+    }
+    // Monday-first grid, six weeks so the popover never changes height mid-drag.
+    var lead = (new Date(datePick.year, datePick.month, 1).getDay() + 6) % 7;
+    var start = new Date(datePick.year, datePick.month, 1 - lead);
+    var today = todayYmd();
+    var days = '';
+    for (var d = 0; d < 42; d++) {
+        var day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + d);
+        var cls = 'dp-cell dp-day';
+        if (day.getMonth() !== datePick.month) { cls += ' out'; }
+        if (ymd(day) === today) { cls += ' today'; }
+        days += '<div class="' + cls + '" data-date="' + ymd(day) + '">' + day.getDate() + '</div>';
+    }
+    grid.innerHTML = days;
+}
+
+function openDatePicker() {
+    if (!dateUi) {return;}
+    var box = document.getElementById('date-range');
+    var focusStr = dateRange.to || dateRange.from || todayYmd();
+    var parts = focusStr.split('-');
+    datePick.year = Number(parts[0]);
+    datePick.month = Number(parts[1]) - 1;
+    datePick.view = 'month';
+    datePick.dragging = false;
+    datePick.pending = false;
+    datePick.hover = '';
+    dateUi.isOpen = true;
+    dateUi.pop.classList.add('open');
+    if (box) { box.classList.add('open'); }
+    renderDateGrid();
+    var r = box.getBoundingClientRect();
+    dateUi.pop.style.left = '0px';
+    dateUi.pop.style.top = '0px';
+    var pr = dateUi.pop.getBoundingClientRect();
+    var left = Math.max(4, r.left);
+    var top = r.bottom + 6;
+    if (top + pr.height > window.innerHeight - 6) { top = Math.max(6, r.top - pr.height - 6); }
+    dateUi.pop.style.left = left + 'px';
+    dateUi.pop.style.top = top + 'px';
+    // The host webview can be zoomed (window zoom / `window.zoomLevel`), and under
+    // a zoom a CSS px and a rect px are different scales, so the clamp above is
+    // only an estimate: nudge against the rect that was actually rendered.
+    for (var i = 0; i < 2; i++) {
+        var got = dateUi.pop.getBoundingClientRect();
+        var dx = got.right > window.innerWidth - 4 ? got.right - window.innerWidth + 4 : 0;
+        var dy = got.bottom > window.innerHeight - 4 ? got.bottom - window.innerHeight + 4 : 0;
+        if (!dx && !dy) {break;}
+        dateUi.pop.style.left = (parseFloat(dateUi.pop.style.left) - dx) + 'px';
+        dateUi.pop.style.top = (parseFloat(dateUi.pop.style.top) - dy) + 'px';
+    }
+    if (window._hideTooltip) window._hideTooltip();
+}
+
+function closeDatePicker() {
+    if (!dateUi) {return;}
+    dateUi.isOpen = false;
+    dateUi.pop.classList.remove('open');
+    var box = document.getElementById('date-range');
+    if (box) { box.classList.remove('open'); }
+    datePick.dragging = false;
+    datePick.pending = false;
+}
+
+function initDateRange() {
+    var trigger = document.getElementById('date-trigger');
+    var box = document.getElementById('date-range');
+    if (!trigger || !box) {return;}
+    var pop = buildDatePopover();
+    dateUi = { pop: pop, isOpen: false };
+
+    trigger.addEventListener('click', function () {
+        if (dateUi.isOpen) { closeDatePicker(); } else { openDatePicker(); }
+    });
+
+    pop.addEventListener('click', function (e) {
+        var nav = e.target.closest('.dp-nav');
+        if (nav) {
+            var step = Number(nav.getAttribute('data-nav'));
+            if (datePick.view === 'year') {
+                datePick.year += step;
+            } else {
+                datePick.month += step;
+                if (datePick.month < 0) { datePick.month = 11; datePick.year--; }
+                if (datePick.month > 11) { datePick.month = 0; datePick.year++; }
+            }
+            renderDateGrid();
+            return;
+        }
+        if (e.target.closest('[data-act="switch"]')) {
+            datePick.view = datePick.view === 'month' ? 'year' : 'month';
+            renderDateGrid();
+            return;
+        }
+        if (e.target.closest('[data-act="clear"]')) {
+            clearDateRange();
+            closeDatePicker();
+            pushFilters();
+            return;
+        }
+        var chip = e.target.closest('.dp-chip');
+        if (chip) {
+            applyDateRange(dayShiftBack(Number(chip.getAttribute('data-days'))), todayYmd());
+            closeDatePicker();
+            return;
+        }
+        var month = e.target.closest('.dp-month');
+        if (month) {
+            datePick.month = Number(month.getAttribute('data-month'));
+            datePick.view = 'month';
+            renderDateGrid();
+        }
+    });
+
+    pop.addEventListener('mousedown', function (e) {
+        var day = e.target.closest('.dp-day');
+        if (!day) {return;}
+        // Without this the drag starts a text selection over the grid.
+        e.preventDefault();
+        var iso = day.getAttribute('data-date');
+        if (datePick.pending) {
+            applyDateRange(datePick.anchor, iso);
+            closeDatePicker();
+            return;
+        }
+        datePick.dragging = true;
+        datePick.anchor = iso;
+        datePick.hover = iso;
+        renderDateGrid();
+    });
+
+    pop.addEventListener('mousemove', function (e) {
+        if (!datePick.dragging && !datePick.pending) {return;}
+        var day = e.target.closest('.dp-day');
+        if (!day) {return;}
+        var iso = day.getAttribute('data-date');
+        if (iso === datePick.hover) {return;}
+        datePick.hover = iso;
+        renderDateGrid();
+    });
+
+    document.addEventListener('mouseup', function (e) {
+        if (!datePick.dragging) {return;}
+        // Only a release inside the calendar ends the drag. A press abandoned
+        // outside (released over another panel or outside the window) leaves this
+        // handler without a matching mouseup, so the next unrelated click would
+        // otherwise commit a range the user never finished circling.
+        if (!pop.contains(e.target)) {
+            datePick.dragging = false;
+            renderDateGrid();
+            return;
+        }
+        datePick.dragging = false;
+        if (datePick.hover !== datePick.anchor) {
+            applyDateRange(datePick.anchor, datePick.hover);
+            closeDatePicker();
+        } else {
+            datePick.pending = true;
+            renderDateGrid();
+        }
+    });
+
+    document.addEventListener('mousedown', function (e) {
+        if (!dateUi.isOpen) {return;}
+        if (pop.contains(e.target) || box.contains(e.target)) {return;}
+        closeDatePicker();
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && dateUi.isOpen) { closeDatePicker(); }
+    });
+
+    syncDateTrigger();
+}
+
 /* ---------- events ---------- */
 function pushFilters() {
-    var fromDate = document.getElementById('f-from').value;
-    var toDate = document.getElementById('f-to').value;
-    
     // Convert date format to include time for better git filtering
     // YYYY-MM-DD -> YYYY-MM-DDT00:00:00 (start of day)
     // YYYY-MM-DD -> YYYY-MM-DDT23:59:59 (end of day)
-    var fromFormatted = fromDate ? fromDate + 'T00:00:00' : '';
-    var toFormatted = toDate ? toDate + 'T23:59:59' : '';
-    
+    var fromFormatted = dateRange.from ? dateRange.from + 'T00:00:00' : '';
+    var toFormatted = dateRange.to ? dateRange.to + 'T23:59:59' : '';
+
     vscode.postMessage({
         command: 'setFilters',
         text: document.getElementById('f-search').value,
         author: document.getElementById('f-author').value,
+        path: document.getElementById('f-path').value,
         from: fromFormatted,
         to: toFormatted
     });
@@ -1195,6 +1514,12 @@ function pushFilters() {
 var debounce;
 document.getElementById('f-search').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
+        pushFilters();
+    }
+});
+document.getElementById('f-path').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+        // Same rule as the other filter boxes: search on Enter, not per keystroke.
         pushFilters();
     }
 });
@@ -1214,67 +1539,18 @@ document.getElementById('f-author').addEventListener('blur', function() {
     setTimeout(closeAuthorDropdown, 200);
 });
 
-// Date inputs: change event for validation and auto-focus, Enter key for search
-document.getElementById('f-from').addEventListener('change', function() {
-    syncDateClr();
-    
-    // Auto-focus to-date input after selecting from-date
-    var toDateInput = document.getElementById('f-to');
-    if (toDateInput) {
-        setTimeout(function() {
-            toDateInput.focus();
-        }, 100);
-    }
-    
-    // Set min attribute on to-date to enforce from <= to
-    var fromDate = this.value;
-    if (fromDate && toDateInput) {
-        toDateInput.setAttribute('min', fromDate);
-        
-        // Clear to-date if it's before from-date
-        var toDate = toDateInput.value;
-        if (toDate && toDate < fromDate) {
-            toDateInput.value = '';
-        }
-    }
-    
-    // Don't auto-search on date change, only on Enter key
-});
-
-document.getElementById('f-to').addEventListener('change', function() {
-    syncDateClr();
-    
-    // Validate that to-date is not before from-date
-    var fromDate = document.getElementById('f-from').value;
-    var toDate = this.value;
-    
-    if (fromDate && toDate && toDate < fromDate) {
-        // Show warning and clear the invalid date
-        vscode.postMessage({
-            command: 'showNotification',
-            type: 'warning',
-            message: T('w.endBeforeStart')
-        });
-        this.value = '';
-    }
-    
-    // Don't auto-search on date change, only on Enter key
-});
-
-// Add Enter key listener for date inputs
-document.getElementById('f-from').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        pushFilters();
-    }
-});
-
-document.getElementById('f-to').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        pushFilters();
-    }
-});
+// Date range: one control in the bar, one calendar in a popover. A period is a
+// gesture here — press the first day, drag to the last, let go — instead of two
+// endpoints typed into native date fields, whose calendar popup the theme cannot
+// reach (same reason the author box got its own dropdown).
+initDateRange();
 document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
+});
+document.getElementById('btn-reflog').addEventListener('click', function () {
+    // No branch: the host falls back to HEAD's reflog, which is the list that
+    // still holds commits lost to a checkout or reset.
+    vscode.postMessage({ command: 'action', action: 'reflog' });
 });
 document.getElementById('tg-graph').addEventListener('click', function () {
     state.graphVisible = state.graphVisible === false;
@@ -1291,19 +1567,17 @@ function syncClr(inputId, clrId) {
     var b = document.getElementById(clrId);
     if (i && b) b.style.display = i.value ? '' : 'none';
 }
-['f-search|clr-search', 'f-author|clr-author', 'f-bfilter|clr-bfilter'].forEach(function (pair) {
+['f-search|clr-search', 'f-author|clr-author', 'f-path|clr-path', 'f-bfilter|clr-bfilter'].forEach(function (pair) {
     var ids = pair.split('|');
     syncClr(ids[0], ids[1]);
     var i = document.getElementById(ids[0]);
     if (i) i.addEventListener('input', function () { syncClr(ids[0], ids[1]); });
 });
 function syncDateClr() {
-    var f = document.getElementById('f-from').value || document.getElementById('f-to').value;
-    document.getElementById('clr-date').style.display = f ? '' : 'none';
+    var on = !!(dateRange.from || dateRange.to);
+    var b = document.getElementById('clr-date');
+    if (b) b.style.display = on ? '' : 'none';
 }
-syncDateClr();
-document.getElementById('f-from').addEventListener('change', syncDateClr);
-document.getElementById('f-to').addEventListener('change', syncDateClr);
 
 document.getElementById('clr-search').addEventListener('click', function () {
     document.getElementById('f-search').value = '';
@@ -1313,10 +1587,12 @@ document.getElementById('clr-author').addEventListener('click', function () {
     document.getElementById('f-author').value = '';
     syncClr('f-author', 'clr-author'); pushFilters();
 });
+document.getElementById('clr-path').addEventListener('click', function () {
+    document.getElementById('f-path').value = '';
+    syncClr('f-path', 'clr-path'); pushFilters();
+});
 document.getElementById('clr-date').addEventListener('click', function () {
-    document.getElementById('f-from').value = '';
-    document.getElementById('f-to').value = '';
-    syncDateClr(); pushFilters();
+    clearDateRange(); pushFilters();
 });
 document.getElementById('clr-bfilter').addEventListener('click', function () {
     document.getElementById('f-bfilter').value = '';
@@ -1452,6 +1728,10 @@ document.getElementById('rf-branch').addEventListener('click', function () {
     vscode.postMessage({ command: 'refreshBranches' });
 });
 
+document.getElementById('stash-save').addEventListener('click', function () {
+    vscode.postMessage({ command: 'action', action: 'stashSave' });
+});
+
 document.getElementById('tg-files').addEventListener('click', function () {
     state.detailVisible = !state.detailVisible;
     applyDetailVisibility();
@@ -1465,6 +1745,22 @@ document.getElementById('rf-files').addEventListener('click', function () {
 });
 
 document.getElementById('btree').addEventListener('contextmenu', function (e) {
+    var stashRow = e.target.closest('.sitem');
+    if (stashRow) {
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+
+        var stashIndex = parseInt(stashRow.getAttribute('data-stash'), 10);
+        showMenu(e.clientX, e.clientY, [
+            ['stashApply', T('menu.stashApply')],
+            ['stashPop', T('menu.stashPop')],
+            ['stashDrop', T('menu.stashDrop')]
+        ], function (action) {
+            vscode.postMessage({ command: 'action', action: action, stash: stashIndex });
+        });
+        return;
+    }
+
     var item = e.target.closest('.bitem');
     if (!item) return;
     e.preventDefault();
@@ -1483,7 +1779,8 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['checkout', T('menu.checkout')],
             ['fetch', T('menu.fetchRemote')],
             ['newBranchFrom', T('menu.newBranchFrom')],
-            ['compareBranch', T('menu.compareWithCurrent')]
+            ['compareBranch', T('menu.compareWithCurrent')],
+            ['reflog', T('menu.reflog')]
         ];
     } else if (isCurrent) {
         // Current branch: only show applicable actions
@@ -1491,7 +1788,9 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['update', T('menu.pull')],
             ['push', T('menu.push')],
             ['newBranchFrom', T('menu.newBranchFrom')],
-            ['rename', T('menu.rename')]
+            ['rename', T('menu.rename')],
+            ['openRemoteBranch', T('menu.openOnRemote')],
+            ['reflog', T('menu.reflog')]
         ];
     } else {
         // Other local branches: full action set
@@ -1504,7 +1803,9 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['newBranchFrom', T('menu.newBranchFrom')],
             ['compareBranch', T('menu.compareWithCurrent')],
             ['rename', T('menu.rename')],
-            ['deleteBranch', T('menu.deleteBranch')]
+            ['deleteBranch', T('menu.deleteBranch')],
+            ['openRemoteBranch', T('menu.openOnRemote')],
+            ['reflog', T('menu.reflog')]
         ];
     }
     
@@ -1605,9 +1906,10 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
     var items = [];
     
     if (isMultiSelect) {
-        // Multi-select mode: allow cherry-pick, drop, and squash
+        // Multi-select mode: allow cherry-pick, revert, drop, and squash
         items = [
             ['cherryPick', T('menu.cherryPick') + ' (' + state.selectedHashes.length + ')'],
+            ['revert', T('menu.revert') + ' (' + state.selectedHashes.length + ')'],
             ['dropCommit', T('menu.dropCommit') + ' (' + state.selectedHashes.length + ')'],
             ['squashCommits', T('menu.squashCommits') + ' (' + state.selectedHashes.length + ')']
         ];
@@ -1616,27 +1918,47 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
         items = [
             ['showDiff', T('menu.showDiff')],
             ['cherryPick', T('menu.cherryPick')],
+            ['revert', T('menu.revert')],
             ['reset', T('menu.reset')]
         ];
         if (isHead) {
             items.push(['editMessage', T('menu.editMessage')]);
+            items.push(['amend', T('menu.amend')]);
             items.push(['dropCommit', T('menu.dropCommit')]);
         }
         items.push(['newBranchFrom', T('menu.newBranchFrom')]);
-    }
-    items.push(['copy', T('menu.copyHash')]);
-    
-    showMenu(e.clientX, e.clientY, items, function (action) {
-        if (action === 'copy') {
-            navigator.clipboard.writeText(state.selectedHashes.length > 1 ? state.selectedHashes.join('\n') : hash);
-        } else {
-            vscode.postMessage({ 
-                command: 'action', 
-                action: action, 
-                hash: hash,
-                hashes: state.selectedHashes.length > 1 ? state.selectedHashes : undefined
-            });
+        items.push(['newTag', T('menu.newTag')]);
+
+        // The host knows which refs are tags, so only offer to manage the ones
+        // actually sitting on this commit.
+        var rowCommit = (state.commits || []).find(function (x) { return x.hash === hash; });
+        var rowTags = (rowCommit && rowCommit.tags) || [];
+        if (rowTags.length > 0) {
+            items.push(['pushTag', T('menu.pushTag') + ' (' + rowTags.length + ')']);
+            items.push(['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')']);
         }
+    }
+    items.push(['openRemoteCommit', T('menu.openOnRemote')]);
+    items.push(['copy', T('menu.copyHash')]);
+    items.push(['copyMessage', T('menu.copyMessage')]);
+
+    showMenu(e.clientX, e.clientY, items, function (action) {
+        if (action === 'copy' || action === 'copyMessage') {
+            var hashes = state.selectedHashes.length > 1 ? state.selectedHashes : [hash];
+            navigator.clipboard.writeText(action === 'copy'
+                ? hashes.join('\n')
+                : hashes.map(function (h) {
+                    var c = (state.commits || []).find(function (x) { return x.hash === h; });
+                    return (c ? c.shortHash + ' ' + (c.message || '') : h);
+                }).join('\n'));
+            return;
+        }
+        vscode.postMessage({ 
+            command: 'action', 
+            action: action, 
+            hash: hash,
+            hashes: state.selectedHashes.length > 1 ? state.selectedHashes : undefined
+        });
     });
 });
 
@@ -1662,7 +1984,15 @@ document.getElementById('d-files').addEventListener('click', function (e) {
 document.getElementById('d-files').addEventListener('dblclick', function (e) {
     var file = e.target.closest('.frow.file');
     if (file && state.selectedHash) {
-        vscode.postMessage({ command: 'action', action: 'fileDiff', hash: state.selectedHash, path: file.getAttribute('data-path') });
+        // With a group selected the host opens one patch document per commit, so it
+        // needs every hash, not just the last-clicked one.
+        vscode.postMessage({
+            command: 'action',
+            action: 'fileDiff',
+            hash: state.selectedHash,
+            hashes: state.selectedHashes,
+            path: file.getAttribute('data-path')
+        });
     }
 });
 
@@ -1675,9 +2005,18 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     var path = file.getAttribute('data-path');
     var items = [
         ['fileCompareLocal', T('menu.fileCompareLocal')],
-        ['fileCherryPick', T('menu.fileCherryPick')]
+        ['fileCherryPick', T('menu.fileCherryPick')],
+        ['filterPath', T('menu.filterByPath')]
     ];
     showMenu(e.clientX, e.clientY, items, function (action) {
+        if (action === 'filterPath') {
+            // Purely local: fill the toolbar path box and re-query. Keeping it here
+            // avoids a host round-trip just to echo a filter the panel already owns.
+            document.getElementById('f-path').value = path;
+            syncClr('f-path', 'clr-path');
+            pushFilters();
+            return;
+        }
         vscode.postMessage({ command: 'action', action: action, hash: state.selectedHash, path: path });
     });
 });
@@ -1720,6 +2059,109 @@ function repoStateCopy(repoState, folder, files) {
     return null;
 }
 
+/* ---------- repository switcher (multi-root workspaces) ---------- */
+
+/** Compare two repository paths the way the host does: separators and case. */
+function repoKey(p) {
+    return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function sameRepo(a, b) {
+    return !!a && !!b && repoKey(a) === repoKey(b);
+}
+
+/**
+ * The switcher only shows up when there is something to switch between: with a
+ * single repository it would be a menu holding one entry.
+ */
+function renderRepoSwitcher() {
+    var row = document.getElementById('repo-row');
+    var name = document.getElementById('repo-switch-name');
+    if (!row || !name) { return; }
+    // The list this menu shows is exactly what just changed.
+    closeRepositoryMenu();
+    var repos = state.repositories || [];
+    if (repos.length < 2) {
+        row.style.display = 'none';
+        return;
+    }
+    var current = repos.filter(function (r) { return sameRepo(r.path, state.currentRepository); })[0];
+    // A pinned root can sit outside the scanned trees (a linked worktree), so fall
+    // back to its own folder name; with nothing resolved the chip is the way out of
+    // the guidance page and needs a label of its own rather than an empty name.
+    var label = current ? current.name
+        : String(state.currentRepository || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
+    name.textContent = label || T('repo.title');
+    name.setAttribute('data-title', state.currentRepository || T('repo.hint'));
+    row.style.display = '';
+}
+
+/**
+ * The repository list is a pick, not a dialog: an inline dropdown under the chip
+ * keeps the branch tree and the commit rows visible while choosing.
+ */
+var repoMenu = { open: false, index: -1 };
+
+function renderRepositoryMenu() {
+    var menu = document.getElementById('repo-menu');
+    if (!menu) { return; }
+    menu.innerHTML = (state.repositories || []).map(function (r) {
+        var cur = sameRepo(r.path, state.currentRepository);
+        return '<div class="repo-item' + (cur ? ' cur' : '') + '" data-path="' + esc(r.path) + '">' +
+            '<span class="repo-item-name">' + esc(r.name) + '</span>' +
+            '<span class="repo-item-path" data-title="' + esc(r.path) + '">' + esc(r.path) + '</span>' +
+            (cur ? '<span class="repo-item-mark">' + T('repo.current') + '</span>' : '') +
+            '</div>';
+    }).join('');
+}
+
+function highlightRepository(index) {
+    var menu = document.getElementById('repo-menu');
+    if (!menu) { return; }
+    var items = menu.querySelectorAll('.repo-item');
+    if (items.length === 0) { return; }
+    repoMenu.index = Math.max(0, Math.min(index, items.length - 1));
+    for (var i = 0; i < items.length; i++) {
+        items[i].classList.toggle('hl', i === repoMenu.index);
+    }
+    items[repoMenu.index].scrollIntoView({ block: 'nearest' });
+}
+
+function openRepositoryMenu() {
+    var menu = document.getElementById('repo-menu');
+    var btn = document.getElementById('repo-switch');
+    if (!menu || !btn) { return; }
+    renderRepositoryMenu();
+    menu.style.display = '';
+    btn.classList.add('open');
+    repoMenu.open = true;
+    // Start the keyboard on the repository being shown.
+    var items = menu.querySelectorAll('.repo-item');
+    repoMenu.index = -1;
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].classList.contains('cur')) { highlightRepository(i); break; }
+    }
+}
+
+function closeRepositoryMenu() {
+    var menu = document.getElementById('repo-menu');
+    var btn = document.getElementById('repo-switch');
+    if (menu) { menu.style.display = 'none'; }
+    if (btn) { btn.classList.remove('open'); }
+    repoMenu.open = false;
+    repoMenu.index = -1;
+}
+
+function pickRepository(item) {
+    if (!item) { return; }
+    var picked = item.getAttribute('data-path');
+    closeRepositoryMenu();
+    // Re-picking the visible repository is a no-op, not a reload.
+    if (!sameRepo(picked, state.currentRepository)) {
+        vscode.postMessage({ command: 'selectRepository', path: picked });
+    }
+}
+
 function renderRepoState() {
     var box = document.getElementById('repo-state');
     if (!box) { return; }
@@ -1751,6 +2193,38 @@ if (repoStateBox) {
     });
 }
 
+var repoSwitchBtn = document.getElementById('repo-switch');
+if (repoSwitchBtn) {
+    repoSwitchBtn.addEventListener('click', function () {
+        if (repoMenu.open) { closeRepositoryMenu(); } else { openRepositoryMenu(); }
+    });
+}
+
+var repoMenuEl = document.getElementById('repo-menu');
+if (repoMenuEl) {
+    repoMenuEl.addEventListener('click', function (e) {
+        pickRepository(e.target.closest('.repo-item'));
+    });
+}
+
+// Anywhere else dismisses it. The chip is inside #repo-row and toggles itself, so
+// excluding that element keeps its click from being closed and reopened at once.
+document.addEventListener('click', function (e) {
+    if (repoMenu.open && !e.target.closest('#repo-row')) { closeRepositoryMenu(); }
+});
+
+document.addEventListener('keydown', function (e) {
+    if (!repoMenu.open) { return; }
+    if (e.key === 'Escape') { closeRepositoryMenu(); return; }
+    if (e.key === 'ArrowDown') { highlightRepository(repoMenu.index + 1); }
+    else if (e.key === 'ArrowUp') { highlightRepository(repoMenu.index - 1); }
+    else if (e.key === 'Enter') {
+        pickRepository(document.querySelectorAll('#repo-menu .repo-item')[repoMenu.index]);
+    } else { return; }
+    // The list filters nothing, so the keys belong to the menu, not to a field.
+    e.preventDefault();
+});
+
 window.addEventListener('message', function (ev) {
     var m = ev.data;
     if (m.command === 'setFileIconTheme') {
@@ -1761,6 +2235,9 @@ window.addEventListener('message', function (ev) {
         state.repoState = m.state || 'ready';
         state.repoPendingFiles = typeof m.files === 'number' ? m.files : 0;
         state.repoFolder = m.folder || '';
+        state.repositories = m.repositories || [];
+        state.currentRepository = m.currentRepository || '';
+        renderRepoSwitcher();
         if (state.repoState !== 'ready') {
             // No data will ever arrive to clear the startup skeleton
             loadState.initialLoad = false;
@@ -1889,6 +2366,11 @@ window.addEventListener('message', function (ev) {
         }
         
         renderTree();
+    } else if (m.command === 'setStashes') {
+        // The stash stack lives in the same tree but is re-sent on its own: stashing
+        // never moves HEAD, so the commit list has nothing to reload.
+        state.stashes = m.stashes || [];
+        renderTree();
     } else if (m.command === 'showCherryPickResume') {
         // Show resume button on current branch node
         state.cherryPickResume = {
@@ -1981,6 +2463,8 @@ window.addEventListener('message', function (ev) {
         window._handleCompareFiles(m.hash, m.files || []);
     } else if (m.command === 'showFileHistory') {
         showFileHistoryDialog(m.filePath, m.history || []);
+    } else if (m.command === 'showReflog') {
+        showReflogDialog(m.scope, m.entries || []);
     } else if (m.command === 'multiCommitsResponse') {
         // Handle multi-select commits response
         state.multiCommits = m.commits || [];
@@ -2581,6 +3065,109 @@ function showFileHistoryDialog(filePath, history) {
     });
 }
 
+/* ---------- reflog dialog (recover lost commits) ---------- */
+var reflogState = { entries: [], visibleCount: 20 };
+
+function showReflogDialog(scope, entries) {
+    reflogState = { entries: entries, visibleCount: 20 };
+
+    function row(entry) {
+        var tip = entry.ref + '  ' + entry.shortHash + '\n' +
+            entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
+            fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
+        return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
+            '<span class="reflog-ref">' + esc(entry.ref) + '</span>' +
+            '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
+            '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
+            '<span class="push-commit-author">' + esc(entry.action) + '</span>' +
+            '<span class="push-commit-date" data-title="' + esc(fmtDateTime(entry.date)) + '">' + esc(fmtRelativeTime(entry.date)) + '</span>' +
+            '</div>';
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'push-dialog-overlay';
+    overlay.id = 'reflog-dialog';
+    var visible = entries.slice(0, reflogState.visibleCount);
+    var moreHtml = entries.length > visible.length
+        ? '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: entries.length - visible.length }) + '</button></div>'
+        : '';
+
+    overlay.innerHTML = '<div class="push-dialog-box">' +
+        '<div class="push-dialog-header">' + T('reflog.title') + ' <span class="push-compare-sub">' + esc(scope) + '</span></div>' +
+        '<div class="push-dialog-body">' +
+        '<div class="push-commits-list full"><div class="push-commits-scroll" id="reflog-scroll">' +
+        visible.map(row).join('') + moreHtml +
+        '</div></div>' +
+        '</div>' +
+        '<div class="push-dialog-actions">' +
+        '<span class="file-history-hint">' + T('reflog.hint') + '</span>' +
+        '<button class="dialog-btn secondary" data-action="close">' + T('common.close') + '</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+
+    var scroll = overlay.querySelector('#reflog-scroll');
+    // Delegation: appended batches need handlers too, and the picked row must be
+    // usable after the list grows.
+    scroll.addEventListener('click', function (e) {
+        var more = e.target.closest('.push-load-more-btn');
+        if (more) {
+            var next = Math.min(reflogState.visibleCount + 20, entries.length);
+            var container = more.parentElement;
+            var frag = document.createElement('div');
+            frag.innerHTML = entries.slice(reflogState.visibleCount, next).map(row).join('');
+            while (frag.firstChild) { container.parentNode.insertBefore(frag.firstChild, container); }
+            reflogState.visibleCount = next;
+            if (next < entries.length) {
+                more.textContent = T('common.loadMoreCommits', { n: entries.length - next });
+            } else {
+                container.remove();
+            }
+            return;
+        }
+        var picked = e.target.closest('.push-commit-row');
+        if (!picked) { return; }
+        overlay.querySelectorAll('.push-commit-row').forEach(function (r) { r.classList.remove('sel'); });
+        picked.classList.add('sel');
+    });
+    scroll.addEventListener('dblclick', function (e) {
+        var picked = e.target.closest('.push-commit-row');
+        if (!picked) { return; }
+        vscode.postMessage({ command: 'action', action: 'showDiff', hash: picked.getAttribute('data-hash') });
+        overlay.remove();
+    });
+    scroll.addEventListener('contextmenu', function (e) {
+        var picked = e.target.closest('.push-commit-row');
+        if (!picked) { return; }
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+        var hash = picked.getAttribute('data-hash');
+        // Every entry is a way out of a mistake, in the order the user needs them:
+        // first find out what happened, then either keep it or undo it.
+        var items = [
+            ['showDiff', T('reflog.menu.checkWhat')],
+            ['newBranchFrom', T('reflog.menu.keepOnBranch')],
+            ['reset', T('reflog.menu.undoToHere')],
+            ['cherryPick', T('reflog.menu.pickBack')],
+            ['copy', T('menu.copyHash')]
+        ];
+        showMenu(e.clientX, e.clientY, items, function (action) {
+            if (action === 'copy') {
+                navigator.clipboard.writeText(hash);
+                return;
+            }
+            vscode.postMessage({ command: 'action', action: action, hash: hash });
+            overlay.remove();
+        });
+    });
+
+    overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            overlay.remove();
+        });
+    });
+}
+
 /* ---------- operation status indicator ---------- */
 // Operation status bar button event delegation (bind once, handle all clicks)
 (function initOperationButtons() {
@@ -2625,16 +3212,14 @@ function renderOperationStatus() {
     if (state.inProgress === 'rebase') opLabel = T('op.rebaseInProgress');
     else if (state.inProgress === 'merge') opLabel = T('op.mergeInProgress');
     else if (state.inProgress === 'cherry-pick') opLabel = T('op.cherryPickInProgress');
+    else if (state.inProgress === 'revert') opLabel = T('op.revertInProgress');
 
     textEl.textContent = opLabel;
 
-    // Update buttons based on operation type
-    if (state.inProgress === 'merge' || state.inProgress === 'rebase' || state.inProgress === 'cherry-pick') {
-        actionsEl.innerHTML = '<button id="btn-continue-op" class="op-btn continue">' + T('op.continue') + '</button>' +
-                              '<button id="btn-abort-op" class="op-btn abort">' + T('op.abort') + '</button>';
-    } else {
-        actionsEl.innerHTML = '';
-    }
+    // Every kind is continued/aborted through the same two buttons; the host
+    // chooses the matching git subcommand from the detected operation.
+    actionsEl.innerHTML = '<button id="btn-continue-op" class="op-btn continue">' + T('op.continue') + '</button>' +
+                          '<button id="btn-abort-op" class="op-btn abort">' + T('op.abort') + '</button>';
     
     statusEl.style.display = 'flex';
 }

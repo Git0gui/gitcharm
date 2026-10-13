@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitService, GitCommit, assertHash } from '../services/gitService';
+import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
     isConflictError,
     combineErrorText,
     tryHandleConflict,
+    tryHandleEmptyCommitStop,
     openConflictFiles
 } from './helpers';
 import { t } from '../i18n';
@@ -32,7 +34,7 @@ export function registerCommitCommands(
                 });
                 await vscode.window.showTextDocument(doc);
             } catch (error) {
-                vscode.window.showErrorMessage(t('commit.showDiffFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('commit.showDiffFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -44,19 +46,10 @@ export function registerCommitCommands(
             let selectedHashes: string[] = [];
             
             if (hashesFromWebview && Array.isArray(hashesFromWebview) && hashesFromWebview.length > 0) {
-                // Direct multi-select from webview - need to sort by date (oldest first)
-                const commitDetails = await Promise.all(
-                    hashesFromWebview.map(async (hash: string) => {
-                        try {
-                            const detail = await gitService.getCommitDetail(hash);
-                            return { hash, date: detail.authorDate };
-                        } catch {
-                            return { hash, date: '' };
-                        }
-                    })
-                );
-                commitDetails.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = commitDetails.map(c => c.hash);
+                // Pick oldest → newest by history order. Author dates are copied along
+                // by cherry-pick and rebase, so they can disagree with it — and picking
+                // a child before its parent produces a conflict the user did not cause.
+                selectedHashes = (await gitService.orderCommitsByHistory(hashesFromWebview)).reverse();
             } else if (singleHash) {
                 // Single commit from context menu
                 selectedHashes = [singleHash];
@@ -72,8 +65,7 @@ export function registerCommitCommands(
                     label: c.message || t('commit.noMessage'),
                     description: c.shortHash,
                     detail: `${c.author} · ${c.relativeDate}`,
-                    hash: c.hash,
-                    date: c.date
+                    hash: c.hash
                 }));
                 
                 const selected = await vscode.window.showQuickPick(items, {
@@ -83,9 +75,9 @@ export function registerCommitCommands(
                 });
                 
                 if (!selected || selected.length === 0) {return;}
-                // Sort by date ascending (oldest first) for cherry-pick
-                selected.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = selected.map(s => s.hash);
+                selectedHashes = (await gitService.orderCommitsByHistory(
+                    selected.map(s => s.hash)
+                )).reverse();
             }
             
             // Validate hashes
@@ -149,6 +141,18 @@ export function registerCommitCommands(
                         await gitService.cherryPick(hash);
                         successCount++;
                     } catch (error: any) {
+                        // git's "this step came out empty" advice also contains
+                        // "Could not apply", so it must be asked about first —
+                        // otherwise the user is sent to resolve conflicts that
+                        // no longer exist.
+                        const step = await tryHandleEmptyCommitStop(error, gitService, graphView);
+                        if (step === 'skip') {continue;}
+                        if (step === 'keep') {
+                            successCount++;
+                            continue;
+                        }
+                        if (step) {break;}
+
                         const errText = combineErrorText(error);
                         
                         // Check if cherry-pick failed due to conflicts
@@ -206,6 +210,128 @@ export function registerCommitCommands(
             });
         }),
 
+        // Revert: apply the reverse of one or more commits as new commits. Unlike
+        // drop/reset this rewrites no history, so it is the safe way to undo
+        // something that has already been pushed.
+        vscode.commands.registerCommand('idea-git.revertCommit', async (commitNode: any) => {
+            const hashesFromWebview = commitNode?.hashes;
+            const singleHash = commitNode?.hash ?? commitNode?.commit?.hash;
+
+            let selectedHashes: string[] = [];
+
+            if (Array.isArray(hashesFromWebview) && hashesFromWebview.length > 0) {
+                selectedHashes = [...hashesFromWebview];
+            } else if (singleHash) {
+                selectedHashes = [singleHash];
+            } else {
+                // No commit provided (command palette): pick from recent commits.
+                const commits = await gitService.getLog(50);
+                if (commits.length === 0) {
+                    vscode.window.showErrorMessage(t('common.noCommitSelected'));
+                    return;
+                }
+
+                const picked = await vscode.window.showQuickPick(
+                    commits.map(c => ({
+                        label: c.message || t('commit.noMessage'),
+                        description: c.shortHash,
+                        detail: `${c.author} · ${c.relativeDate}`,
+                        hash: c.hash
+                    })),
+                    {
+                        canPickMany: true,
+                        placeHolder: t('revert.pickPlaceHolder'),
+                        title: t('revert.pickTitle')
+                    }
+                );
+                if (!picked || picked.length === 0) {return;}
+                selectedHashes = picked.map(p => p.hash);
+            }
+
+            try {
+                selectedHashes.forEach(assertHash);
+            } catch {
+                vscode.window.showErrorMessage(t('revert.invalidHash'));
+                return;
+            }
+
+            // Nothing may be staged or unstaged: git refuses to revert over a dirty
+            // worktree, and its error reads as an internal failure.
+            if (!(await gitService.isClean())) {
+                vscode.window.showErrorMessage(t('revert.needCleanTree'));
+                return;
+            }
+
+            // A merge commit has no single reverse patch — git needs `-m <parent>`.
+            const mergeHashes: string[] = [];
+            for (const hash of selectedHashes) {
+                if (await gitService.isMergeCommit(hash)) {mergeHashes.push(hash.substring(0, 7));}
+            }
+            if (mergeHashes.length > 0) {
+                vscode.window.showErrorMessage(t('revert.mergeBlocked', { hashes: mergeHashes.join(', ') }));
+                return;
+            }
+
+            // Newest first by history order: `git revert A B` undoes A then B, and
+            // reverting an older commit first would trip over the newer one still
+            // being applied. Author dates cannot answer which one is newer — a
+            // cherry-picked commit keeps the earlier date while sitting on top.
+            const ordered = await gitService.orderCommitsByHistory(selectedHashes);
+
+            const confirm = await graphView.showDialog(
+                ordered.length === 1
+                    ? t('revert.confirm', { hash: ordered[0].substring(0, 7) })
+                    : t('revert.confirmMultiple', { count: ordered.length }),
+                [t('revert.confirmBtn'), t('common.cancel')],
+                'warn'
+            );
+            if (confirm !== t('revert.confirmBtn')) {return;}
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: ordered.length === 1
+                    ? t('revert.reverting', { hash: ordered[0].substring(0, 7) })
+                    : t('revert.revertingMultiple', { count: ordered.length }),
+                cancellable: false
+            }, async () => {
+                for (let i = 0; i < ordered.length; i++) {
+                    try {
+                        await gitService.revert(ordered[i]);
+                    } catch (error: any) {
+                        // Ask about an empty step before the conflict path: the
+                        // advice text git prints for it contains "Could not apply".
+                        const step = await tryHandleEmptyCommitStop(error, gitService, graphView);
+                        if (step === 'skip' || step === 'keep') {continue;}
+                        if (step) {return;}
+                        const handled = await tryHandleConflict(
+                            error,
+                            gitService,
+                            graphView,
+                            t('op.revert')
+                        );
+                        if (handled) {
+                            // The remaining reverts are left for the continue/abort bar:
+                            // pressing on would stack conflicts on top of each other.
+                            const remaining = ordered.length - i - 1;
+                            vscode.window.showWarningMessage(
+                                remaining > 0
+                                    ? t('revert.conflictRemaining', { hash: ordered[i].substring(0, 7), remaining })
+                                    : t('revert.conflict', { hash: ordered[i].substring(0, 7) })
+                            );
+                            return;
+                        }
+                        throw error;
+                    }
+                }
+                vscode.window.showInformationMessage(
+                    ordered.length === 1
+                        ? t('revert.success', { hash: ordered[0].substring(0, 7) })
+                        : t('revert.successMultiple', { count: ordered.length })
+                );
+                graphView.refresh();
+            });
+        }),
+
         vscode.commands.registerCommand('idea-git.interactiveRebase', async () => {
             // Check for unstaged changes before rebase
             try {
@@ -257,6 +383,9 @@ export function registerCommitCommands(
                     graphView.refresh();
                 }
             } catch (error: any) {
+                // Before the conflict handler: git's empty-step advice reads as a
+                // conflict but has nothing left to resolve.
+                if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 const handled = await tryHandleConflict(
                     error,
                     gitService,
@@ -264,7 +393,7 @@ export function registerCommitCommands(
                     t('rebase.title', { hash: upstream })
                 );
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('rebase.interactiveFailed', { error: error?.message ?? String(error) }));
+                    vscode.window.showErrorMessage(t('rebase.interactiveFailed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -277,19 +406,9 @@ export function registerCommitCommands(
             let selectedHashes: string[] = [];
             
             if (hashesFromWebview && Array.isArray(hashesFromWebview) && hashesFromWebview.length > 0) {
-                // Direct multi-select from webview - need to sort by date (oldest first for consistent rebase order)
-                const commitDetails = await Promise.all(
-                    hashesFromWebview.map(async (hash: string) => {
-                        try {
-                            const detail = await gitService.getCommitDetail(hash);
-                            return { hash, date: detail.authorDate };
-                        } catch {
-                            return { hash, date: '' };
-                        }
-                    })
-                );
-                commitDetails.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = commitDetails.map(c => c.hash);
+                // Oldest → newest by history order: the rebase sequence below is
+                // built from this, and author dates can disagree with it.
+                selectedHashes = (await gitService.orderCommitsByHistory(hashesFromWebview)).reverse();
             } else if (singleHash) {
                 // Single commit from context menu
                 selectedHashes = [singleHash];
@@ -460,30 +579,54 @@ export function registerCommitCommands(
                     graphView.refresh();
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('commit.editFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('commit.editFailed', { error: formatGitError(error) }));
+            }
+        }),
+
+        // Amend: fold the current changes into the tip commit and keep its
+        // message (IDEA's "Amend" checkbox), as opposed to editCommitMessage,
+        // which only rewords it.
+        vscode.commands.registerCommand('idea-git.amendCommit', async (commitNode: any) => {
+            const hash = commitNode?.hash ?? commitNode?.commit?.hash ?? await gitService.getHeadHash();
+
+            const confirm = await graphView.showDialog(
+                t('amend.confirm', { hash: hash.substring(0, 7) }),
+                [t('amend.confirmBtn'), t('common.cancel')],
+                'warn'
+            );
+            if (confirm !== t('amend.confirmBtn')) {return;}
+
+            try {
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('amend.amending'),
+                    cancellable: false
+                }, async () => {
+                    const done = await gitService.amendWithChanges(hash);
+                    if (!done) {
+                        vscode.window.showInformationMessage(t('amend.nothingToFold'));
+                        return;
+                    }
+                    vscode.window.showInformationMessage(t('amend.success', { hash: hash.substring(0, 7) }));
+                    graphView.refresh();
+                });
+            } catch (error) {
+                vscode.window.showErrorMessage(t('amend.failed', { error: formatGitError(error) }));
             }
         }),
 
         vscode.commands.registerCommand('idea-git.squashCommits', async (commitNode: any) => {
             // Check if hashes array is provided directly from webview multi-select
             const hashesFromWebview = commitNode?.hashes;
-            
+
             let selectedHashes: string[] = [];
-            
+
             if (hashesFromWebview && Array.isArray(hashesFromWebview) && hashesFromWebview.length > 0) {
-                // Direct multi-select from webview - need to sort by date (oldest first for squash order)
-                const commitDetails = await Promise.all(
-                    hashesFromWebview.map(async (hash: string) => {
-                        try {
-                            const detail = await gitService.getCommitDetail(hash);
-                            return { hash, date: detail.authorDate };
-                        } catch {
-                            return { hash, date: '' };
-                        }
-                    })
-                );
-                commitDetails.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = commitDetails.map(c => c.hash);
+                // Oldest → newest by history order. The base ref computed further down
+                // is this list's first commit's parent, so a timestamp that disagrees
+                // with history (cherry-pick, rebase, amend) would squash from the
+                // wrong base. The picker path below is already in todo order.
+                selectedHashes = (await gitService.orderCommitsByHistory(hashesFromWebview)).reverse();
             } else {
                 // No commit provided - show picker (legacy mode)
                 const upstream = await vscode.window.showInputBox({
@@ -521,7 +664,7 @@ export function registerCommitCommands(
 
                     selectedHashes = selectedItems.map(item => item.hash);
                 } catch (error) {
-                    vscode.window.showErrorMessage(t('commit.squashFailed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('commit.squashFailed', { error: formatGitError(error) }));
                     return;
                 }
             }
@@ -554,13 +697,12 @@ export function registerCommitCommands(
                 return;
             }
             
-            // Get commit messages for the squash input box
+            // `selectedHashes` is already oldest → newest by history order, so the
+            // messages read the way the commits landed and the base ref below really
+            // is where the rebase starts from.
             const commitDetails = await Promise.all(
                 selectedHashes.map(hash => gitService.getCommitDetail(hash))
             );
-            
-            // Sort by date (oldest first) to show in chronological order
-            commitDetails.sort((a, b) => new Date(a.authorDate).getTime() - new Date(b.authorDate).getTime());
             
             // Validate: check if selected commits are contiguous in history
             const oldestCommit = commitDetails[0];
@@ -624,7 +766,7 @@ export function registerCommitCommands(
                     graphView.refresh();
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('commit.squashFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('commit.squashFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -656,7 +798,7 @@ export function registerCommitCommands(
                     vscode.window.showInformationMessage(t('commit.resetSuccess', { hash: hash.substring(0, 7) }));
                     graphView.refresh();
                 } catch (error) {
-                    vscode.window.showErrorMessage(t('commit.resetFailed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('commit.resetFailed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -687,7 +829,7 @@ export function registerCommitCommands(
                 }
                 await graphView.showFileHistory(rel, history);
             } catch (error) {
-                vscode.window.showErrorMessage(t('fileHistory.failed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('fileHistory.failed', { error: formatGitError(error) }));
             }
         })
     );

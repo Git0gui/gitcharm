@@ -20,7 +20,26 @@ import {
     parseRefPath,
     parseWorkingTreeSummary,
     parseStatusEntries,
+    parseStashList,
+    parsePathFilter,
+    parseReflogList,
     operationFromStateFiles,
+    remoteUrlToWebBase,
+    parseGitConfigRemoteUrl,
+    parseGitConfigRemoteNames,
+    formatGitError,
+    classifyGitNetworkFailure,
+    redactUrlCredentials,
+    gitFailureHost,
+    pickFetchRemote,
+    collectRepositoryRoots,
+    discoverRepositoryRoots,
+    repositoryKey,
+    RepositoryOption,
+    tagNameProblem,
+    InProgressOperation,
+    StashEntry,
+    ReflogEntry,
     StatusEntry,
     WorkingTreeSummary
 } from './gitUtils';
@@ -33,7 +52,12 @@ export {
     assertHash,
     LruCache,
     parseLogLine,
-    parseGraphLine
+    parseGraphLine,
+    tagNameProblem,
+    InProgressOperation,
+    StashEntry,
+    ReflogEntry,
+    RepositoryOption
 } from './gitUtils';
 
 export interface GraphCommit {
@@ -44,6 +68,8 @@ export interface GraphCommit {
     date: string;
     parents: string[];
     refs: string[];
+    /** Subset of `refs` that are tags — authoritative, from the refs directory. */
+    tags: string[];
     isMerge: boolean;
 }
 
@@ -57,6 +83,8 @@ export interface LogFilters {
     author?: string;
     from?: string;
     to?: string;
+    /** Comma-separated pathspecs: only commits touching these paths are listed. */
+    path?: string;
 }
 
 export interface LogOptions {
@@ -140,6 +168,14 @@ export class GitService {
     private _rootMemo = new Map<string, string | undefined>();
     private _rootKey: string | undefined;
     private _rootValue: string | undefined;
+    // Repositories found by listing below the workspace folders; the one part of
+    // discovery that reads directories, so it is kept until the layout changes.
+    private _discoveredRoots: string[] | undefined;
+    // Repository the user pinned in the panel's switcher (multi-root workspaces).
+    // Wins over discovery while it is still a repository; persisted per workspace.
+    private _pinnedRoot: string | undefined;
+    private readonly _memento: vscode.Memento;
+    private static readonly PINNED_REPOSITORY_KEY = 'idea-git.selectedRepository';
     // Cached result of the `git --version` probe (undefined = not probed yet)
     private _gitAvailable: boolean | undefined;
 
@@ -154,7 +190,11 @@ export class GitService {
 
     constructor(memento: vscode.Memento, askpass?: GitAskpass) {
         this._askpass = askpass;
+        this._memento = memento;
         this._persistedCache = new PersistedBranchCache(memento, () => this._repositoryPath);
+        // A pin from an earlier session is only honoured while that folder is
+        // still a repository; otherwise discovery takes over unchanged.
+        this._pinnedRoot = this._isRepository(memento.get<string>(GitService.PINNED_REPOSITORY_KEY));
         this._repositoryPath = this._resolveRoot();
 
         // Load persisted branch cache on startup
@@ -166,9 +206,7 @@ export class GitService {
 
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
             // Only clear root memo when workspace folders change; keep caches alive
-            this._rootMemo.clear();
-            this._rootKey = undefined;
-            this._rootValue = undefined;
+            this._resetRootDiscovery();
             // Re-resolve root for new workspace
             this._repositoryPath = this._resolveRoot();
             this._startRepositoryWatch();
@@ -279,15 +317,95 @@ export class GitService {
      * panel reacts without a restart.
      */
     refreshRepositoryPath(): string | undefined {
-        this._rootMemo.clear();
-        this._rootKey = undefined;
-        this._rootValue = undefined;
+        this._resetRootDiscovery();
         this.clearAllCaches();
         const root = this._resolveRoot();
         // The watcher follows a specific directory, so a new repo (git init, clone)
         // or a removed one needs the watch re-pointed.
         this._startRepositoryWatch();
         return root;
+    }
+
+    /**
+     * Repositories the panel can offer, in workspace order and deduplicated: the
+     * repository behind each workspace folder plus every sibling project below a
+     * plain parent directory, so several folders of one repository still give a
+     * single entry. Purely filesystem — no subprocess per folder, one bounded
+     * directory listing per level the scan descends.
+     */
+    listRepositories(): RepositoryOption[] {
+        const roots = this._discoverRoots();
+        const current = this._resolveRoot();
+        if (current && !roots.some(r => repositoryKey(r) === repositoryKey(current))) {
+            // Pinned root outside every workspace folder (e.g. a linked worktree)
+            roots.unshift(current);
+        }
+        return roots.map(root => ({ path: root, name: path.basename(root) }));
+    }
+
+    /**
+     * Workspace folders resolved to repositories, in workspace order. A folder
+     * opened inside a repository resolves upward; a folder opened above a dozen
+     * sibling projects has to be listed downward instead, which is the layout the
+     * implicit lookup cannot see at all.
+     */
+    private _discoverRoots(): string[] {
+        if (this._discoveredRoots) {return [...this._discoveredRoots];}
+        const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+        const upward = collectRepositoryRoots(folders, dir => this._probeRoot(dir));
+        const downward = discoverRepositoryRoots(
+            folders,
+            (dir, child) => path.join(dir, child),
+            dir => this._hasGitDir(path.join(dir, '.git')),
+            dir => this._listChildDirs(dir)
+        );
+        const roots = collectRepositoryRoots([...upward, ...downward], dir => dir);
+        this._discoveredRoots = roots;
+        return [...roots];
+    }
+
+    /**
+     * Immediate subdirectories of `dir`. A directory that cannot be read (no
+     * permission, deleted between listing and stat) simply contributes nothing.
+     */
+    private _listChildDirs(dir: string): string[] {
+        try {
+            return fs.readdirSync(dir, { withFileTypes: true })
+                .filter(entry => entry.isDirectory())
+                .map(entry => entry.name);
+        } catch (error) {
+            logger.debug('[GitCharm] repository scan skipped:', dir, error);
+            return [];
+        }
+    }
+
+    /**
+     * Show one repository in the panel. Everything learned about the previous
+     * root is dropped — caches, refs, selected branch/commit and the filesystem
+     * watch — because an entry from another repository reads as real data (branch
+     * names and short hashes collide harmlessly between projects). `undefined`
+     * hands the choice back to automatic discovery. Persisted per workspace.
+     */
+    selectRepository(root: string | undefined): void {
+        this._pinnedRoot = this._isRepository(root);
+        void this._memento.update(GitService.PINNED_REPOSITORY_KEY, this._pinnedRoot);
+        this._resetRootDiscovery();
+        this.clearAllCaches();
+        this._selectedBranch = undefined;
+        this._selectedCommitHash = undefined;
+        this._repositoryPath = this._resolveRoot();
+        this._startRepositoryWatch();
+    }
+
+    /**
+     * Keep a candidate repository path only if it really is one. Anything else —
+     * including a pin left over from a session whose folder has since moved —
+     * resolves to undefined so discovery takes over instead of failing every
+     * command against a dead path.
+     */
+    private _isRepository(candidate: string | undefined): string | undefined {
+        if (typeof candidate !== 'string' || !candidate) {return undefined;}
+        return this._hasGitDir(path.join(candidate, '.git')) ? candidate : undefined;
     }
 
     /**
@@ -360,6 +478,19 @@ export class GitService {
      */
     clearCherryPickResume(memento: vscode.Memento): void {
         memento.update(GitService.CHERRY_PICK_RESUME_KEY, undefined);
+    }
+
+    /**
+     * Forget everything root discovery remembers: the per-directory walk-up memo,
+     * the resolved root and the directory listing behind the repository list.
+     * Called wherever the workspace layout may have changed (folders added or
+     * removed, `git init`, a clone appearing or disappearing).
+     */
+    private _resetRootDiscovery(): void {
+        this._rootMemo.clear();
+        this._rootKey = undefined;
+        this._rootValue = undefined;
+        this._discoveredRoots = undefined;
     }
 
     /**
@@ -478,6 +609,36 @@ export class GitService {
     }
 
     /**
+     * Order commits newest → oldest by **history**, not by author date.
+     *
+     * Author dates lie: a cherry-pick or rebase keeps the original author date
+     * while landing on top of the branch. Measured in bouncePy — `cfccce3` is
+     * authored 13:39 but is the child of `5f8c82d` (authored 14:48, committed
+     * 14:48 vs 16:09). Sorting a multi-commit group by author time therefore
+     * picked the child as "oldest" and its own parent as "newest", so the file
+     * comparison opened a commit against itself and looked silently broken.
+     *
+     * `rev-list --no-walk --topo-order` answers this with one plumbing call and
+     * ignores the order the hashes were clicked in.
+     */
+    async orderCommitsByHistory(hashes: readonly string[]): Promise<string[]> {
+        const unique = [...new Set(hashes)];
+        unique.forEach(assertHash);
+        if (unique.length === 0) {
+            return [];
+        }
+        const output = await this.executeGitArgs(
+            ['rev-list', '--no-walk', '--topo-order', ...unique],
+            { timeoutMs: 20000 }
+        );
+        const ordered = output.split('\n').map(line => line.trim()).filter(Boolean);
+        // A rev git could not place stays at the end instead of vanishing —
+        // callers read the two ends of this list.
+        const placed = new Set(ordered);
+        return [...ordered, ...unique.filter(hash => !placed.has(hash))];
+    }
+
+    /**
      * Check whether a file exists at a given ref (branch/commit)
      */
     async blobExists(ref: string, filePath: string): Promise<boolean> {
@@ -559,6 +720,12 @@ export class GitService {
      */
     private _findGitRoot(): string | undefined {
         const path = require('path');
+
+        // An explicit panel choice wins while that folder is still a repository;
+        // once it is gone, discovery resumes from the workspace folders unchanged.
+        if (this._pinnedRoot && this._hasGitDir(path.join(this._pinnedRoot, '.git'))) {
+            return this._pinnedRoot;
+        }
 
         // Collect candidate start directories: workspace folders first, then active editor
         const candidates: string[] = [];
@@ -672,24 +839,63 @@ export class GitService {
             this.invalidateVolatile();
             return out.trim();
         } catch (error) {
-            throw this._explainAuthFailure(error);
+            throw await this._explainNetworkFailure(error);
         }
     }
 
     /**
-     * `GIT_TERMINAL_PROMPT=0` makes git refuse to ask on a hidden terminal, so an
-     * authentication failure otherwise reads as an opaque one-liner. Say what to
-     * do about it instead.
+     * A remote failure is only useful if it says what to do next: an
+     * `GIT_TERMINAL_PROMPT=0` rejection otherwise reads as an opaque one-liner,
+     * and "Failed to connect to github.com port 443" says nothing about the fix
+     * on a machine that reaches github.com only through a proxy. So the hint is
+     * picked by kind, and for connectivity it reports whether git itself has a
+     * proxy configured — that is the switch the user has to flip.
      */
-    private _explainAuthFailure(error: unknown): Error {
-        const e = error as { message?: string; stderr?: string; stdout?: string };
-        const text = [e?.message, e?.stderr, e?.stdout]
-            .filter((s): s is string => typeof s === 'string' && s.length > 0)
-            .join('\n');
-        const looksAuth = /terminal prompts disabled|could not read (username|password)|authentication failed|invalid credentials|permission denied \(publickey\)/i
-            .test(text);
-        return looksAuth ? new Error(`${text}\n${t('auth.failedHint')}`)
-            : (error instanceof Error ? error : new Error(text));
+    private async _explainNetworkFailure(error: unknown): Promise<Error> {
+        const summary = formatGitError(error);
+        if (!summary) {
+            return error instanceof Error ? error : new Error(String(error));
+        }
+        const kind = classifyGitNetworkFailure(summary);
+        if (kind === 'unknown') {
+            return new Error(summary);
+        }
+        // The hint goes first: a notification truncates its tail, and the tail is
+        // the part nobody can act on.
+        const hint = kind === 'auth'
+            ? t('auth.failedHint')
+            : kind === 'tls'
+                ? t('err.tlsHint')
+                : await this._unreachableHint(summary);
+        return new Error(`${hint}\n${summary}`);
+    }
+
+    /**
+     * Connectivity failures split in two: a machine that reaches the host only
+     * through a proxy needs `http.proxy` set, and one that already has it set
+     * needs the proxy itself checked. Git's own wording cannot tell them apart,
+     * its configured value can.
+     */
+    private async _unreachableHint(summary: string): Promise<string> {
+        const host = gitFailureHost(summary) ?? t('label.remote');
+        const proxy = await this._getHttpProxyConfig();
+        return proxy
+            ? t('err.unreachableWithProxy', { host, proxy: redactUrlCredentials(proxy) })
+            : t('err.unreachableNoProxy', { host });
+    }
+
+    /** The proxy git would use for this repository (local config wins over global). */
+    private async _getHttpProxyConfig(): Promise<string | undefined> {
+        try {
+            const value = (await this.executeGitArgs(
+                ['config', '--get', 'http.proxy'],
+                { timeoutMs: 5000 }
+            )).trim();
+            return value.length > 0 ? value : undefined;
+        } catch {
+            // `git config --get` exits non-zero when the key is simply not set.
+            return undefined;
+        }
     }
 
     /**
@@ -970,20 +1176,78 @@ export class GitService {
     }
 
     /**
-     * Get stash list
+     * The stash stack, newest first.
+     *
+     * The stash ref is checked on disk first: a repository with no stashes is the
+     * common case and answers with zero subprocesses. The list itself comes from
+     * the stash reflog because `git stash list` cannot carry a date, and fields
+     * are NUL-separated because a stash subject may contain a pipe.
      */
-    async getStashes(): Promise<{ index: number; message: string }[]> {
-        const output = (await this.executeGitArgs(['stash', 'list', '--format=%gd|%gs'])).trim();
-        if (!output) {return [];}
+    async getStashes(): Promise<StashEntry[]> {
+        if (!this.getStashRefSignature()) {return [];}
+        try {
+            const output = await this.executeGitArgs([
+                'log', '-g', 'stash', '--format=%gd%x00%gs%x00%aI'
+            ]);
+            return parseStashList(output);
+        } catch (error) {
+            // Ref disappeared between the check and the read: an empty stack is
+            // the honest answer, not an error toast over a tree row.
+            logger.debug('[GitCharm] Stash reflog unavailable:', error);
+            return [];
+        }
+    }
 
-        return output.split('\n').filter(l => l.trim()).map(line => {
-            const parts = line.split('|');
-            const indexMatch = parts[0]?.match(/stash@\{(\d+)\}/);
-            return {
-                index: indexMatch ? parseInt(indexMatch[1]) : 0,
-                message: parts[1] || parts[0] || ''
-            };
-        });
+    /**
+     * Reflog of a rev (HEAD by default) — the rescue list for commits lost to a
+     * `checkout`, `reset` or a botched rebase. Read with `log -g`, which is the
+     * plumbing form of `reflog show` and lets us pick the fields: selector,
+     * target hash, subject and date, NUL-separated because a subject carries
+     * colons and free-form message text. A rev with no reflog exits non-zero,
+     * and an empty history is a far better answer than an error toast.
+     */
+    async getReflog(rev?: string, limit = 100): Promise<ReflogEntry[]> {
+        const target = rev ? assertRef(rev, t('label.reflog')) : 'HEAD';
+        try {
+            const output = await this.executeGitArgs([
+                'log', '-g', target, '--format=%gd%x00%H%x00%gs%x00%aI', '-n', String(limit)
+            ]);
+            return parseReflogList(output);
+        } catch (error) {
+            logger.debug('[GitCharm] Reflog unavailable:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Identity of the stash ref — its hash, or '' when the repository has no
+     * stashes. One small file read, cheap enough to compare on every poll tick so
+     * a `git stash` run in a terminal shows up without a manual refresh.     *
+     * Read from the *common* dir: `refs/stash` is shared by all worktrees (a
+     * linked worktree's own git dir has no refs/stash), and git never packs it.
+     */
+    getStashRefSignature(): string {
+        const repoPath = this._repositoryPath;
+        if (!repoPath) {return '';}
+        const gitDir = resolveGitDir(repoPath);
+        if (!gitDir) {return '';}
+        try {
+            const stashRef = path.join(resolveCommonDir(gitDir), 'refs', 'stash');
+            return fs.readFileSync(stashRef, 'utf-8').trim();
+        } catch {
+            return '';
+        }
+    }
+
+    /**
+     * Whether `git stash push` would save anything. Only tracked changes count:
+     * untracked files are left in place (no `-u`), so a tree whose only changes
+     * are untracked would produce "No local changes to save" and an empty stack.
+     */
+    async hasStashableChanges(): Promise<boolean> {
+        const entries = await this.getStatusEntries();
+        return entries.some(entry => !entry.untracked && !entry.ignored
+            && (entry.indexStatus !== ' ' || entry.worktreeStatus !== ' '));
     }
 
     /**
@@ -1248,6 +1512,80 @@ export class GitService {
     }
 
     /**
+     * Continue a revert that stopped on conflicts. `git revert` keeps its own
+     * REVERT_HEAD (not MERGE_HEAD), so `merge --continue` cannot finish it.
+     */
+    async revertContinue(): Promise<string> {
+        const output = await this._execMutateWithEnv(['revert', '--continue'], { GIT_EDITOR: 'true' });
+        return output || t('op.revertCompleted');
+    }
+
+    /**
+     * Continue a cherry-pick that stopped on conflicts (or on a step that came
+     * out empty). GIT_EDITOR=true for the same reason as the other --continue
+     * calls: the extension host has no terminal to hand an interactive editor.
+     */
+    async cherryPickContinue(): Promise<string> {
+        const output = await this._execMutateWithEnv(['cherry-pick', '--continue'], { GIT_EDITOR: 'true' });
+        return output || t('op.cherryPickCompleted');
+    }
+
+    /**
+     * Abort the current revert and restore the pre-revert state.
+     */
+    async revertAbort(): Promise<string> {
+        const output = await this._execMutate(['revert', '--abort']);
+        return output || t('op.revertAborted');
+    }
+
+    /**
+     * Drop the step a rebase stopped on and carry on with the rest of the todo —
+     * the way out git itself names for a step whose changes came out empty.
+     */
+    async rebaseSkip(): Promise<string> {
+        return this._execMutate(['rebase', '--skip']);
+    }
+
+    /** Skip the stopped cherry-pick and move to the next one. */
+    async cherryPickSkip(): Promise<string> {
+        return this._execMutate(['cherry-pick', '--skip']);
+    }
+
+    /** Skip the stopped revert and move to the next one. */
+    async revertSkip(): Promise<string> {
+        return this._execMutate(['revert', '--skip']);
+    }
+
+    /**
+     * Land the stopped step as an empty commit, keeping its original message.
+     * `--no-edit` is load-bearing: without it git opens an editor for the
+     * prepared message. Measured on a stopped cherry-pick — with `--no-edit` no
+     * editor is started even when GIT_EDITOR cannot run, and the commit reuses
+     * the picked message and ends the step.
+     */
+    async commitEmptyStep(): Promise<string> {
+        return this._execMutate(['commit', '--allow-empty', '--no-edit']);
+    }
+
+    /**
+     * Whether the stopped operation was part of a sequence with steps left to
+     * run. `git commit` lands the stopped step and clears CHERRY_PICK_HEAD /
+     * REVERT_HEAD, but it does not resume the queue — only `--continue` does
+     * that, and a single cherry-pick has no queue at all (measured: git 2.45.1
+     * leaves no `sequencer` directory in the worktree's git dir for one).
+     */
+    hasPendingSequencerSteps(): boolean {
+        const gitDir = this._gitDir();
+        if (!gitDir) {return false;}
+        try {
+            const todo = fs.readFileSync(path.join(gitDir, 'sequencer', 'todo'), 'utf8');
+            return todo.split(/\r?\n/).some(line => line.trim().length > 0 && !line.startsWith('#'));
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Return the paths of files with unresolved merge conflicts.
      * Uses plumbing (`ls-files -u`) with NUL-delimited output: stable across
      * git versions and locales, and safe for paths containing newlines.
@@ -1271,21 +1609,20 @@ export class GitService {
 
     /**
      * Cheap, subprocess-free in-progress check: looks only at git's state files
-     * (`rebase-merge`/`rebase-apply`/`CHERRY_PICK_HEAD`/`MERGE_HEAD`). Use it to
-     * decide whether the authoritative `getInProgressOperation()` — which also
-     * spawns `ls-files -u` for the unmerged-index case — is worth running.
+     * (`rebase-merge`/`rebase-apply`/`CHERRY_PICK_HEAD`/`REVERT_HEAD`/`MERGE_HEAD`).
+     * Use it to decide whether the authoritative `getInProgressOperation()` — which
+     * also spawns `ls-files -u` for the unmerged-index case — is worth running.
      */
-    detectOperationFromFiles(): 'rebase' | 'merge' | 'cherry-pick' | undefined {
+    detectOperationFromFiles(): InProgressOperation | undefined {
         const gitDir = this._gitDir();
         if (!gitDir) {return undefined;}
         return operationFromStateFiles(name => fs.existsSync(path.join(gitDir, name)));
     }
 
     /**
-     * Detect whether a rebase, merge, or cherry-pick is currently in progress.
-     * Returns 'rebase' | 'merge' | 'cherry-pick' | undefined.
+     * Detect whether a rebase, merge, cherry-pick or revert is in progress.
      */
-    async getInProgressOperation(): Promise<'rebase' | 'merge' | 'cherry-pick' | undefined> {
+    async getInProgressOperation(): Promise<InProgressOperation | undefined> {
         const fromFiles = this.detectOperationFromFiles();
         if (fromFiles) {return fromFiles;}
 
@@ -1293,6 +1630,24 @@ export class GitService {
         // pull): only `ls-files -u` can see them, so this is the one spawn path.
         const conflictFiles = await this.getConflictFiles();
         return conflictFiles.length > 0 ? 'merge' : undefined;
+    }
+
+    /**
+     * The repository's web UI base (`https://host/org/repo`), read straight from
+     * the config file in the common git dir — no subprocess, and worktree-safe.
+     * Undefined when no remote is configured or its URL is a local path.
+     */
+    getRemoteWebBase(): string | undefined {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (!gitDir) {return undefined;}
+        try {
+            const config = fs.readFileSync(path.join(resolveCommonDir(gitDir), 'config'), 'utf8');
+            const url = parseGitConfigRemoteUrl(config);
+            return url ? remoteUrlToWebBase(url) : undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     /**
@@ -1352,6 +1707,42 @@ export class GitService {
         assertRef(remote, t('label.remote'));
         const output = await this._execNetwork(['fetch', remote]);
         return output || t('fetch.fetchedFrom', { remote });
+    }
+
+    /**
+     * Remote a background fetch should contact, read straight from the config
+     * file (no subprocess, worktree-safe like `getRemoteWebBase`). Empty when the
+     * repository has no remote, so the scheduler can skip instead of failing on a
+     * doomed `git fetch origin` every tick.
+     */
+    getFetchRemote(): string {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (!gitDir) {return '';}
+        try {
+            const config = fs.readFileSync(path.join(resolveCommonDir(gitDir), 'config'), 'utf8');
+            return pickFetchRemote(parseGitConfigRemoteNames(config));
+        } catch {
+            return '';
+        }
+    }
+
+    /**
+     * Unattended fetch for the scheduler.
+     *
+     * Deliberately NOT `_execNetwork`: that attaches our GIT_ASKPASS, and a
+     * credential box appearing on its own every few minutes is exactly what the
+     * user did not ask for. With no askpass and `GIT_TERMINAL_PROMPT=0` git gives
+     * up immediately when it would have to ask, and the caller drops the error.
+     * Bounded timeout because a half-dead network must not hold the timer open.
+     */
+    async fetchSilent(remote: string): Promise<void> {
+        assertRef(remote, t('label.remote'));
+        await this.executeGitArgs(['fetch', '--quiet', remote], {
+            env: { GIT_TERMINAL_PROMPT: '0' },
+            timeoutMs: 60000
+        });
+        this.invalidateVolatile();
     }
 
     /**
@@ -1626,7 +2017,7 @@ export class GitService {
         const limit = opts.limit ?? 20;
         const skip = opts.skip ?? 0;
         const f = opts.filters ?? {};
-        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${f.text ?? ''}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}`;
+        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${f.text ?? ''}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}|${f.path ?? ''}`;
         if (!opts.force) {
             const hit = this._graphCache.get(key);
             if (hit) {return hit;}
@@ -1698,6 +2089,12 @@ export class GitService {
             } else {
                 a.push(`--format=${format}`);
             }
+            // Path filter last, after a `--` separator so git can never read a
+            // pattern as an option. Note this switches git to path-filtered history
+            // simplification: merges that did not touch the paths drop out, which is
+            // exactly the "commits that changed this file" answer the box promises.
+            const pathspecs = parsePathFilter(f.path);
+            if (pathspecs.length > 0) {a.push('--', ...pathspecs);}
             return a;
         };
 
@@ -1741,11 +2138,17 @@ export class GitService {
         }
         
         // Add tags
+        const hashToTags = new Map<string, string[]>();
         for (const [tagName, hash] of tagRefsMap.entries()) {
             if (!hashToRefs.has(hash)) {
                 hashToRefs.set(hash, []);
             }
             hashToRefs.get(hash)!.push(tagName);
+
+            if (!hashToTags.has(hash)) {
+                hashToTags.set(hash, []);
+            }
+            hashToTags.get(hash)!.push(tagName);
         }
         
         // Parse commits - always create new objects to avoid stale references
@@ -1754,6 +2157,7 @@ export class GitService {
             const commit: GraphCommit = {
                 ...parsed,
                 refs: [],
+                tags: [],
                 isMerge: parsed.parents.length > 1
             };
             
@@ -1761,6 +2165,10 @@ export class GitService {
             const refs = hashToRefs.get(parsed.hash);
             if (refs && refs.length > 0) {
                 commit.refs = refs;
+            }
+            const tags = hashToTags.get(parsed.hash);
+            if (tags && tags.length > 0) {
+                commit.tags = tags;
             }
             
             this._commitIndex.set(hash, commit);
@@ -1784,6 +2192,71 @@ export class GitService {
     async cherryPick(hash: string): Promise<void> {
         assertHash(hash);
         await this._execMutate(['cherry-pick', hash]);
+    }
+
+    /**
+     * Revert one commit: apply the reverse patch as a new commit. `--no-edit`
+     * keeps git from opening an interactive editor for the default message,
+     * which is what makes this safe to run from the extension host.
+     */
+    async revert(hash: string): Promise<void> {
+        assertHash(hash);
+        await this._execMutate(['revert', '--no-edit', hash]);
+    }
+
+    /**
+     * Every tag with the commit it points at, read from the refs on disk
+     * (no subprocess). Annotated tags resolve to the tagged commit, which is
+     * what RefsReader already reports.
+     */
+    listTags(): Array<{ name: string; hash: string }> {
+        const tags: Array<{ name: string; hash: string }> = [];
+        for (const [name, hash] of this._refsReader.readTagRefs()) {
+            tags.push({ name, hash });
+        }
+        return tags.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    /** Tag names pointing exactly at `hash` — the ones a row can delete or push. */
+    getTagsAt(hash: string): string[] {
+        const found: string[] = [];
+        for (const [name, tagHash] of this._refsReader.readTagRefs()) {
+            if (tagHash === hash) {found.push(name);}
+        }
+        return found.sort((a, b) => a.localeCompare(b));
+    }
+
+    /**
+     * Create a tag on an existing commit. A message turns it into an annotated
+     * tag (`-a`), and the message goes through a temp file — never the command
+     * line — so it survives verbatim. Without one it stays a lightweight tag.
+     */
+    async createTag(name: string, hash: string, message?: string): Promise<void> {
+        assertRef(name, t('label.tag'));
+        assertHash(hash);
+        const annotated = message && message.trim().length > 0;
+        if (annotated) {
+            await this._commitWithMessage(['tag', '-a', name, hash], message!.trim() + '\n');
+        } else {
+            await this._execMutate(['tag', name, hash]);
+        }
+    }
+
+    /** Delete a local tag. Remote tags are a separate ref and stay untouched. */
+    async deleteTag(name: string): Promise<string> {
+        assertRef(name, t('label.tag'));
+        return this._execMutate(['tag', '-d', name]);
+    }
+
+    /**
+     * Push one tag to a remote. The explicit `refs/tags/…` form is what git
+     * needs to push a tag rather than something that happens to share the name.
+     */
+    async pushTag(name: string, remote = 'origin'): Promise<string> {
+        assertRef(name, t('label.tag'));
+        assertRef(remote, t('label.remote'));
+        const output = await this._execNetwork(['push', remote, `refs/tags/${name}`]);
+        return output || t('tag.pushed', { name, remote });
     }
 
     /**
@@ -1899,6 +2372,35 @@ export class GitService {
         }
         const out = await this._commitWithMessage(['commit', '--amend'], message);
         return out || t('commit.messageUpdated');
+    }
+
+    /**
+     * Fold the current changes into the tip commit, keeping its message — IDEA's
+     * "Amend". `-a` picks up tracked modifications on top of whatever is staged.
+     * Untracked files are deliberately not added: silently putting new files into
+     * an existing commit is worse than doing nothing, and this panel has no
+     * staging area to opt in from.
+     *
+     * Returns false when there is nothing to fold in, so the caller can say so
+     * instead of rewriting the commit hash for no effect.
+     */
+    async amendWithChanges(commitHash: string): Promise<boolean> {
+        const head = await this.getHeadHash();
+        if (commitHash !== head) {
+            throw new Error(t('commit.amendOnlyLast'));
+        }
+
+        const entries = await this.getStatusEntries();
+        if (entries.some(entry => entry.conflicted)) {
+            throw new Error(t('commit.amendConflict'));
+        }
+        const foldable = entries.some(entry =>
+            !entry.untracked && !entry.ignored
+            && (entry.indexStatus !== ' ' || entry.worktreeStatus !== ' '));
+        if (!foldable) {return false;}
+
+        await this._execMutate(['commit', '--amend', '--no-edit', '-a']);
+        return true;
     }
 
     /**

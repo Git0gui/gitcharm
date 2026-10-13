@@ -219,29 +219,158 @@ svg { flex: none; }
     font-size: 12px;
 }
 .tb select option { background: var(--vscode-dropdown-background, #3c3c3c); }
-.tb.date { flex: 1 1 210px; min-width: 190px; }
-.tb input[type="date"] { 
-    flex: 1 1 60px; 
-    min-width: 58px; 
-    width: auto; 
-    font-size: 11px; 
-    color-scheme: dark;
-    padding: 2px 4px;
-    border-radius: 4px;
-    border: 1px solid var(--vscode-input-border, #3c3c3c);
-    background: var(--vscode-input-background, #2a2d2e);
+.tb.date { flex: 1 1 150px; min-width: 132px; }
+.tb.date.open {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    box-shadow: 0 0 0 2px rgba(0, 127, 212, 0.15);
+}
+.dr-trigger {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    font-size: 12px;
+}
+.dr-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--vscode-input-foreground, #cccccc);
+}
+.dr-text.placeholder { color: var(--vscode-input-placeholderForeground, #888); }
+
+/* Date range popover: a month grid you drag across to circle a period. */
+.date-popover {
+    position: fixed;
+    z-index: 9000;
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    width: 252px;
+    padding: 12px;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+    color: var(--vscode-foreground, #cccccc);
+    animation: dialogSlideIn 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.date-popover.open { display: flex; }
+.dp-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.dp-title {
+    flex: 1;
+    min-width: 0;
+    padding: 2px 0;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    color: inherit;
+    font-size: 12px;
+    font-weight: 600;
+}
+.dp-title:hover { background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.3)); }
+.dp-nav {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #cccccc);
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
     transition: all 0.15s ease;
 }
-.tb input[type="date"]:hover {
-    border-color: var(--vscode-focusBorder, #007fd4);
+.dp-nav:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
+.dp-week, .dp-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
 }
-.tb input[type="date"]:focus {
-    outline: none;
-    border-color: var(--vscode-focusBorder, #007fd4);
-    box-shadow: 0 0 0 1px var(--vscode-focusBorder, rgba(0, 127, 212, 0.3));
+.dp-week span {
+    text-align: center;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground, #888);
+    padding: 2px 0;
 }
-.tb .arrow { font-size: 11px; flex: none; }
+/* The grid is dragged over, so it must never become a text selection. */
+.dp-grid { user-select: none; }
+.dp-cell {
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.dp-cell:hover { background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.3)); }
+.dp-day.out { color: var(--vscode-input-placeholderForeground, #6a6a6a); }
+.dp-day.today { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, #007fd4); }
+.dp-day.mid { background: rgba(17, 17, 17, .28); }
+.dp-day.sel, .dp-month.sel {
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #ffffff);
+}
+.dp-months { grid-template-columns: repeat(4, 1fr); }
+.dp-month { height: 30px; font-size: 11px; }
+.dp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.dp-chip {
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 12px;
+    border: 1px solid var(--vscode-input-border, #4a4a4a);
+    background: transparent;
+    color: var(--vscode-foreground, #cccccc);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.dp-chip:hover {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.3));
+}
+.dp-foot { display: flex; align-items: center; gap: 8px; }
+.dp-hint {
+    flex: 1;
+    min-width: 0;
+    font-size: 10px;
+    line-height: 1.3;
+    color: var(--vscode-descriptionForeground, #888);
+}
+.dp-clear {
+    flex: none;
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 5px;
+    border: 1px solid var(--vscode-input-border, #4a4a4a);
+    background: transparent;
+    color: var(--vscode-descriptionForeground, #888);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.dp-clear:hover {
+    color: var(--vscode-foreground, #cccccc);
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+}
 .clr {
     flex: none;
     width: 16px;
@@ -264,7 +393,7 @@ svg { flex: none; }
     color: var(--vscode-foreground);
     transform: scale(1.1);
 }
-#btn-refresh, #tg-graph {
+#btn-refresh, #btn-reflog, #tg-graph {
     flex: none;
     width: 30px;
     height: 26px;
@@ -281,6 +410,11 @@ svg { flex: none; }
 #btn-refresh:hover { 
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
     transform: rotate(90deg);
+}
+/* A clock face reads wrong spinning, so this one only lifts. */
+#btn-reflog:hover {
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+    transform: scale(1.08);
 }
 #tg-graph:hover {
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
@@ -331,6 +465,110 @@ svg { flex: none; }
     background: var(--vscode-sideBar-background, #252526);
     border-right: 1px solid var(--vscode-panel-border, #333);
     min-height: 0;
+}
+/* Repository switcher — chip plus inline dropdown, shown once the workspace holds
+   more than one repository (see renderRepoSwitcher) */
+#repo-row {
+    position: relative;          /* anchors the dropdown, like the author filter's */
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+#repo-switch {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 4px 6px;
+    background: var(--vscode-input-background, rgba(128, 128, 128, .08));
+    border: 1px solid var(--vscode-panel-border, #333);
+    border-radius: 6px;
+    color: var(--vscode-foreground, #ccc);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+    transition: background .15s cubic-bezier(.4, 0, .2, 1), transform .15s cubic-bezier(.4, 0, .2, 1);
+}
+#repo-switch:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16));
+    transform: translateY(-1px);
+}
+#repo-switch-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+#repo-switch .repo-caret {
+    flex: none;
+    opacity: .7;
+    transition: transform .15s cubic-bezier(.4, 0, .2, 1);
+}
+#repo-switch.open .repo-caret { transform: rotate(180deg); }
+/* Inline dropdown under the chip: the repository list is a pick, not a dialog. */
+.repo-menu {
+    position: absolute;
+    top: 100%;
+    left: 8px;
+    right: 8px;
+    margin-top: 4px;
+    padding: 4px;
+    background: var(--vscode-dropdown-background, #2d2d30);
+    border: 1px solid var(--vscode-dropdown-border, #454545);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .4);
+    max-height: 260px;
+    overflow-y: auto;
+    z-index: 1000;
+}
+.repo-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background .12s cubic-bezier(.4, 0, .2, 1);
+}
+.repo-item:hover { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16)); }
+/* Keyboard highlight follows the pointer's colour, so either way it reads alike. */
+.repo-item.hl { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, .16)); }
+.repo-item.cur {
+    background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, .12));
+    border-color: var(--vscode-focusBorder, #007fd4);
+    cursor: default;
+}
+.repo-item-name {
+    flex: none;
+    max-width: 45%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    font-size: 12px;
+}
+.repo-item-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;            /* keep the tail of a long path visible */
+    text-align: left;
+    font-family: monospace;
+    font-size: 11px;
+    opacity: .75;
+}
+.repo-item-mark {
+    flex: none;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--vscode-badge-background, #666);
+    color: var(--vscode-badge-foreground, #fff);
 }
 #bf-row {
     display: flex;
@@ -438,6 +676,32 @@ svg { flex: none; }
 .bitem.sel.cur .bname { color: inherit; }
 .bitem.hl { background: var(--vscode-list-hoverBackground, #2a2d2e); }
 .bname { overflow: hidden; text-overflow: ellipsis; }
+/* Stash rows sit in the branch tree but are not branches (.bitem would catch the
+   double-click-to-checkout handler), so they carry their own row class. */
+.sitem {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px 3px 20px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    border-radius: 6px;
+    margin: 1px 4px;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sitem:hover {
+    background: var(--vscode-list-hoverBackground, #2a2d2e);
+    transform: translateX(2px);
+}
+.sitem > svg { flex: none; opacity: .75; }
+.sitem .sdate {
+    flex: none;
+    margin-left: auto;
+    padding-left: 8px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+}
 #btree-inner { width: max-content; min-width: 100%; }
 .col-refresh {
     flex: none;
@@ -457,6 +721,8 @@ svg { flex: none; }
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
     transform: rotate(180deg);
 }
+/* The stash button shares the toolbar button look but is not a refresh arrow. */
+.col-refresh.no-spin:hover { transform: scale(1.12); }
 .col-refresh.off { opacity: .45; }
 
 #center { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
@@ -1008,7 +1274,9 @@ canvas.graph-canvas {
     border: 1px solid var(--vscode-menu-border, #454545);
     border-radius: 8px;
     padding: 4px 0;
-    z-index: 1000;
+    /* Above every dialog overlay (2000) and the tooltip (10000): a menu opened inside
+       the reflog / file-history dialogs used to paint underneath them. */
+    z-index: 10001;
     box-shadow: 0 4px 16px rgba(0,0,0,.35);
     min-width: 160px;
     max-height: calc(100vh - 8px);
@@ -1212,11 +1480,18 @@ canvas.graph-canvas {
     display: flex;
     flex: 1;
     min-height: 0;
+    /* Flex items default to min-width:auto, which means "never shrink below the
+       content's min-content width" — and a nowrap commit message has a
+       min-content width equal to the whole line. Without this the dialog body
+       stays at the box width while the list inside it grows past it, and the
+       trailing columns (action, date) end up outside the dialog. */
+    min-width: 0;
     overflow: hidden;
 }
 .push-commits-list {
     width: 380px;
     flex: none;
+    min-width: 0;
     border-right: 1px solid var(--vscode-panel-border, #333);
     display: flex;
     flex-direction: column;
@@ -1292,6 +1567,23 @@ canvas.graph-canvas {
     min-width: 52px;
 }
 .push-commit-row.sel .push-commit-hash { color: rgba(255,255,255,.6); }
+/* Reflog selector column: HEAD@{12} / feature/x@{3}, monospace and fixed so the
+   rows line up, and dimmer than the hash it points at. */
+.reflog-ref {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    flex: none;
+    width: 82px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.reflog-row .push-commit-author {
+    font-family: monospace;
+    font-size: 10.5px;
+    opacity: .8;
+}
 .push-commit-msg {
     flex: 1;
     min-width: 0;
