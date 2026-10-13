@@ -599,6 +599,42 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    /**
+     * URI of the read-only document holding several commits' patches for one file
+     * (matches the `idea-git-patch` provider registered in extension.ts). The
+     * `.patch` suffix is what makes the editor colorize it as a diff.
+     */
+    private _filePatchUri(filePath: string, hashes: readonly string[]): vscode.Uri {
+        return vscode.Uri.from({
+            scheme: 'idea-git-patch',
+            path: '/' + filePath + '.patch',
+            query: 'h=' + encodeURIComponent(hashes.join(','))
+        });
+    }
+
+    /**
+     * Open a file that the multi-commit selection changed: one read-only document
+     * containing each commit's own patch, oldest first, so both commits' edits are
+     * visible at once instead of only the last-clicked one.
+     *
+     * When the group turns out to change the file in a single commit (merges answer
+     * with an empty patch), the familiar two-pane diff is the better answer.
+     */
+    private async _openCombinedFilePatch(hashes: string[], relativePath: string): Promise<void> {
+        try {
+            const combined = await this._gitService.buildCombinedFilePatch(hashes, relativePath);
+            if (combined.hashes.length <= 1) {
+                this._gitService.selectedCommitHash = combined.hashes[0] ?? hashes[hashes.length - 1];
+                await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath });
+                return;
+            }
+            const doc = await vscode.workspace.openTextDocument(this._filePatchUri(relativePath, combined.hashes));
+            await vscode.window.showTextDocument(doc, { preview: false });
+        } catch (error) {
+            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: String(error) }));
+        }
+    }
+
     private async _openFileDiff(hash: string, path: string): Promise<void> {
         try {
             const title = `${path} (${hash.substring(0, 7)})`;
@@ -1378,10 +1414,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await vscode.commands.executeCommand('idea-git.editCommitMessage', commitNode);
                     forceReload = true;
                     break;
-                case 'fileDiff':
+                case 'fileDiff': {
+                    const relPath = message.path;
+                    if (!relPath) { return; }
+                    const hashes = (message.hashes ?? []).filter(Boolean);
                     this._gitService.selectedCommitHash = message.hash;
-                    await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath: message.path });
+                    if (hashes.length > 1) {
+                        await this._openCombinedFilePatch(hashes, relPath);
+                        return;
+                    }
+                    await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath: relPath });
                     return;
+                }
                 case 'fileCompareLocal': {
                     const hash = message.hash;
                     const relPath = message.path;

@@ -1730,7 +1730,15 @@ document.getElementById('d-files').addEventListener('click', function (e) {
 document.getElementById('d-files').addEventListener('dblclick', function (e) {
     var file = e.target.closest('.frow.file');
     if (file && state.selectedHash) {
-        vscode.postMessage({ command: 'action', action: 'fileDiff', hash: state.selectedHash, path: file.getAttribute('data-path') });
+        // With a group selected the host opens one patch document per commit, so it
+        // needs every hash, not just the last-clicked one.
+        vscode.postMessage({
+            command: 'action',
+            action: 'fileDiff',
+            hash: state.selectedHash,
+            hashes: state.selectedHashes,
+            path: file.getAttribute('data-path')
+        });
     }
 });
 

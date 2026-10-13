@@ -148,8 +148,10 @@ export function activate(ctx: vscode.ExtensionContext) {
     ctx.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider('idea-git-diff', {
             async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
-                const ref = decodeURIComponent(new URLSearchParams(uri.query).get('ref') ?? '');
-                const filePath = decodeURIComponent(uri.path).replace(/^\/+/, '');
+                // `uri.path` and URLSearchParams already give the decoded value;
+                // decoding again would rewrite a name containing a percent sign.
+                const ref = new URLSearchParams(uri.query).get('ref') ?? '';
+                const filePath = uri.path.replace(/^\/+/, '');
                 if (!ref || !filePath) {
                     return '';
                 }
@@ -157,6 +159,28 @@ export function activate(ctx: vscode.ExtensionContext) {
                     return await gitService.showBlob(ref, filePath);
                 } catch {
                     return '';
+                }
+            }
+        })
+    );
+
+    // Serve the combined per-commit patch document opened from a multi-commit selection
+    ctx.subscriptions.push(
+        vscode.workspace.registerTextDocumentContentProvider('idea-git-patch', {
+            async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+                // Same as above: the components are already decoded, a second
+                // decodeURIComponent would rewrite (or throw on) a name with a percent.
+                const hashes = (new URLSearchParams(uri.query).get('h') ?? '').split(',').filter(Boolean);
+                const filePath = uri.path.replace(/^\/+/, '').replace(/\.patch$/, '');
+                if (hashes.length === 0 || !filePath) {
+                    return '';
+                }
+                try {
+                    return (await gitService.buildCombinedFilePatch(hashes, filePath)).text;
+                } catch {
+                    // An empty document would read as "nothing changed here"; say instead
+                    // that the patches could not be read.
+                    return t('patch.failed', { path: filePath });
                 }
             }
         })

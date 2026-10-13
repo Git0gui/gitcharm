@@ -360,6 +360,26 @@ function netFileStatus(previous: string, next: string): string {
     return next;
 }
 
+/** One commit's contribution to a combined file patch: header text + raw patch. */
+export interface FilePatchSection {
+    /** Localized header lines, already assembled by the caller. */
+    label: string;
+    /** git's patch for this commit and path, verbatim. */
+    patch: string;
+}
+
+/**
+ * Lay several per-commit patches out as one read-only document, in the order given.
+ *
+ * Only layout happens here: patches are copied through untouched, because any
+ * rewriting would break the line numbers the hunks claim and mangle names the
+ * repository is allowed to use.
+ */
+export function formatCombinedFilePatch(title: string, sections: readonly FilePatchSection[]): string {
+    const blocks = sections.map(s => `${s.label}\n\n${s.patch.trimEnd()}`);
+    return [title, ...blocks].join('\n\n').trimEnd();
+}
+
 /** One reflog record: a movement of a rev, newest first. */
 export interface ReflogEntry {
     /** Selector as printed by `%gd`, e.g. `HEAD@{3}` or `main@{0}`. */

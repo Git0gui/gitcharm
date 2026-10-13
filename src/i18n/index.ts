@@ -269,6 +269,11 @@ const zh: Record<string, string> = {
     'fetch.failed': '获取失败: {error}',
     'fetch.fetchedFrom': '已从 {remote} 获取',
 
+    // combined file patch of a multi-commit selection
+    'patch.title': '{path}：{n} 个提交对它的改动（从旧到新）',
+    'patch.commitLabel': '提交 {shortHash} · {author} · {date}',
+    'patch.failed': '无法读取这些提交对 {path} 的改动',
+
     // commit commands
     'commit.showDiffFailed': '显示提交差异失败: {error}',
     'commit.promptToBranch': '提交到 "{name}"（已暂存的改动）',
@@ -775,6 +780,11 @@ const en: Record<string, string> = {
     'fetch.success': 'Fetched remote updates',
     'fetch.failed': 'Fetch failed: {error}',
     'fetch.fetchedFrom': 'Fetched from {remote}',
+
+    // combined file patch of a multi-commit selection
+    'patch.title': '{path} — changes from {n} commits (oldest first)',
+    'patch.commitLabel': 'Commit {shortHash} · {author} · {date}',
+    'patch.failed': 'Cannot read these commits\' changes to {path}',
 
     // commit commands
     'commit.showDiffFailed': 'Failed to show commit diff: {error}',
