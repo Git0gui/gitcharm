@@ -93,14 +93,15 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 树节点：文件夹单击展开、分支双击切换；折叠指示器用内联 SVG chevron（`currentColor`），不用 ASCII；分支叶子只显示最后一段路径（`data-branch`/tooltip 保留全名，操作用完整 ref）。
 - 右键菜单按类型区分：本地分支 7 项、远程分支 4 项精简。
 - tag 显示为 IDEA 风格黄色徽章。
-- 提交时间：<24h 显示相对时间，≥24h 显示 `YYYY-MM-DD HH:mm:ss`；**git log 一律用作者时间（%ai/%ar）**，不用 %ci/%cr；committer≠author 时详情额外显示"合入"行。
+- 提交时间：<24h 显示相对时间，≥24h 显示 `YYYY-MM-DD HH:mm:ss`；**git log 一律用作者时间（%ai/%ar）**，不用 %ci/%cr（这只管**显示**哪一天；判一组提交谁先谁后见 §8 的 `orderCommitsByHistory`）；committer≠author 时详情额外显示"合入"行。
 - 确认对话框保持简洁（标题+按钮），不堆技术细节。
 
 ## 8. Git 操作行为约定
 
 - **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。**网络类（push/pull/手动 fetch）尤其：`_execNetwork` 刻意不设子进程超时（大仓库不能被 30s 掐断），凭据又要等用户在自己的输入框里填，没有进度指示就等于"界面卡死"**；进度一律 `cancellable: false`（git 子进程没有取消通道，别给假按钮）。
-- **多选提交的合并文件列表必须在宿主合并**（`mergeCommitFileStats`，`src/services/gitUtils.ts`），webview 只渲染。两条不变量：批次必须按**作者时间旧→新**排好再进去（状态取净效果：选择内新建的保持 `A`、之后被删则 `D`；点击顺序进来的话同一个文件会一会儿 `A` 一会儿 `M`）；条目必须**复制后再累加行数**——`getCommitFilesWithStats` 返回 `_filesCache` 里的同一批对象，原地加数字会让下一次多选变成双倍。
-- **多选提交里双击文件 = 跨这一组提交的双栏对比**：左边取**最早**提交的父版本（`oldest^`），右边取**最晚**提交的版本，组里每个提交的改动才会都落在同一份 diff 里（只带最后点选的 `selectedHash` 就只看得到一个提交）。早/晚按**作者时间**判定，与列表显示顺序同一条规则。双栏只能放两个版本，选中项之间那些没被选的提交会一起出现在差异里——这是用户要的效果。**不要改成"逐提交补丁拼一份只读文档"**（已实现并被否掉，见 commit `6b098bf`）：用户要的一直是熟悉的左右对比，不是补丁文本。**净差异为空是 git 的真实结果不是 bug**：跨分支挑选、或组内"某个提交加了又被另一个提交删掉"时，`oldest^` 与 `newest` 的两个版本可能完全相同（实测 bouncePy 的 `cfccce3` + `5f8c82d` 就是这个组合）。用户看过这个实例后明确选择**保留这一个净对比**，不要改成"每个提交各开一个标签页"。
+- **作者时间不能用来判一组提交的早晚**：cherry-pick / rebase / amend 会保留原作者时间、落地顺序却相反——实测 bouncePy 里 `cfccce3`（author 13:39）是 `5f8c82d`（author 14:48）的**子**提交（committer 16:09）。按 `%ai` 排会把"最早^ ↔ 最晚"算成同一个提交跟自己比（差异恒空，看着就像视图坏了），回退/挑拣/压缩的参数顺序与 squash 的 `baseRef` 也会取错端点。判早晚统一走 `GitService.orderCommitsByHistory`（`rev-list --no-walk --topo-order`，一次子进程，与点击顺序无关）；面板列表本身的顺序就是 git log 的顺序，两者一致。
+- **多选提交的合并文件列表必须在宿主合并**（`mergeCommitFileStats`，`src/services/gitUtils.ts`），webview 只渲染。两条不变量：批次必须按**历史顺序旧→新**排好再进去（`orderCommitsByHistory`，**不是作者时间**，见上一条）（状态取净效果：选择内新建的保持 `A`、之后被删则 `D`；点击顺序进来的话同一个文件会一会儿 `A` 一会儿 `M`）；条目必须**复制后再累加行数**——`getCommitFilesWithStats` 返回 `_filesCache` 里的同一批对象，原地加数字会让下一次多选变成双倍。
+- **多选提交里双击文件 = 跨这一组提交的双栏对比**：左边取**最早**提交的父版本（`oldest^`），右边取**最晚**提交的版本，组里每个提交的改动才会都落在同一份 diff 里（只带最后点选的 `selectedHash` 就只看得到一个提交）。早/晚由 `orderCommitsByHistory` 按**历史顺序**判定（作者时间在这组数据里正好是反的，见上一条）。双栏只能放两个版本，选中项之间那些没被选的提交会一起出现在差异里——这是用户要的效果。**不要改成"逐提交补丁拼一份只读文档"**（已实现并被否掉，见 commit `6b098bf`）：用户要的一直是熟悉的左右对比，不是补丁文本。修好顺序后，用户那组选择的差异是 `+2 -1`，与第三栏合并文件行显示的数字一致。
 - **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防止乐观结果被过期快照盖掉）；删除时若正在查看该分支的提交则切回当前分支。
 - 重命名/删除后必须同步内部状态（`_branch`、`selectedBranch`），否则后续命令报 `unknown revision`。
 - push 允许无 upstream 分支：`getUpstream` 包 try-catch；无 upstream 时用 `git log remote..local` 取待推送提交；推送对话框提交列表与箭头共用 `getBranchesWithDetails` 同一数据源，区分首次推送/已最新/有待推送三态，提交分页（首屏 20 条 + 加载更多）。

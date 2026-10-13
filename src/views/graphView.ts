@@ -604,22 +604,22 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * commit's version, the left side the state before the oldest one, so every
      * commit in the group shows up as a change instead of only the last-clicked one.
      *
-     * Ordered by author time because that is the order the list is displayed in.
-     * A two-pane diff can only hold two versions of a file, so whatever the selected
-     * commits changed in between is inside the comparison as well — the question
-     * being asked is what the whole group leaves behind.
+     * "Newest" and "oldest" come from history order, not from author dates — see
+     * `GitService.orderCommitsByHistory` for the measured case where the two
+     * disagree. A two-pane diff can only hold two versions of a file, so whatever
+     * the commits in between changed is inside the comparison as well.
      */
     private async _openCommitGroupFileDiff(hashes: string[], relativePath: string): Promise<void> {
         try {
-            const details = await Promise.all(hashes.map(hash => this._gitService.getCommitDetail(hash)));
-            details.sort((a, b) => new Date(a.authorDate).getTime() - new Date(b.authorDate).getTime());
-            const oldest = details[0];
-            const newest = details[details.length - 1];
-            const title = `${relativePath} (${oldest.shortHash}^ ↔ ${newest.shortHash})`;
+            const ordered = await this._gitService.orderCommitsByHistory(hashes);
+            const newest = ordered[0];
+            const oldest = ordered[ordered.length - 1];
+            const oldestDetail = await this._gitService.getCommitDetail(oldest);
+            const title = `${relativePath} (${oldestDetail.shortHash}^ ↔ ${newest.substring(0, 7)})`;
             await vscode.commands.executeCommand(
                 'vscode.diff',
-                this._gitBlobUri(oldest.hash + '^', relativePath),
-                this._gitBlobUri(newest.hash, relativePath),
+                this._gitBlobUri(oldest + '^', relativePath),
+                this._gitBlobUri(newest, relativePath),
                 title
             );
         } catch (error) {
@@ -741,21 +741,20 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             break;
                         }
                         
-                        // Fetch all commits and their files in parallel
+                        // Oldest → newest by history order, never by author date: the
+                        // merged file status is the net effect in that order, and the
+                        // webview lists the commits the same way. See
+                        // GitService.orderCommitsByHistory for the case where the two
+                        // disagree. The order the user clicked rows in decides neither.
+                        const ordered = (await this._gitService.orderCommitsByHistory(hashes)).reverse();
                         const results = await Promise.all(
-                            hashes.map(hash =>
+                            ordered.map(hash =>
                                 Promise.all([
                                     this._gitService.getCommitDetail(hash),
                                     this._gitService.getCommitFilesWithStats(hash)
                                 ])
                             )
                         );
-
-                        // The webview lists these oldest → newest and the merged file
-                        // status is the net effect in that order, so the order the user
-                        // clicked rows cannot decide either of them.
-                        results.sort((a, b) =>
-                            new Date(a[0].authorDate).getTime() - new Date(b[0].authorDate).getTime());
 
                         this._post({
                             command: 'multiCommitsResponse',

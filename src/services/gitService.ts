@@ -605,6 +605,36 @@ export class GitService {
     }
 
     /**
+     * Order commits newest → oldest by **history**, not by author date.
+     *
+     * Author dates lie: a cherry-pick or rebase keeps the original author date
+     * while landing on top of the branch. Measured in bouncePy — `cfccce3` is
+     * authored 13:39 but is the child of `5f8c82d` (authored 14:48, committed
+     * 14:48 vs 16:09). Sorting a multi-commit group by author time therefore
+     * picked the child as "oldest" and its own parent as "newest", so the file
+     * comparison opened a commit against itself and looked silently broken.
+     *
+     * `rev-list --no-walk --topo-order` answers this with one plumbing call and
+     * ignores the order the hashes were clicked in.
+     */
+    async orderCommitsByHistory(hashes: readonly string[]): Promise<string[]> {
+        const unique = [...new Set(hashes)];
+        unique.forEach(assertHash);
+        if (unique.length === 0) {
+            return [];
+        }
+        const output = await this.executeGitArgs(
+            ['rev-list', '--no-walk', '--topo-order', ...unique],
+            { timeoutMs: 20000 }
+        );
+        const ordered = output.split('\n').map(line => line.trim()).filter(Boolean);
+        // A rev git could not place stays at the end instead of vanishing —
+        // callers read the two ends of this list.
+        const placed = new Set(ordered);
+        return [...ordered, ...unique.filter(hash => !placed.has(hash))];
+    }
+
+    /**
      * Check whether a file exists at a given ref (branch/commit)
      */
     async blobExists(ref: string, filePath: string): Promise<boolean> {

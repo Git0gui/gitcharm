@@ -44,19 +44,10 @@ export function registerCommitCommands(
             let selectedHashes: string[] = [];
             
             if (hashesFromWebview && Array.isArray(hashesFromWebview) && hashesFromWebview.length > 0) {
-                // Direct multi-select from webview - need to sort by date (oldest first)
-                const commitDetails = await Promise.all(
-                    hashesFromWebview.map(async (hash: string) => {
-                        try {
-                            const detail = await gitService.getCommitDetail(hash);
-                            return { hash, date: detail.authorDate };
-                        } catch {
-                            return { hash, date: '' };
-                        }
-                    })
-                );
-                commitDetails.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = commitDetails.map(c => c.hash);
+                // Pick oldest → newest by history order. Author dates are copied along
+                // by cherry-pick and rebase, so they can disagree with it — and picking
+                // a child before its parent produces a conflict the user did not cause.
+                selectedHashes = (await gitService.orderCommitsByHistory(hashesFromWebview)).reverse();
             } else if (singleHash) {
                 // Single commit from context menu
                 selectedHashes = [singleHash];
@@ -72,8 +63,7 @@ export function registerCommitCommands(
                     label: c.message || t('commit.noMessage'),
                     description: c.shortHash,
                     detail: `${c.author} · ${c.relativeDate}`,
-                    hash: c.hash,
-                    date: c.date
+                    hash: c.hash
                 }));
                 
                 const selected = await vscode.window.showQuickPick(items, {
@@ -83,9 +73,9 @@ export function registerCommitCommands(
                 });
                 
                 if (!selected || selected.length === 0) {return;}
-                // Sort by date ascending (oldest first) for cherry-pick
-                selected.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = selected.map(s => s.hash);
+                selectedHashes = (await gitService.orderCommitsByHistory(
+                    selected.map(s => s.hash)
+                )).reverse();
             }
             
             // Validate hashes
@@ -268,13 +258,11 @@ export function registerCommitCommands(
                 return;
             }
 
-            // Sort newest first: `git revert A B` undoes A then B, and reverting an
-            // older commit first would trip over the newer one still being applied.
-            const details = await Promise.all(
-                selectedHashes.map(async hash => ({ hash, date: (await gitService.getCommitDetail(hash)).authorDate }))
-            );
-            details.sort((a, b) => b.date.localeCompare(a.date));
-            const ordered = details.map(d => d.hash);
+            // Newest first by history order: `git revert A B` undoes A then B, and
+            // reverting an older commit first would trip over the newer one still
+            // being applied. Author dates cannot answer which one is newer — a
+            // cherry-picked commit keeps the earlier date while sitting on top.
+            const ordered = await gitService.orderCommitsByHistory(selectedHashes);
 
             const confirm = await graphView.showDialog(
                 ordered.length === 1
@@ -396,19 +384,9 @@ export function registerCommitCommands(
             let selectedHashes: string[] = [];
             
             if (hashesFromWebview && Array.isArray(hashesFromWebview) && hashesFromWebview.length > 0) {
-                // Direct multi-select from webview - need to sort by date (oldest first for consistent rebase order)
-                const commitDetails = await Promise.all(
-                    hashesFromWebview.map(async (hash: string) => {
-                        try {
-                            const detail = await gitService.getCommitDetail(hash);
-                            return { hash, date: detail.authorDate };
-                        } catch {
-                            return { hash, date: '' };
-                        }
-                    })
-                );
-                commitDetails.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = commitDetails.map(c => c.hash);
+                // Oldest → newest by history order: the rebase sequence below is
+                // built from this, and author dates can disagree with it.
+                selectedHashes = (await gitService.orderCommitsByHistory(hashesFromWebview)).reverse();
             } else if (singleHash) {
                 // Single commit from context menu
                 selectedHashes = [singleHash];
@@ -622,19 +600,11 @@ export function registerCommitCommands(
             let selectedHashes: string[] = [];
 
             if (hashesFromWebview && Array.isArray(hashesFromWebview) && hashesFromWebview.length > 0) {
-                // Direct multi-select from webview - need to sort by date (oldest first for squash order)
-                const commitDetails = await Promise.all(
-                    hashesFromWebview.map(async (hash: string) => {
-                        try {
-                            const detail = await gitService.getCommitDetail(hash);
-                            return { hash, date: detail.authorDate };
-                        } catch {
-                            return { hash, date: '' };
-                        }
-                    })
-                );
-                commitDetails.sort((a, b) => a.date.localeCompare(b.date));
-                selectedHashes = commitDetails.map(c => c.hash);
+                // Oldest → newest by history order. The base ref computed further down
+                // is this list's first commit's parent, so a timestamp that disagrees
+                // with history (cherry-pick, rebase, amend) would squash from the
+                // wrong base. The picker path below is already in todo order.
+                selectedHashes = (await gitService.orderCommitsByHistory(hashesFromWebview)).reverse();
             } else {
                 // No commit provided - show picker (legacy mode)
                 const upstream = await vscode.window.showInputBox({
@@ -705,13 +675,12 @@ export function registerCommitCommands(
                 return;
             }
             
-            // Get commit messages for the squash input box
+            // `selectedHashes` is already oldest → newest by history order, so the
+            // messages read the way the commits landed and the base ref below really
+            // is where the rebase starts from.
             const commitDetails = await Promise.all(
                 selectedHashes.map(hash => gitService.getCommitDetail(hash))
             );
-            
-            // Sort by date (oldest first) to show in chronological order
-            commitDetails.sort((a, b) => new Date(a.authorDate).getTime() - new Date(b.authorDate).getTime());
             
             // Validate: check if selected commits are contiguous in history
             const oldestCommit = commitDetails[0];
