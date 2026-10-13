@@ -1179,17 +1179,329 @@ function showMenu(x, y, items, onPick) {
     }, 0);
 }
 
+/* ---------- date range filter (calendar popover, drag to circle a period) ---------- */
+// Press the first day, drag to the last one, let go. Clicking works too: the first
+// click is the start, the next one closes the range — which is how a period that
+// needs a month navigation stays a single action instead of two typed endpoints.
+var dateRange = { from: '', to: '' };
+var datePick = { year: 0, month: 0, view: 'month', anchor: '', hover: '', dragging: false, pending: false };
+var dateUi = null;
+
+function pad2(n) { return n < 10 ? '0' + n : String(n); }
+function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+function todayYmd() { var d = new Date(); d.setHours(0, 0, 0, 0); return ymd(d); }
+function dayShiftBack(days) {
+    var d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - days);
+    return ymd(d);
+}
+
+function syncDateTrigger() {
+    var el = document.getElementById('dr-text');
+    if (el) {
+        if (dateRange.from || dateRange.to) {
+            el.textContent = (dateRange.from || '…') + ' → ' + (dateRange.to || '…');
+            el.className = 'dr-text';
+        } else {
+            el.textContent = T('ui.dateRange');
+            el.className = 'dr-text placeholder';
+        }
+    }
+    syncDateClr();
+}
+
+/** Endpoints are stored ordered, so "start after end" cannot happen by dragging. */
+function applyDateRange(a, b) {
+    var lo = a <= b ? a : b;
+    var hi = a <= b ? b : a;
+    dateRange.from = lo;
+    dateRange.to = hi;
+    datePick.dragging = false;
+    datePick.pending = false;
+    syncDateTrigger();
+    pushFilters();
+}
+
+function clearDateRange() {
+    dateRange.from = '';
+    dateRange.to = '';
+    datePick.dragging = false;
+    datePick.pending = false;
+    syncDateTrigger();
+    if (dateUi && dateUi.isOpen) { renderDateGrid(); }
+}
+
+function buildDatePopover() {
+    var pop = document.createElement('div');
+    pop.className = 'date-popover';
+    var weeks = T('date.weekdays').split(',').map(function (w) {
+        return '<span>' + esc(w.trim()) + '</span>';
+    }).join('');
+    var chips = [
+        [T('date.today'), 0],
+        [T('date.last7Days'), 6],
+        [T('date.last30Days'), 29],
+        [T('date.last365Days'), 364]
+    ].map(function (c) {
+        return '<button class="dp-chip" type="button" data-days="' + c[1] + '">' + esc(c[0]) + '</button>';
+    }).join('');
+    pop.innerHTML =
+        '<div class="dp-head">' +
+        '<button class="dp-nav" type="button" data-nav="-1">&#8249;</button>' +
+        '<button class="dp-title" type="button" data-act="switch"></button>' +
+        '<button class="dp-nav" type="button" data-nav="1">&#8250;</button>' +
+        '</div>' +
+        '<div class="dp-week">' + weeks + '</div>' +
+        '<div class="dp-grid"></div>' +
+        '<div class="dp-chips">' + chips + '</div>' +
+        '<div class="dp-foot"><span class="dp-hint"></span>' +
+        '<button class="dp-clear" type="button" data-act="clear">' + esc(T('ui.clear')) + '</button></div>';
+    document.body.appendChild(pop);
+    return pop;
+}
+
+function datePreviewBounds() {
+    if (datePick.dragging || datePick.pending) {
+        var a = datePick.anchor;
+        var b = datePick.hover || datePick.anchor;
+        return [a <= b ? a : b, a <= b ? b : a];
+    }
+    return [dateRange.from, dateRange.to];
+}
+
+/**
+ * Rebuild the cells only when the displayed month/year or the view changes, and
+ * paint the selection by toggling classes in place. Re-rendering on every move
+ * would detach the cell under the button, and the outside-click guard then reads
+ * the press as "clicked nothing in here" and closes the popover mid-drag.
+ */
+function renderDateGrid() {
+    if (!dateUi) {return;}
+    var pop = dateUi.pop;
+    var grid = pop.querySelector('.dp-grid');
+    var isYear = datePick.view === 'year';
+    var key = datePick.view + ':' + datePick.year + ':' + datePick.month;
+    if (grid.getAttribute('data-key') !== key) {
+        buildDateCells(grid, isYear);
+        grid.setAttribute('data-key', key);
+    }
+    pop.querySelectorAll('.dp-nav').forEach(function (nav) {
+        var back = nav.getAttribute('data-nav') === '-1';
+        nav.setAttribute('data-title', T(isYear ? (back ? 'date.prevYear' : 'date.nextYear') : (back ? 'date.prevMonth' : 'date.nextMonth')));
+    });
+    pop.querySelector('.dp-title').textContent = isYear
+        ? T('date.yearTitle', { y: datePick.year })
+        : T('date.monthTitle', { y: datePick.year, m: datePick.month + 1 });
+    var bounds = datePreviewBounds();
+    if (isYear) {
+        pop.querySelectorAll('.dp-month').forEach(function (cell) {
+            cell.classList.toggle('sel', Number(cell.getAttribute('data-month')) === datePick.month);
+        });
+    } else {
+        pop.querySelectorAll('.dp-day').forEach(function (cell) {
+            var iso = cell.getAttribute('data-date');
+            var end = !!bounds[0] && (iso === bounds[0] || iso === bounds[1]);
+            cell.classList.toggle('sel', end);
+            cell.classList.toggle('mid', !end && !!bounds[0] && !!bounds[1] && iso > bounds[0] && iso < bounds[1]);
+        });
+    }
+    pop.querySelector('.dp-hint').textContent = T(datePick.pending ? 'date.pickEndHint' : 'date.dragHint');
+}
+
+function buildDateCells(grid, isYear) {
+    grid.className = isYear ? 'dp-grid dp-months' : 'dp-grid';
+    if (isYear) {
+        var months = T('date.months').split(',');
+        var cells = '';
+        for (var i = 0; i < 12; i++) {
+            cells += '<div class="dp-cell dp-month" data-month="' + i + '">' + esc((months[i] || '').trim()) + '</div>';
+        }
+        grid.innerHTML = cells;
+        return;
+    }
+    // Monday-first grid, six weeks so the popover never changes height mid-drag.
+    var lead = (new Date(datePick.year, datePick.month, 1).getDay() + 6) % 7;
+    var start = new Date(datePick.year, datePick.month, 1 - lead);
+    var today = todayYmd();
+    var days = '';
+    for (var d = 0; d < 42; d++) {
+        var day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + d);
+        var cls = 'dp-cell dp-day';
+        if (day.getMonth() !== datePick.month) { cls += ' out'; }
+        if (ymd(day) === today) { cls += ' today'; }
+        days += '<div class="' + cls + '" data-date="' + ymd(day) + '">' + day.getDate() + '</div>';
+    }
+    grid.innerHTML = days;
+}
+
+function openDatePicker() {
+    if (!dateUi) {return;}
+    var box = document.getElementById('date-range');
+    var focusStr = dateRange.to || dateRange.from || todayYmd();
+    var parts = focusStr.split('-');
+    datePick.year = Number(parts[0]);
+    datePick.month = Number(parts[1]) - 1;
+    datePick.view = 'month';
+    datePick.dragging = false;
+    datePick.pending = false;
+    datePick.hover = '';
+    dateUi.isOpen = true;
+    dateUi.pop.classList.add('open');
+    if (box) { box.classList.add('open'); }
+    renderDateGrid();
+    var r = box.getBoundingClientRect();
+    dateUi.pop.style.left = '0px';
+    dateUi.pop.style.top = '0px';
+    var pr = dateUi.pop.getBoundingClientRect();
+    var left = Math.max(4, r.left);
+    var top = r.bottom + 6;
+    if (top + pr.height > window.innerHeight - 6) { top = Math.max(6, r.top - pr.height - 6); }
+    dateUi.pop.style.left = left + 'px';
+    dateUi.pop.style.top = top + 'px';
+    // The host webview can be zoomed (window zoom / `window.zoomLevel`), and under
+    // a zoom a CSS px and a rect px are different scales, so the clamp above is
+    // only an estimate: nudge against the rect that was actually rendered.
+    for (var i = 0; i < 2; i++) {
+        var got = dateUi.pop.getBoundingClientRect();
+        var dx = got.right > window.innerWidth - 4 ? got.right - window.innerWidth + 4 : 0;
+        var dy = got.bottom > window.innerHeight - 4 ? got.bottom - window.innerHeight + 4 : 0;
+        if (!dx && !dy) {break;}
+        dateUi.pop.style.left = (parseFloat(dateUi.pop.style.left) - dx) + 'px';
+        dateUi.pop.style.top = (parseFloat(dateUi.pop.style.top) - dy) + 'px';
+    }
+    if (window._hideTooltip) window._hideTooltip();
+}
+
+function closeDatePicker() {
+    if (!dateUi) {return;}
+    dateUi.isOpen = false;
+    dateUi.pop.classList.remove('open');
+    var box = document.getElementById('date-range');
+    if (box) { box.classList.remove('open'); }
+    datePick.dragging = false;
+    datePick.pending = false;
+}
+
+function initDateRange() {
+    var trigger = document.getElementById('date-trigger');
+    var box = document.getElementById('date-range');
+    if (!trigger || !box) {return;}
+    var pop = buildDatePopover();
+    dateUi = { pop: pop, isOpen: false };
+
+    trigger.addEventListener('click', function () {
+        if (dateUi.isOpen) { closeDatePicker(); } else { openDatePicker(); }
+    });
+
+    pop.addEventListener('click', function (e) {
+        var nav = e.target.closest('.dp-nav');
+        if (nav) {
+            var step = Number(nav.getAttribute('data-nav'));
+            if (datePick.view === 'year') {
+                datePick.year += step;
+            } else {
+                datePick.month += step;
+                if (datePick.month < 0) { datePick.month = 11; datePick.year--; }
+                if (datePick.month > 11) { datePick.month = 0; datePick.year++; }
+            }
+            renderDateGrid();
+            return;
+        }
+        if (e.target.closest('[data-act="switch"]')) {
+            datePick.view = datePick.view === 'month' ? 'year' : 'month';
+            renderDateGrid();
+            return;
+        }
+        if (e.target.closest('[data-act="clear"]')) {
+            clearDateRange();
+            closeDatePicker();
+            pushFilters();
+            return;
+        }
+        var chip = e.target.closest('.dp-chip');
+        if (chip) {
+            applyDateRange(dayShiftBack(Number(chip.getAttribute('data-days'))), todayYmd());
+            closeDatePicker();
+            return;
+        }
+        var month = e.target.closest('.dp-month');
+        if (month) {
+            datePick.month = Number(month.getAttribute('data-month'));
+            datePick.view = 'month';
+            renderDateGrid();
+        }
+    });
+
+    pop.addEventListener('mousedown', function (e) {
+        var day = e.target.closest('.dp-day');
+        if (!day) {return;}
+        // Without this the drag starts a text selection over the grid.
+        e.preventDefault();
+        var iso = day.getAttribute('data-date');
+        if (datePick.pending) {
+            applyDateRange(datePick.anchor, iso);
+            closeDatePicker();
+            return;
+        }
+        datePick.dragging = true;
+        datePick.anchor = iso;
+        datePick.hover = iso;
+        renderDateGrid();
+    });
+
+    pop.addEventListener('mousemove', function (e) {
+        if (!datePick.dragging && !datePick.pending) {return;}
+        var day = e.target.closest('.dp-day');
+        if (!day) {return;}
+        var iso = day.getAttribute('data-date');
+        if (iso === datePick.hover) {return;}
+        datePick.hover = iso;
+        renderDateGrid();
+    });
+
+    document.addEventListener('mouseup', function (e) {
+        if (!datePick.dragging) {return;}
+        // Only a release inside the calendar ends the drag. A press abandoned
+        // outside (released over another panel or outside the window) leaves this
+        // handler without a matching mouseup, so the next unrelated click would
+        // otherwise commit a range the user never finished circling.
+        if (!pop.contains(e.target)) {
+            datePick.dragging = false;
+            renderDateGrid();
+            return;
+        }
+        datePick.dragging = false;
+        if (datePick.hover !== datePick.anchor) {
+            applyDateRange(datePick.anchor, datePick.hover);
+            closeDatePicker();
+        } else {
+            datePick.pending = true;
+            renderDateGrid();
+        }
+    });
+
+    document.addEventListener('mousedown', function (e) {
+        if (!dateUi.isOpen) {return;}
+        if (pop.contains(e.target) || box.contains(e.target)) {return;}
+        closeDatePicker();
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && dateUi.isOpen) { closeDatePicker(); }
+    });
+
+    syncDateTrigger();
+}
+
 /* ---------- events ---------- */
 function pushFilters() {
-    var fromDate = document.getElementById('f-from').value;
-    var toDate = document.getElementById('f-to').value;
-    
     // Convert date format to include time for better git filtering
     // YYYY-MM-DD -> YYYY-MM-DDT00:00:00 (start of day)
     // YYYY-MM-DD -> YYYY-MM-DDT23:59:59 (end of day)
-    var fromFormatted = fromDate ? fromDate + 'T00:00:00' : '';
-    var toFormatted = toDate ? toDate + 'T23:59:59' : '';
-    
+    var fromFormatted = dateRange.from ? dateRange.from + 'T00:00:00' : '';
+    var toFormatted = dateRange.to ? dateRange.to + 'T23:59:59' : '';
+
     vscode.postMessage({
         command: 'setFilters',
         text: document.getElementById('f-search').value,
@@ -1227,65 +1539,11 @@ document.getElementById('f-author').addEventListener('blur', function() {
     setTimeout(closeAuthorDropdown, 200);
 });
 
-// Date inputs: change event for validation and auto-focus, Enter key for search
-document.getElementById('f-from').addEventListener('change', function() {
-    syncDateClr();
-    
-    // Auto-focus to-date input after selecting from-date
-    var toDateInput = document.getElementById('f-to');
-    if (toDateInput) {
-        setTimeout(function() {
-            toDateInput.focus();
-        }, 100);
-    }
-    
-    // Set min attribute on to-date to enforce from <= to
-    var fromDate = this.value;
-    if (fromDate && toDateInput) {
-        toDateInput.setAttribute('min', fromDate);
-        
-        // Clear to-date if it's before from-date
-        var toDate = toDateInput.value;
-        if (toDate && toDate < fromDate) {
-            toDateInput.value = '';
-        }
-    }
-    
-    // Don't auto-search on date change, only on Enter key
-});
-
-document.getElementById('f-to').addEventListener('change', function() {
-    syncDateClr();
-    
-    // Validate that to-date is not before from-date
-    var fromDate = document.getElementById('f-from').value;
-    var toDate = this.value;
-    
-    if (fromDate && toDate && toDate < fromDate) {
-        // Show warning and clear the invalid date
-        vscode.postMessage({
-            command: 'showNotification',
-            type: 'warning',
-            message: T('w.endBeforeStart')
-        });
-        this.value = '';
-    }
-    
-    // Don't auto-search on date change, only on Enter key
-});
-
-// Add Enter key listener for date inputs
-document.getElementById('f-from').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        pushFilters();
-    }
-});
-
-document.getElementById('f-to').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        pushFilters();
-    }
-});
+// Date range: one control in the bar, one calendar in a popover. A period is a
+// gesture here — press the first day, drag to the last, let go — instead of two
+// endpoints typed into native date fields, whose calendar popup the theme cannot
+// reach (same reason the author box got its own dropdown).
+initDateRange();
 document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
 });
@@ -1316,12 +1574,10 @@ function syncClr(inputId, clrId) {
     if (i) i.addEventListener('input', function () { syncClr(ids[0], ids[1]); });
 });
 function syncDateClr() {
-    var f = document.getElementById('f-from').value || document.getElementById('f-to').value;
-    document.getElementById('clr-date').style.display = f ? '' : 'none';
+    var on = !!(dateRange.from || dateRange.to);
+    var b = document.getElementById('clr-date');
+    if (b) b.style.display = on ? '' : 'none';
 }
-syncDateClr();
-document.getElementById('f-from').addEventListener('change', syncDateClr);
-document.getElementById('f-to').addEventListener('change', syncDateClr);
 
 document.getElementById('clr-search').addEventListener('click', function () {
     document.getElementById('f-search').value = '';
@@ -1336,9 +1592,7 @@ document.getElementById('clr-path').addEventListener('click', function () {
     syncClr('f-path', 'clr-path'); pushFilters();
 });
 document.getElementById('clr-date').addEventListener('click', function () {
-    document.getElementById('f-from').value = '';
-    document.getElementById('f-to').value = '';
-    syncDateClr(); pushFilters();
+    clearDateRange(); pushFilters();
 });
 document.getElementById('clr-bfilter').addEventListener('click', function () {
     document.getElementById('f-bfilter').value = '';

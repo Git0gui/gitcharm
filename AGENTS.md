@@ -81,9 +81,10 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **内联 JS 在 TS 模板串里要双重转义**：`\n` 等序列会静默杀死整段内联脚本。
 - **XSS 防线**：所有插入 HTML 的动态文本走统一的 `esc()`（webview.js 内集中实现），禁止字符串拼接原始数据。
 - **tooltip 用 `data-title` + 自定义浮层**，不用原生 `title`（白色原生 tooltip 会与主题浮层重叠）；多行内容 CSS 需 `white-space: pre-wrap`；`contextmenu` 时调 `window._hideTooltip()` 避免与右键菜单叠层。
-- **浮动层层级是固定序**：对话框遮罩 `.push-dialog-overlay` = 2000，tooltip = 10000，`.context-menu` = 10001（必须盖过前两者）。菜单/浮层一律 append 到 `document.body`，任何"右键没反应/菜单不见了"先查层级再查逻辑——对话框内弹菜单曾因 1000 < 2000 画在遮罩底下。新增遮罩不得高于 10001，除非同时抬高菜单。
-- **主题**：对话框、下拉等全部使用 VSCode 主题变量（`var(--vscode-*)`），不用原生 API 弹窗；HTML5 `datalist` 已弃用（暗色主题不可控），作者筛选用自定义下拉组件。
-- **渲染性能**：行选中用 `applyRowSelection()` 原地切 class，只有 setData/setCommits/appendCommits 才全量 `renderRows()`。
+- **浮动层层级是固定序**：对话框遮罩 `.push-dialog-overlay` = 2000，tooltip = 10000，`.context-menu` = 10001（必须盖过前两者）。菜单/浮层一律 append 到 `document.body`，任何"右键没反应/菜单不见了"先查层级再查逻辑——对话框内弹菜单曾因 1000 < 2000 画在遮罩底下。新增遮罩不得高于 10001，除非同时抬高菜单。日期浮层用 9000（在对话框遮罩之上、tooltip 之下）。
+- **浮层定位要"先摆再校"，不能只信算出来的边界**：宿主可以开缩放（`window.zoomLevel`／鼠标缩放），此时 CSS px 与 `getBoundingClientRect()` 的 px 不是一个尺度（实测 `width: 252px` 的框量出来 239.4），按数值 clamp 的右边界会差出零点几像素、刚好露出屏幕外。写法是先按估算位置摆好，再用真实渲染出的矩形对 `innerWidth/innerHeight` 复核并回挪（两趟足够）。
+- **主题**：对话框、下拉等全部使用 VSCode 主题变量（`var(--vscode-*)`），不用原生 API 弹窗；HTML5 `datalist` 已弃用（暗色主题不可控），作者筛选用自定义下拉组件。原生 `input[type=date]` 同理已弃用——它的日历弹层归操作系统管，主题变量够不到，日期筛选现在是自绘的月历浮层（见 §7）。
+- **渲染性能**：行选中用 `applyRowSelection()` 原地切 class，只有 setData/setCommits/appendCommits 才全量 `renderRows()`。**拖动/悬停类浮层同一条规则，而且这是功能性的**：日历网格在按住拖动期间只能原地 toggle class，绝不能重写 `innerHTML`——按下那个元素一旦脱离文档，浮层上"按在外部就关闭"的 `contains()` 判定就把这次按下读成"没点在浮层里"，拖动当场中断（现象是"根本拖不动"，静态读代码看不出来）。
 - WebviewView 无 `retainContextWhenHidden`——隐藏即销毁 DOM，靠视图状态持久化恢复。
 
 ## 7. UI/UX 约定（对标 IDEA）
@@ -91,7 +92,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 交互视觉：圆角 6–12px、`cubic-bezier` 过渡、悬停微动效、入场动画。
 - 提交列表只显示消息**第一行**，完整信息放 tooltip；tooltip 结构化分行（作者/时间/本地/远程分支）。
 - **所有搜索输入框（提交消息/作者/日期）回车触发**，不用 input 实时搜索；搜索结果用 `setStatusBarMessage`/`showInformationMessage` 系统提示，不做自定义 hint UI。
-- 日期选择器联动：选完开始日期自动聚焦结束日期，强制 end ≥ start。
+- **日期筛选是一个范围按钮 + 自绘月历**（`#date-trigger` → `.date-popover`）：按住拖动圈选一段时间，反着拖自动归正；不想拖就先点起始日再点结束日（`datePick.pending`，提示语跟着变）。网格固定 6 周，所以跨月拖动落在同一格里、浮层高度不会中途跳动。端点在 webview 内就排好序再发出，**宿主收到的格式不变**（`YYYY-MM-DDT00:00:00` / `T23:59:59`，git 侧仍按 §8 把 `T` 换成空格）；因为结构性选不反，原先的 `w.endBeforeStart` 校验已删。快捷区间 今天／近 7 天／近 30 天／近 1 年，点标题切年视图。**松手只有落在日历内才算完成**：`mouseup` 在浮层外一律视为放弃，否则按下去之后把鼠标移出窗口松手留下的 `dragging`，会在用户下一次点任何东西时提交成一个莫名其妙的区间。
 - 树节点：文件夹单击展开、分支双击切换；折叠指示器用内联 SVG chevron（`currentColor`），不用 ASCII；分支叶子只显示最后一段路径（`data-branch`/tooltip 保留全名，操作用完整 ref）。
 - 右键菜单按类型区分：本地分支 7 项、远程分支 4 项精简。
 - tag 显示为 IDEA 风格黄色徽章。

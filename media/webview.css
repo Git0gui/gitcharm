@@ -219,29 +219,158 @@ svg { flex: none; }
     font-size: 12px;
 }
 .tb select option { background: var(--vscode-dropdown-background, #3c3c3c); }
-.tb.date { flex: 1 1 210px; min-width: 190px; }
-.tb input[type="date"] { 
-    flex: 1 1 60px; 
-    min-width: 58px; 
-    width: auto; 
-    font-size: 11px; 
-    color-scheme: dark;
-    padding: 2px 4px;
-    border-radius: 4px;
-    border: 1px solid var(--vscode-input-border, #3c3c3c);
-    background: var(--vscode-input-background, #2a2d2e);
+.tb.date { flex: 1 1 150px; min-width: 132px; }
+.tb.date.open {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    box-shadow: 0 0 0 2px rgba(0, 127, 212, 0.15);
+}
+.dr-trigger {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    font-size: 12px;
+}
+.dr-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--vscode-input-foreground, #cccccc);
+}
+.dr-text.placeholder { color: var(--vscode-input-placeholderForeground, #888); }
+
+/* Date range popover: a month grid you drag across to circle a period. */
+.date-popover {
+    position: fixed;
+    z-index: 9000;
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    width: 252px;
+    padding: 12px;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+    color: var(--vscode-foreground, #cccccc);
+    animation: dialogSlideIn 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.date-popover.open { display: flex; }
+.dp-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.dp-title {
+    flex: 1;
+    min-width: 0;
+    padding: 2px 0;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    color: inherit;
+    font-size: 12px;
+    font-weight: 600;
+}
+.dp-title:hover { background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.3)); }
+.dp-nav {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #cccccc);
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
     transition: all 0.15s ease;
 }
-.tb input[type="date"]:hover {
-    border-color: var(--vscode-focusBorder, #007fd4);
+.dp-nav:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
+.dp-week, .dp-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
 }
-.tb input[type="date"]:focus {
-    outline: none;
-    border-color: var(--vscode-focusBorder, #007fd4);
-    box-shadow: 0 0 0 1px var(--vscode-focusBorder, rgba(0, 127, 212, 0.3));
+.dp-week span {
+    text-align: center;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground, #888);
+    padding: 2px 0;
 }
-.tb .arrow { font-size: 11px; flex: none; }
+/* The grid is dragged over, so it must never become a text selection. */
+.dp-grid { user-select: none; }
+.dp-cell {
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.dp-cell:hover { background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.3)); }
+.dp-day.out { color: var(--vscode-input-placeholderForeground, #6a6a6a); }
+.dp-day.today { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, #007fd4); }
+.dp-day.mid { background: rgba(17, 17, 17, .28); }
+.dp-day.sel, .dp-month.sel {
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #ffffff);
+}
+.dp-months { grid-template-columns: repeat(4, 1fr); }
+.dp-month { height: 30px; font-size: 11px; }
+.dp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.dp-chip {
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 12px;
+    border: 1px solid var(--vscode-input-border, #4a4a4a);
+    background: transparent;
+    color: var(--vscode-foreground, #cccccc);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.dp-chip:hover {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, 0.3));
+}
+.dp-foot { display: flex; align-items: center; gap: 8px; }
+.dp-hint {
+    flex: 1;
+    min-width: 0;
+    font-size: 10px;
+    line-height: 1.3;
+    color: var(--vscode-descriptionForeground, #888);
+}
+.dp-clear {
+    flex: none;
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 5px;
+    border: 1px solid var(--vscode-input-border, #4a4a4a);
+    background: transparent;
+    color: var(--vscode-descriptionForeground, #888);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.dp-clear:hover {
+    color: var(--vscode-foreground, #cccccc);
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+}
 .clr {
     flex: none;
     width: 16px;

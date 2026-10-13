@@ -20,6 +20,7 @@
 
 ### 优化
 
+- **时间筛选改成"按住拖动圈选一段时间"的自绘日历**：原来工具栏里是两个原生 `input[type=date]`，日期弹层归操作系统管、主题变量够不到（和作者框当初弃用 `datalist` 是同一个原因），而且开始/结束是两个各填各的字段，选反了只能事后报错。现在是一个范围按钮（`2026-10-06 → 2026-10-12`）加自己的浮层：在网格上按住拖动即可圈选，反着拖会自动归正，跨月也一样（网格固定 6 周，相邻月的日子就在同一格里）；不喜欢拖的话先点起始日、再点结束日同样走通，提示语会跟着变。顶部有 今天／近 7 天／近 30 天／近 1 年 四个快捷区间，点标题切到 12 个月的年视图。端点在 webview 里就排好序，`w.endBeforeStart` 那条校验因此没有存在必要，一并删除；发给宿主的格式没变（`YYYY-MM-DDT00:00:00`／`T23:59:59`，git 侧仍把 `T` 换成空格）。三个实测出来的坑已写进注释：**拖动期间不能重建网格**——`innerHTML` 一重写，按下的那个格子当场脱离文档，浮层上"点到外面就关闭"的判定于是把这次按下读成"没点在浮层里"，拖动直接死在第一步（所以选中态是原地 toggle class，只有月份／年份／视图变了才重建）；**浮层要先摆再校**——宿主可以开缩放，CSS px 与 `getBoundingClientRect()` 的 px 不是一个尺度（实测 252px 宽的框量出来 239.4），只按数值算的右边界 clamp 会差出零点几像素，所以摆完再用真实渲染出的矩形挪两下；**松手只有落在日历内才算圈选完成**，落在外面（按下去之后把鼠标移出窗口松手）视为放弃——否则这次没走完的按下会在用户下一次点任何东西时提交成一个莫名其妙的区间。
 - **彻底移除对内置 `vscode.git` 扩展的依赖**：分支列表、当前分支、upstream/ahead-behind、HEAD 哈希一律改由自有实现提供——refs（含 packed-refs）与 `HEAD` 直接读文件，track 信息用单条 `for-each-ref`，缓存失效改由 `fs.watch` git 目录驱动。`package.json` 不再声明 `extensionDependencies: ["vscode.git"]`，禁用内置 Git 扩展也能正常使用；面板首屏不再可能被内置扩展的仓库扫描（多子进程、大仓库秒级）拖慢
 - **缓存失效改为事件驱动**：`GitService.watchRepositoryChanges()` 监听 `HEAD`/`index`/`packed-refs` 与 `refs` 目录（递归），250ms 防抖后丢弃易失缓存；订阅方按 token 归还 Disposable，最后一个释放时才真正关监听。外部终端里的 checkout/commit 不再需要等缓存过期或轮询
 - **打包体积从 442KB 降到 156KB**：VSIX 内剔除 `resources/screenshots`（README 图片链接打包时会被 vsce 重写成 GitHub raw 绝对地址，市场不会请求包内副本）、`out/test`、`AGENTS.md`、`.tsbuildinfo`、`.eslintrc.json` 与上一版 `.vsix`；并删除冗余的 `onView` 激活事件（VS Code 会从 `contributes.views` 自动生成）

@@ -1858,13 +1858,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     <input id="f-path" type="text" placeholder="${t('ui.filterPath')}">
                     <button class="clr" style="display:none" id="clr-path" title="${t('ui.clear')}" type="button">&#10005;</button>
                 </label>
-                <label class="tb date">
+                <div class="tb date" id="date-range">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1"/><line x1="2" y1="6.5" x2="14" y2="6.5"/><line x1="5.5" y1="1.5" x2="5.5" y2="4"/><line x1="10.5" y1="1.5" x2="10.5" y2="4"/></svg>
-                    <input id="f-from" type="date" title="${t('ui.fromDate')}">
-                    <span class="arrow">&#8594;</span>
-                    <input id="f-to" type="date" title="${t('ui.toDate')}">
+                    <button class="dr-trigger" id="date-trigger" type="button" data-title="${t('ui.dateRangeHint')}"><span class="dr-text placeholder" id="dr-text">${t('ui.dateRange')}</span></button>
                     <button class="clr" style="display:none" id="clr-date" title="${t('ui.clearDate')}" type="button">&#10005;</button>
-                </label>
+                </div>
                 <button id="btn-reflog" title="${t('ui.reflog')}">
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.2 8a6.2 6.2 0 1 1-1.8-4.4"/><path d="M14.4 1.6v2.8h-2.8"/><path d="M8 4.6V8l2.6 1.6"/></svg>
                 </button>
