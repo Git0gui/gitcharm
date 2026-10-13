@@ -658,3 +658,80 @@ export function parseGitConfigRemoteUrl(raw: string, preferred = 'origin'): stri
 
     return preferredUrl ?? firstUrl;
 }
+
+/** Lines of git output worth showing, in order, without repeats. */
+function gitErrorLines(error: unknown): string[] {
+    const sources = [
+        typeof error === 'string' ? error : undefined,
+        (error as { message?: unknown } | null | undefined)?.message,
+        (error as { stderr?: unknown } | null | undefined)?.stderr,
+        (error as { stdout?: unknown } | null | undefined)?.stdout
+    ];
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const source of sources) {
+        if (typeof source !== 'string') {continue;}
+        for (const raw of source.split(/\r?\n/)) {
+            // GitCommandRunner stores stderr in `message` as well, and turning an
+            // Error into a string adds `Error: ` on top of that.
+            const line = raw.trim().replace(/^Error:\s*/, '').replace(/^(?:fatal|error):\s*/, '');
+            if (!line || seen.has(line)) {continue;}
+            seen.add(line);
+            lines.push(line);
+        }
+    }
+    return lines;
+}
+
+/**
+ * Show a failed git exec the way a person reads it: git's own sentence, once,
+ * without the `Error: fatal: …` wrapper that stringifying the Error produced.
+ */
+export function formatGitError(error: unknown, maxLines = 4, maxLength = 400): string {
+    const lines = gitErrorLines(error).slice(0, maxLines);
+    if (lines.length === 0) {return '';}
+    const text = lines.join(' ');
+    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+/** The actionable half of a remote failure: what to do about it. */
+export type GitNetworkFailure = 'auth' | 'tls' | 'unreachable' | 'unknown';
+
+/**
+ * Sort a remote failure into the kinds the user can act on. Order matters: a TLS
+ * problem arrives wrapped in a connect error, and git words a dead proxy exactly
+ * like a dead network.
+ */
+export function classifyGitNetworkFailure(text: string): GitNetworkFailure {
+    const lower = text.toLowerCase();
+    if (/terminal prompts disabled|could not read (?:username|password)|authentication failed|invalid credentials|permission denied \(publickey\)|\b401\b|\b403\b|repository .*not found/.test(lower)) {
+        return 'auth';
+    }
+    if (/ssl certificate|certificate verification failed|unable to get local issuer|certificate is not trusted|ssl_error|wrong version number/.test(lower)) {
+        return 'tls';
+    }
+    if (/failed to connect|couldn'?t connect|could not connect|connect to \S+ port|could not resolve|name or service not known|nodename nor servname|connection refused|connection timed out|network is unreachable|recv failure|send failure|remote end hung up|returned error|timed out/.test(lower)) {
+        return 'unreachable';
+    }
+    return 'unknown';
+}
+
+/**
+ * Hide credentials a proxy URL or remote URL may carry — only the host part is
+ * ever worth putting in front of the user.
+ */
+export function redactUrlCredentials(value: string): string {
+    return value.replace(/\/\/[^@/]+@/g, '//');
+}
+
+/**
+ * The host git was talking to, so the message can name it:
+ * `https://github.com/sveltejs/svelte/` → `github.com`,
+ * `git@github.com:sveltejs/svelte.git` → `github.com`.
+ */
+export function gitFailureHost(text: string): string | undefined {
+    const url = /\b[a-z][a-z0-9+.-]*:\/\/(?:[^@/\s"']+@)?([^/:?\s"']+)/i.exec(text);
+    if (url) {return url[1];}
+    const scp = /[\w.-]+@([\w.-]+):/.exec(text);
+    return scp ? scp[1] : undefined;
+}

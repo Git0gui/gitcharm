@@ -27,6 +27,10 @@ import {
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
     parseGitConfigRemoteNames,
+    formatGitError,
+    classifyGitNetworkFailure,
+    redactUrlCredentials,
+    gitFailureHost,
     pickFetchRemote,
     collectRepositoryRoots,
     discoverRepositoryRoots,
@@ -835,24 +839,63 @@ export class GitService {
             this.invalidateVolatile();
             return out.trim();
         } catch (error) {
-            throw this._explainAuthFailure(error);
+            throw await this._explainNetworkFailure(error);
         }
     }
 
     /**
-     * `GIT_TERMINAL_PROMPT=0` makes git refuse to ask on a hidden terminal, so an
-     * authentication failure otherwise reads as an opaque one-liner. Say what to
-     * do about it instead.
+     * A remote failure is only useful if it says what to do next: an
+     * `GIT_TERMINAL_PROMPT=0` rejection otherwise reads as an opaque one-liner,
+     * and "Failed to connect to github.com port 443" says nothing about the fix
+     * on a machine that reaches github.com only through a proxy. So the hint is
+     * picked by kind, and for connectivity it reports whether git itself has a
+     * proxy configured — that is the switch the user has to flip.
      */
-    private _explainAuthFailure(error: unknown): Error {
-        const e = error as { message?: string; stderr?: string; stdout?: string };
-        const text = [e?.message, e?.stderr, e?.stdout]
-            .filter((s): s is string => typeof s === 'string' && s.length > 0)
-            .join('\n');
-        const looksAuth = /terminal prompts disabled|could not read (username|password)|authentication failed|invalid credentials|permission denied \(publickey\)/i
-            .test(text);
-        return looksAuth ? new Error(`${text}\n${t('auth.failedHint')}`)
-            : (error instanceof Error ? error : new Error(text));
+    private async _explainNetworkFailure(error: unknown): Promise<Error> {
+        const summary = formatGitError(error);
+        if (!summary) {
+            return error instanceof Error ? error : new Error(String(error));
+        }
+        const kind = classifyGitNetworkFailure(summary);
+        if (kind === 'unknown') {
+            return new Error(summary);
+        }
+        // The hint goes first: a notification truncates its tail, and the tail is
+        // the part nobody can act on.
+        const hint = kind === 'auth'
+            ? t('auth.failedHint')
+            : kind === 'tls'
+                ? t('err.tlsHint')
+                : await this._unreachableHint(summary);
+        return new Error(`${hint}\n${summary}`);
+    }
+
+    /**
+     * Connectivity failures split in two: a machine that reaches the host only
+     * through a proxy needs `http.proxy` set, and one that already has it set
+     * needs the proxy itself checked. Git's own wording cannot tell them apart,
+     * its configured value can.
+     */
+    private async _unreachableHint(summary: string): Promise<string> {
+        const host = gitFailureHost(summary) ?? t('label.remote');
+        const proxy = await this._getHttpProxyConfig();
+        return proxy
+            ? t('err.unreachableWithProxy', { host, proxy: redactUrlCredentials(proxy) })
+            : t('err.unreachableNoProxy', { host });
+    }
+
+    /** The proxy git would use for this repository (local config wins over global). */
+    private async _getHttpProxyConfig(): Promise<string | undefined> {
+        try {
+            const value = (await this.executeGitArgs(
+                ['config', '--get', 'http.proxy'],
+                { timeoutMs: 5000 }
+            )).trim();
+            return value.length > 0 ? value : undefined;
+        } catch {
+            // `git config --get` exits non-zero when the key is simply not set.
+            return undefined;
+        }
     }
 
     /**

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
-import { parseLogLine } from '../services/gitUtils';
+import { parseLogLine, formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
@@ -42,7 +42,7 @@ export function registerBranchCommands(
                     } catch (error) {
                         // Rollback on failure
                         graphView.removeBranchOptimistically(branchName);
-                        vscode.window.showErrorMessage(t('branch.createFailed', { error: String(error) }));
+                        vscode.window.showErrorMessage(t('branch.createFailed', { error: formatGitError(error) }));
                     }
                 });
             }
@@ -105,7 +105,7 @@ export function registerBranchCommands(
                     // Async full refresh in background (fetches new commits, ahead/behind, etc.)
                     graphView.refresh();
                 } catch (error: any) {
-                    const errMsg = error?.message ?? String(error);
+                    const errMsg = formatGitError(error);
                     vscode.window.showErrorMessage(t('branch.switchFailed', { error: errMsg }));
                 }
             });
@@ -147,7 +147,7 @@ export function registerBranchCommands(
                     } catch (error: any) {
                         // Rollback on failure
                         graphView.addBranchOptimistically(branchName, false);
-                        const errMsg = error?.message ?? String(error);
+                        const errMsg = formatGitError(error);
                         const worktreePath = extractWorktreePath(errMsg);
                         if (worktreePath) {
                             const choice = await graphView.showDialog(
@@ -206,7 +206,7 @@ export function registerBranchCommands(
                     } catch (error) {
                         // Rollback on failure
                         graphView.renameBranchOptimistically(newName, oldName);
-                        vscode.window.showErrorMessage(t('branch.renameFailed', { error: String(error) }));
+                        vscode.window.showErrorMessage(t('branch.renameFailed', { error: formatGitError(error) }));
                     }
                 });
             }
@@ -253,7 +253,7 @@ export function registerBranchCommands(
                         t('merge.conflictTitle', { name: branchName })
                     );
                     if (!handled) {
-                        vscode.window.showErrorMessage(t('merge.failed', { error: error?.message ?? String(error) }));
+                        vscode.window.showErrorMessage(t('merge.failed', { error: formatGitError(error) }));
                     }
                 }
             }
@@ -311,7 +311,7 @@ export function registerBranchCommands(
                         t('rebase.conflictTitle', { name: branchName })
                     );
                     if (!handled) {
-                        vscode.window.showErrorMessage(t('rebase.failed', { error: error?.message ?? String(error) }));
+                        vscode.window.showErrorMessage(t('rebase.failed', { error: formatGitError(error) }));
                     }
                 }
             }
@@ -425,21 +425,21 @@ export function registerBranchCommands(
                     graphView.refreshBranchesOnly();
                 }
             } catch (error) {
-                const errMsg = String(error);
+                // Detect on git's raw output (a long dump can push the keyword past
+                // the display cap), show the formatted one.
+                const rawText = combineErrorText(error);
                 // Parse common git push errors into user-friendly messages
                 let friendlyMsg: string;
-                if (errMsg.includes('non-fast-forward') || errMsg.includes('[rejected]')) {
+                if (rawText.includes('non-fast-forward') || rawText.includes('[rejected]')) {
                     friendlyMsg = t('push.rejectedNonFastForward', { name: branchName });
-                } else if (errMsg.includes('remote contains work that you do not have locally')) {
+                } else if (rawText.includes('remote contains work that you do not have locally')) {
                     friendlyMsg = t('push.remoteAhead', { name: branchName });
-                } else if (errMsg.includes('permission denied') || errMsg.includes('403')) {
+                } else if (rawText.includes('permission denied') || rawText.includes('403')) {
                     friendlyMsg = t('push.permissionDenied');
-                } else if (errMsg.includes('authentication failed') || errMsg.includes('401')) {
+                } else if (rawText.includes('authentication failed') || rawText.includes('401')) {
                     friendlyMsg = t('push.authFailed');
                 } else {
-                    // Fallback: show first line of error only
-                    const firstLine = errMsg.split('\n')[0].trim();
-                    friendlyMsg = t('push.failed', { error: firstLine });
+                    friendlyMsg = t('push.failed', { error: formatGitError(error) });
                 }
                 vscode.window.showErrorMessage(friendlyMsg);
             }
@@ -517,7 +517,7 @@ export function registerBranchCommands(
                 );
 
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('pull.failed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('pull.failed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -532,7 +532,7 @@ export function registerBranchCommands(
                 vscode.window.showInformationMessage(t('fetch.success'));
                 graphView.refresh();
             } catch (error) {
-                vscode.window.showErrorMessage(t('fetch.failed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('fetch.failed', { error: formatGitError(error) }));
             }
         }),
 
@@ -563,7 +563,7 @@ export function registerBranchCommands(
                     commits.map(c => ({ hash: c.hash, shortHash: c.shortHash, message: c.message, author: c.author, date: c.date }))
                 );
             } catch (error) {
-                vscode.window.showErrorMessage(t('branch.compareFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('branch.compareFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -611,7 +611,7 @@ export function registerBranchCommands(
                 );
 
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('branch.updateFailed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('branch.updateFailed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -641,7 +641,7 @@ export function registerBranchCommands(
                 vscode.window.showInformationMessage(t('commit.success', { detail: first ? `: ${first}` : '' }));
                 graphView.refresh();
             } catch (error) {
-                vscode.window.showErrorMessage(t('commit.failed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('commit.failed', { error: formatGitError(error) }));
             }
         }),
 
@@ -685,7 +685,7 @@ export function registerBranchCommands(
                     graphView.refresh(true);
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('branch.createFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('branch.createFailed', { error: formatGitError(error) }));
             }
         })
     );

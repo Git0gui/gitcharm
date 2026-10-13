@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService, StashEntry } from '../services/gitService';
+import { formatGitError } from '../services/gitUtils';
 import { GraphViewProvider } from '../views/graphView';
 import { tryHandleConflict } from './helpers';
 import { t } from '../i18n';
@@ -87,7 +88,7 @@ export function registerStashCommands(
                     graphView.refreshStashes();
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('stash.saveFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('stash.saveFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -109,7 +110,7 @@ export function registerStashCommands(
                 // A conflicted apply keeps the stash entry and leaves the index
                 // unmerged; the opened files are where it gets resolved.
                 if (!(await tryHandleConflict(error, gitService, graphView, t('stash.operationLabel')))) {
-                    vscode.window.showErrorMessage(t('stash.applyFailed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('stash.applyFailed', { error: formatGitError(error) }));
                 }
             }
             graphView.refreshStashes();
@@ -133,7 +134,7 @@ export function registerStashCommands(
                 // git drops the entry only after a clean apply, so a conflict here
                 // means the stash is still on the stack — the re-list below shows it.
                 if (!(await tryHandleConflict(error, gitService, graphView, t('stash.operationLabel')))) {
-                    vscode.window.showErrorMessage(t('stash.popFailed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('stash.popFailed', { error: formatGitError(error) }));
                 }
             }
             graphView.refreshStashes();
@@ -161,7 +162,7 @@ export function registerStashCommands(
                     vscode.window.showInformationMessage(t('stash.dropped', { ref }));
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('stash.dropFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('stash.dropFailed', { error: formatGitError(error) }));
             }
             graphView.refreshStashes();
         })

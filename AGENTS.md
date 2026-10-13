@@ -43,6 +43,8 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 写提交消息类内容用 `-F`（文件）或 stdin，**禁止拼进命令行**（注入风险 + 编码问题）。
 - **pathspec（路径过滤）一律追加在 `--` 之后**：`… -- <path>…`。有 `--` 兜底，前导 `-` 不可能被 git 当选项，所以不必再拒绝这类字符（那是仓库内真实存在的文件名）；把 pathspec 混在选项区里则等于开注入面。注意带 pathspec 的 `git log` 会做**按路径的历史简化**，未触及这些路径的 merge 提交不再出现，这是预期语义不是 bug。
 - rebase/squash 等需要编辑器的操作：用 `env` + `cp` 作为 GIT_EDITOR/GIT_SEQUENCE_EDITOR，不要依赖交互式编辑器。
+- **用户可见的 git 失败文案一律走 `formatGitError`（src/services/gitUtils.ts）**，不要 `String(error)`：那会带上 `Error: ` 包装，而 `GitCommandRunner` 把同一句 stderr 同时写进 `message` 与 `stderr`，直接拼就是"Error: fatal: …"重复两遍。显示文本有 4 行／400 字上限，所以**按关键词判定失败类型时用 `combineErrorText`（或 `error.message`）的原文**，只把 `formatGitError` 的结果交给用户——判在截断后的文本上，将来任何一条长 dump 都会让判定悄悄失效。
+- **网络类失败由 `GitService._explainNetworkFailure` 分类补一句可执行提示**（凭据／证书／连不上）。"连不上"要先读 `git config --get http.proxy`（键不存在时 git 非零退出，按未配置处理）再决定提示：没配 → 让用户给 git 配代理；配了 → 让它检查代理是否还活着。代理 URL 可能带 `user:pass@`，展示前必须过 `redactUrlCredentials`。提示写在**第一行**——通知条截的是尾部，能行动的半句不能被截掉。
 
 ### 禁止依赖 vscode.git（已彻底移除）
 

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService, InProgressOperation } from '../services/gitService';
+import { formatGitError } from '../services/gitUtils';
 import { GraphViewProvider } from '../views/graphView';
 import { isConflictError, combineErrorText, openConflictFiles } from './helpers';
 import { t } from '../i18n';
@@ -59,7 +60,7 @@ export function registerOperationCommands(
                 vscode.window.showInformationMessage(t(opCompletedKey(operation)));
                 graphView.refresh();
             } catch (error: any) {
-                const errMsg = combineErrorText(error) || String(error);
+                const errMsg = combineErrorText(error);
                 if (isConflictError(errMsg)) {
                     // Still has conflicts: bring the files up, then offer the way out
                     await openConflictFiles(gitService);
@@ -155,7 +156,7 @@ export function registerOperationCommands(
                         await graphView.refreshRepoState(true);
                         vscode.window.showInformationMessage(t('repo.initSuccess', { path: folder.uri.fsPath }));
                     } catch (error) {
-                        vscode.window.showErrorMessage(t('repo.initFailed', { error: String(error) }));
+                        vscode.window.showErrorMessage(t('repo.initFailed', { error: formatGitError(error) }));
                     }
                 }
             );

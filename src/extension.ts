@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitService } from './services/gitService';
+import { formatGitError } from './services/gitUtils';
 import { GitAskpass } from './services/askpass';
 import { logger } from './services/logger';
 import { GraphViewProvider } from './views/graphView';
@@ -235,7 +236,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                     `${fileName} (${picked.branch} ↔ ${t('ext.workingTree')})`
                 );
             } catch (error) {
-                vscode.window.showErrorMessage(t('ext.compareFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('ext.compareFailed', { error: formatGitError(error) }));
             }
         })
     );

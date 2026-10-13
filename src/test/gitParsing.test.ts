@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -698,5 +698,80 @@ describe('discoverRepositoryRoots', () => {
 
     it('stops listing once the budget is spent', () => {
         assert.deepEqual(scan(['D:/Work'], { 'D:/Work': ['app'] }, ['D:/Work/app'], { budget: 0 }), []);
+    });
+});
+
+/** Reproduced from the user's own failing fetch (github.com unreachable directly). */
+const UNREACHABLE = "fatal: unable to access 'https://github.com/sveltejs/svelte/': Failed to connect to github.com port 443 after 21125 ms: Couldn't connect to server";
+
+describe('formatGitError', () => {
+    it('drops the Error wrapper and the stderr copy git already put in message', () => {
+        const error = { message: UNREACHABLE, stderr: UNREACHABLE, stdout: '' };
+        assert.equal(formatGitError(error),
+            "unable to access 'https://github.com/sveltejs/svelte/': Failed to connect to github.com port 443 after 21125 ms: Couldn't connect to server");
+    });
+
+    it('strips the fatal/error prefix but keeps the git wording', () => {
+        assert.equal(formatGitError(new Error('error: pathspec \'-rf\' did not match any file(s)')),
+            "pathspec '-rf' did not match any file(s)");
+    });
+
+    it('accepts a bare string and returns empty when there is nothing usable', () => {
+        assert.equal(formatGitError('nothing to commit'), 'nothing to commit');
+        assert.equal(formatGitError(undefined), '');
+    });
+
+    it('keeps non-ASCII and awkward file names verbatim', () => {
+        assert.equal(formatGitError({ message: 'fatal: 无法写入 测试.txt' }), '无法写入 测试.txt');
+        assert.equal(formatGitError({ message: 'fatal: bad object 100%.md' }), 'bad object 100%.md');
+    });
+
+    it('caps the number of lines and the total length', () => {
+        const many = formatGitError({ message: 'a\nb\nc\nd\ne\nf' }, 2);
+        assert.equal(many, 'a b');
+        const long = formatGitError({ message: 'x'.repeat(500) }, 4, 40);
+        assert.equal(long.length, 40);
+        assert.ok(long.endsWith('…'));
+    });
+});
+
+describe('classifyGitNetworkFailure', () => {
+    it('separates a dead connection from an auth rejection', () => {
+        assert.equal(classifyGitNetworkFailure(UNREACHABLE), 'unreachable');
+        assert.equal(classifyGitNetworkFailure(
+            'fatal: could not read Username for \'https://github.com\': terminal prompts disabled'), 'auth');
+        assert.equal(classifyGitNetworkFailure('git@github.com: Permission denied (publickey).'), 'auth');
+        assert.equal(classifyGitNetworkFailure('The requested URL returned error: 403'), 'auth');
+    });
+
+    it('recognises a certificate problem, which git reports as a connect failure', () => {
+        assert.equal(classifyGitNetworkFailure(
+            'fatal: unable to access \'https://ghe.corp/r/\': SSL certificate problem: unable to get local issuer certificate'), 'tls');
+    });
+
+    it('leaves local failures alone', () => {
+        assert.equal(classifyGitNetworkFailure('nothing to commit, working tree clean'), 'unknown');
+    });
+});
+
+describe('gitFailureHost', () => {
+    it('reads the host out of an https failure', () => {
+        assert.equal(gitFailureHost(UNREACHABLE), 'github.com');
+    });
+
+    it('reads the host out of an ssh-style remote without leaking credentials', () => {
+        const host = gitFailureHost("fatal: unable to access 'https://bot:hunter2@git.corp.example/svc.git'");
+        assert.equal(host, 'git.corp.example');
+    });
+
+    it('returns undefined when git names no host', () => {
+        assert.equal(gitFailureHost('nothing to commit, working tree clean'), undefined);
+    });
+});
+
+describe('redactUrlCredentials', () => {
+    it('hides the userinfo a proxy URL may carry', () => {
+        assert.equal(redactUrlCredentials('http://user:pass@127.0.0.1:7890'), 'http://127.0.0.1:7890');
+        assert.equal(redactUrlCredentials('http://127.0.0.1:7890'), 'http://127.0.0.1:7890');
     });
 });

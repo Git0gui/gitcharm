@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService, tagNameProblem } from '../services/gitService';
+import { formatGitError } from '../services/gitUtils';
 import { GraphViewProvider } from '../views/graphView';
 import { t } from '../i18n';
 
@@ -87,7 +88,7 @@ export function registerTagCommands(
                     graphView.refresh();
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('tag.createFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('tag.createFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -160,7 +161,7 @@ export function registerTagCommands(
                 } catch (error) {
                     vscode.window.showErrorMessage(t('tag.pushFailed', {
                         names: names.join(', '),
-                        error: String(error)
+                        error: formatGitError(error)
                     }));
                 }
             });

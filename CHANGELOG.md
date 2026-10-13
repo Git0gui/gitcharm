@@ -26,6 +26,7 @@
 - **能读文件就不启子进程**：`hasAnyCommit` 先看 refs 上有没有指针（零提交仓库才回落 `rev-list`），`dropLastCommit` 的脏工作区检查复用同一次 `status --porcelain -z` 解析（不再额外 `status`），`getHeadHash` 直接由 `HEAD` + refs 得出哈希
 - **冲突处理不再把用户踢走**：merge/rebase/cherry-pick 停在冲突时直接打开冲突文件（上限 10 个 tab），解决依旧用核心 merge-conflict 扩展的 Accept Current/Incoming 代码透镜；扩展只提供继续/终止入口和顶部持久化状态栏，不再 `executeCommand('workbench.view.scm')` 把人切进内置 Git 的源代码管理视图
 - **最低可安装宿主降到 VSCode 1.66**：逐个版本拉 `@types/vscode` 编译 `src` 实测出的真实下限（唯一卡点是文件图标用的 `ColorThemeKind.HighContrastLight`，1.65 报错、1.66 起干净），同时把 `@types/vscode` 从 `^1.85.0` 钉成 `~1.66.0`——caret 会把它装成最新 1.x（实测 1.137），等于版本下限没有任何编译期校验
+- **git 失败提示不再把 `Error: fatal: …` 原样甩给用户**：新增纯函数 `formatGitError`（src/services/gitUtils.ts）并替换全部 45 处 `String(error)`——剥掉字符串化 Error 带来的 `Error: ` 包装和 git 自己的 `fatal:`/`error:` 前缀，去掉重复行（`GitCommandRunner` 把同一句 stderr 同时写进 `message` 与 `stderr`，一条 fetch 失败过去会在同一条提示里出现两遍），限 4 行／400 字符。网络类失败再由 `_explainNetworkFailure` 按类别补一句可执行建议：凭据（沿用原有提示）、证书、连不上。"连不上"先读 `git config --get http.proxy` 看 git 到底配没配代理——没配就说"在代理网络里就给它配代理"，配了就说"代理是 {proxy}，确认它还在跑"，代理 URL 里的账号密码经 `redactUrlCredentials` 抹掉后才展示；建议写在第一行，因为通知条截的是尾部。关键词判定（push 的 `non-fast-forward`／`[rejected]` 等）改读 `combineErrorText` 的原文，不受显示截断影响。用户报的这条已实测：本机 `git config` 里没有 `http.proxy`、`127.0.0.1:7890` 有代理在听，直连 github.com:443 超时 21s，而同一个 `ls-remote` 走代理 1.5s 出结果——新提示会直接把这件事讲出来
 
 ### 修复
 

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitService, GitCommit, assertHash } from '../services/gitService';
+import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
@@ -32,7 +33,7 @@ export function registerCommitCommands(
                 });
                 await vscode.window.showTextDocument(doc);
             } catch (error) {
-                vscode.window.showErrorMessage(t('commit.showDiffFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('commit.showDiffFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -371,7 +372,7 @@ export function registerCommitCommands(
                     t('rebase.title', { hash: upstream })
                 );
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('rebase.interactiveFailed', { error: error?.message ?? String(error) }));
+                    vscode.window.showErrorMessage(t('rebase.interactiveFailed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -557,7 +558,7 @@ export function registerCommitCommands(
                     graphView.refresh();
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('commit.editFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('commit.editFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -589,7 +590,7 @@ export function registerCommitCommands(
                     graphView.refresh();
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('amend.failed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('amend.failed', { error: formatGitError(error) }));
             }
         }),
 
@@ -642,7 +643,7 @@ export function registerCommitCommands(
 
                     selectedHashes = selectedItems.map(item => item.hash);
                 } catch (error) {
-                    vscode.window.showErrorMessage(t('commit.squashFailed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('commit.squashFailed', { error: formatGitError(error) }));
                     return;
                 }
             }
@@ -744,7 +745,7 @@ export function registerCommitCommands(
                     graphView.refresh();
                 });
             } catch (error) {
-                vscode.window.showErrorMessage(t('commit.squashFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('commit.squashFailed', { error: formatGitError(error) }));
             }
         }),
 
@@ -776,7 +777,7 @@ export function registerCommitCommands(
                     vscode.window.showInformationMessage(t('commit.resetSuccess', { hash: hash.substring(0, 7) }));
                     graphView.refresh();
                 } catch (error) {
-                    vscode.window.showErrorMessage(t('commit.resetFailed', { error: String(error) }));
+                    vscode.window.showErrorMessage(t('commit.resetFailed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -807,7 +808,7 @@ export function registerCommitCommands(
                 }
                 await graphView.showFileHistory(rel, history);
             } catch (error) {
-                vscode.window.showErrorMessage(t('fileHistory.failed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('fileHistory.failed', { error: formatGitError(error) }));
             }
         })
     );

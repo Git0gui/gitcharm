@@ -6,7 +6,7 @@ import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, We
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
-import { isOperationStateFile, mergeCommitFileStats, repositoryKey } from '../services/gitUtils';
+import { isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -228,7 +228,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }, 50);
             
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.findCommitFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.findCommitFailed', { error: formatGitError(error) }));
         }
     }
 
@@ -278,7 +278,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 this._loadAndDisplayBranches(),
                 this._loadAndDisplayCommits()
             ]).catch(error => {
-                vscode.window.showErrorMessage(t('view.loadDataFailed', { error: String(error) }));
+                vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
             });
             void this._refreshDivergence();
             return state;
@@ -623,7 +623,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 title
             );
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(error) }));
         }
     }
 
@@ -726,7 +726,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         ]);
                         this._post({ command: 'setDetail', commit, files });
                     } catch (error) {
-                        vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: String(error) }));
+                        vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: formatGitError(error) }));
                     } finally {
                         this._postLoading('detail', false);
                     }
@@ -762,7 +762,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             files: mergeCommitFileStats(results.map(([, files]) => files))
                         });
                     } catch (error) {
-                        vscode.window.showErrorMessage(t('view.loadDataFailed', { error: String(error) }));
+                        vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
                     } finally {
                         this._postLoading('multiCommits', false);
                     }
@@ -844,7 +844,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         ]);
                         this._post({ command: 'setDetail', commit, files });
                     } catch (error) {
-                        vscode.window.showErrorMessage(t('view.refreshFilesFailed', { error: String(error) }));
+                        vscode.window.showErrorMessage(t('view.refreshFilesFailed', { error: formatGitError(error) }));
                     } finally {
                         this._postLoading('detail', false);
                     }
@@ -1392,7 +1392,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             await vscode.commands.executeCommand('idea-git.cherryPick', { hashes: remainingHashes });
                             forceReload = true;
                         } catch (error: any) {
-                            vscode.window.showErrorMessage(t('cherryPick.resumeFailed', { error: String(error) }));
+                            vscode.window.showErrorMessage(t('cherryPick.resumeFailed', { error: formatGitError(error) }));
                         }
                     }
                     break;
@@ -1449,7 +1449,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }
             await this._reload(forceReload);
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.actionFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.actionFailed', { error: formatGitError(error) }));
         }
     }
 
@@ -1520,7 +1520,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             for (const c of data.commits) {this._loadedHashes.add(c.hash);}
             this._post({ command: 'appendCommits', commits: data.commits, hasMore: this._hasMore });
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.loadMoreFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.loadMoreFailed', { error: formatGitError(error) }));
         } finally {
             this._loadingMore = false;
         }
@@ -1552,7 +1552,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             });
             this._refreshDivergence();
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('rows', false);
         }
@@ -1584,7 +1584,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 void this._refreshDivergence();
             }, 50);
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('branches', false);
         }
@@ -1641,7 +1641,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 this._post({ command: 'setHeadHash', headHash });
             }
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: formatGitError(error) }));
         }
     }
 
@@ -1675,7 +1675,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             return this._getHtmlForWebview(payload);
         } catch (error) {
             // Fallback to empty state if branches fail to load
-            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: formatGitError(error) }));
             return this._getHtmlForWebview({
                 commits: [],
                 local: [],
@@ -1729,7 +1729,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const totalTime = Date.now() - startTime;
             logger.debug(`[GitCharm] Total commit load: ${totalTime}ms (fetch: ${fetchTime}ms, postMessage: ${postTime}ms)`);
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('rows', false);
         }
@@ -1751,7 +1751,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             // Also refresh divergence info (ahead/behind arrows)
             await this._refreshDivergence();
         } catch (error) {
-            vscode.window.showErrorMessage(t('view.refreshBranchesFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('view.refreshBranchesFailed', { error: formatGitError(error) }));
         }
     }
 

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
-import { branchWebUrl, commitWebUrl } from '../services/gitUtils';
+import { branchWebUrl, commitWebUrl, formatGitError } from '../services/gitUtils';
 import { getBranchName } from './helpers';
 import { t } from '../i18n';
 
@@ -29,7 +29,7 @@ export function registerRemoteCommands(
                 vscode.window.showInformationMessage(t('remote.copied', { url }));
             }
         } catch (error) {
-            vscode.window.showErrorMessage(t('remote.openFailed', { error: String(error) }));
+            vscode.window.showErrorMessage(t('remote.openFailed', { error: formatGitError(error) }));
         }
     };
 
