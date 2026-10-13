@@ -182,7 +182,7 @@ export function activate(ctx: vscode.ExtensionContext) {
                     title
                 );
             } catch (e) {
-                vscode.window.showErrorMessage(t('ext.openDiffFailed', { error: String(e) }));
+                vscode.window.showErrorMessage(t('ext.openDiffFailed', { error: formatGitError(e) }));
             }
         }),
 

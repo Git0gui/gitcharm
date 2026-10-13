@@ -636,7 +636,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const afterUri = this._gitBlobUri(hash, path);
             await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, title);
         } catch (err) {
-            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: String(err) }));
+            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
         }
     }
 
@@ -648,7 +648,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const afterUri = this._gitBlobUri(targetRef, path);
             await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, title);
         } catch (err) {
-            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: String(err) }));
+            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
         }
     }
 
@@ -1429,7 +1429,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         const title = `${fileName} (${hash.substring(0, 7)} ↔ ${t('ext.workingTree')})`;
                         await vscode.commands.executeCommand('vscode.diff', this._gitBlobUri(hash, relPath), localUri, title);
                     } catch (err) {
-                        vscode.window.showErrorMessage(t('view.openDiffFailed', { error: String(err) }));
+                        vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
                     }
                     return;
                 }
@@ -1442,7 +1442,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         const fileName = relPath.split('/').pop() || relPath;
                         vscode.window.showInformationMessage(t('cherryPick.fileSuccess', { file: fileName }));
                     } catch (err) {
-                        vscode.window.showErrorMessage(t('cherryPick.fileFailed', { error: String(err) }));
+                        vscode.window.showErrorMessage(t('cherryPick.fileFailed', { error: formatGitError(err) }));
                     }
                     return;
                 }
