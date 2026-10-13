@@ -2,14 +2,10 @@
 
 所有重要更改都将记录在此文件中。
 
-## [0.0.5] - 2026-10-11
+## [0.0.6] - 2026-10-14
 
 ### 新增
 
-- **自有凭据输入（`GIT_ASKPASS`）**：远端要账号/密码/令牌时由扩展弹出输入框，不再依赖内置 Git 的 askpass。git 直接执行 `media/askpass/git-askpass.sh`，脚本用宿主自带的 Node 把提示词 POST 回扩展宿主的本地一次性服务（只绑 `127.0.0.1`、URL 含随机 token、请求体上限 4KB、120s 超时），密码类提示走掩码输入框且不入日志；取消即 204 → git 退出 128，并补一句"配置凭据助手或改用 SSH"的可执行提示。`push/pull/fetch` 统一走新的 `_execNetwork`（带 askpass 环境、不设超时，避免大仓库推送被 30s 掐断）
-- **工作区状态的完整解析与暂存服务层**：`parseStatusEntries` 解析 `status --porcelain -z` 的 XY 双状态（含 rename/copy 的源路径、六种冲突码、`!!` 忽略项），`GitService` 在其上提供 `add/stage/unstage/discard/getStatusEntries`，丢弃未跟踪文件前强制校验路径必须落在仓库内
-- **冲突解决完，分支上方的"继续/终止"自动收起**：面板可见时在同一条 git 目录监听上分流状态文件（`MERGE_HEAD`/`CHERRY_PICK_HEAD`/`rebase-merge`/`rebase-apply`），2s 轮询常开作兜底。git 在操作真正结束时才删掉这些文件，所以判据取"状态文件消失"——在外部终端 commit、`--continue`、`--abort` 都能跟上；只 `git add` 还没 commit 时 `MERGE_HEAD` 仍在，状态栏保留才对（merge 还没结束）。空闲态只做四次 `existsSync`（零子进程），只有已知在进行中才走会 spawn `ls-files -u` 的权威检测
-- **外部提交落地后提交列表自动跟上**：同一条轮询里比对"当前展示 rev 的 tip"——在分支树选了分支就读它的 ref，没选就读 `HEAD`，全是纯文件读取；tip 变了才带 force 重载一次，不做无条件刷新。自动刷新携带 `preserveSelection`，只在所选提交仍存在于新列表时保留选中项、第三栏详情、折叠态与滚动位置，用户在终端每提交一次面板就跳回顶部、详情被清空的情况不再出现
 - **回退（Revert）/ 修补提交（Amend）/ 复制提交消息 / 在远端网页打开提交与分支**：补齐 IDEA 右键菜单的四项。回退把 `REVERT_HEAD` 提升为第五种"进行中操作"——实测带冲突的 `git revert` 只写 `REVERT_HEAD`+`AUTO_MERGE`+`MERGE_MSG` 而不写 `MERGE_HEAD`，沿用 merge 判定的话，状态栏的"继续"执行完 `merge --continue` 会直接失败；多提交回退按历史顺序从新到旧逐个执行（git 按参数顺序反向打补丁，先回退旧提交必然被新提交挡住；判新旧见下面"一组提交的早晚不能按作者时间判"）。修补在无可并入内容时返回而不是硬跑 `amend -a`（实测后者照常重写哈希，用户看不到任何改动却拿到一个新 commit）。远端网页地址直接解析 `.git/config`（含 `commondir`，worktree 安全），scp-like、`ssh` 带端口、https 带凭据、GitLab 子群都归一成 https 基址；本地路径型远端返回明确提示而非静默失败
 - **标签管理（新建轻量/附注、删除本地、推送到远端）**：附注标签的 `refs/tags` 存的是 tag 对象哈希而不是提交哈希，`_loadGraphData` 拿它匹配提交永远匹配不上——这类标签此前根本不显示徽章，"该提交的标签"也列不出来。现在 `RefsReader` 用 zlib 直接解开 loose object 取 header 的 `object` 行（零子进程，符合"能读文件就不启子进程"；对象被 gc 进 pack 时退回原哈希，不比改动前更差）。徽章判定不再用 `isTagName` 猜名字形状，改由 `GraphCommit.tags` 权威字段驱动，右键菜单用同一次判定决定"推送标签/删除标签"是否出现。标签名规则按 `git check-ref-format` 实测补齐（路径段不能以 `.` 开头、不能以 `.`／`.lock` 结尾等），并给出可本地化的具体原因，输入框 `validateInput` 即时反馈；附注标签消息走 `-F` 临时文件，留空即轻量标签。删除只动本地并在确认框里明说远端不会被删
 - **贮藏（Stash）管理面板**：分支树第三分区列出 stash 栈，工具栏一个按钮新建贮藏，行上/右键可应用、弹出、删除（删除带确认）。顺带换掉一个会切坏数据的旧解析：`getStashes` 原先按 `%gd|%gs` 切竖线，而贮藏消息合法含竖线（实测 `On master: pipe|subject` 被截断），且 `git stash list` 不支持任何日期格式——改走 reflog `log -g stash --format=%gd%x00%gs%x00%aI` 以 NUL 分隔，解析抽成纯函数 `parseStashList` 并进单测。`refs/stash` 在公共目录（各 worktree 共享）且 git 永不 pack，所以"有没有贮藏、是否变化"只需读一个小文件：2s 轮询比对签名，真变了才 spawn 列表查询。`stash@{n}` 是栈内位置而非身份，故每次操作前都按当前 index 重新解析；stash 冲突不写状态文件，只能靠 stderr 判定后走既有的冲突处理路径
@@ -21,12 +17,6 @@
 ### 优化
 
 - **时间筛选改成"按住拖动圈选一段时间"的自绘日历**：原来工具栏里是两个原生 `input[type=date]`，日期弹层归操作系统管、主题变量够不到（和作者框当初弃用 `datalist` 是同一个原因），而且开始/结束是两个各填各的字段，选反了只能事后报错。现在是一个范围按钮（`2026-10-06 → 2026-10-12`）加自己的浮层：在网格上按住拖动即可圈选，反着拖会自动归正，跨月也一样（网格固定 6 周，相邻月的日子就在同一格里）；不喜欢拖的话先点起始日、再点结束日同样走通，提示语会跟着变。顶部有 今天／近 7 天／近 30 天／近 1 年 四个快捷区间，点标题切到 12 个月的年视图。端点在 webview 里就排好序，`w.endBeforeStart` 那条校验因此没有存在必要，一并删除；发给宿主的格式没变（`YYYY-MM-DDT00:00:00`／`T23:59:59`，git 侧仍把 `T` 换成空格）。三个实测出来的坑已写进注释：**拖动期间不能重建网格**——`innerHTML` 一重写，按下的那个格子当场脱离文档，浮层上"点到外面就关闭"的判定于是把这次按下读成"没点在浮层里"，拖动直接死在第一步（所以选中态是原地 toggle class，只有月份／年份／视图变了才重建）；**浮层要先摆再校**——宿主可以开缩放，CSS px 与 `getBoundingClientRect()` 的 px 不是一个尺度（实测 252px 宽的框量出来 239.4），只按数值算的右边界 clamp 会差出零点几像素，所以摆完再用真实渲染出的矩形挪两下；**松手只有落在日历内才算圈选完成**，落在外面（按下去之后把鼠标移出窗口松手）视为放弃——否则这次没走完的按下会在用户下一次点任何东西时提交成一个莫名其妙的区间。
-- **彻底移除对内置 `vscode.git` 扩展的依赖**：分支列表、当前分支、upstream/ahead-behind、HEAD 哈希一律改由自有实现提供——refs（含 packed-refs）与 `HEAD` 直接读文件，track 信息用单条 `for-each-ref`，缓存失效改由 `fs.watch` git 目录驱动。`package.json` 不再声明 `extensionDependencies: ["vscode.git"]`，禁用内置 Git 扩展也能正常使用；面板首屏不再可能被内置扩展的仓库扫描（多子进程、大仓库秒级）拖慢
-- **缓存失效改为事件驱动**：`GitService.watchRepositoryChanges()` 监听 `HEAD`/`index`/`packed-refs` 与 `refs` 目录（递归），250ms 防抖后丢弃易失缓存；订阅方按 token 归还 Disposable，最后一个释放时才真正关监听。外部终端里的 checkout/commit 不再需要等缓存过期或轮询
-- **打包体积从 442KB 降到 156KB**：VSIX 内剔除 `resources/screenshots`（README 图片链接打包时会被 vsce 重写成 GitHub raw 绝对地址，市场不会请求包内副本）、`out/test`、`AGENTS.md`、`.tsbuildinfo`、`.eslintrc.json` 与上一版 `.vsix`；并删除冗余的 `onView` 激活事件（VS Code 会从 `contributes.views` 自动生成）
-- **能读文件就不启子进程**：`hasAnyCommit` 先看 refs 上有没有指针（零提交仓库才回落 `rev-list`），`dropLastCommit` 的脏工作区检查复用同一次 `status --porcelain -z` 解析（不再额外 `status`），`getHeadHash` 直接由 `HEAD` + refs 得出哈希
-- **冲突处理不再把用户踢走**：merge/rebase/cherry-pick 停在冲突时直接打开冲突文件（上限 10 个 tab），解决依旧用核心 merge-conflict 扩展的 Accept Current/Incoming 代码透镜；扩展只提供继续/终止入口和顶部持久化状态栏，不再 `executeCommand('workbench.view.scm')` 把人切进内置 Git 的源代码管理视图
-- **最低可安装宿主降到 VSCode 1.66**：逐个版本拉 `@types/vscode` 编译 `src` 实测出的真实下限（唯一卡点是文件图标用的 `ColorThemeKind.HighContrastLight`，1.65 报错、1.66 起干净），同时把 `@types/vscode` 从 `^1.85.0` 钉成 `~1.66.0`——caret 会把它装成最新 1.x（实测 1.137），等于版本下限没有任何编译期校验
 - **一步"改动变空"不再甩出 git 的建议文本，而是问用户三选一**：解决冲突时保留了对面已有的内容，这一步的补丁就成了空的，git 会停下并打印整段 advice（`The previous cherry-pick is now empty… git commit --allow-empty … Otherwise, please use 'git rebase --skip'`）——那三行恰恰就是用户能做的三个选择，只是没人替他按。现在由纯函数 `isEmptyCommitStop`／`emptyCommitStopInfo` 认出这种停止并取出提交号，弹"跳过这个提交／保留这个空提交／终止"对话框，执行走 `rebase|cherry-pick|revert --skip`、`commit --allow-empty --no-edit`、以及原有的 abort；接入点是继续操作、cherry-pick、revert、交互式变基、变基到某分支、拉取/更新分支这些会撞见它的地方，且**必须排在冲突判定之前**（advice 里含 `Could not apply`，先判冲突会把用户赶去解决已经不存在的冲突）。实测（git 2.45.1.windows.1）三条：cherry-pick 与 rebase 打印 advice 块，`git revert --continue` 只打印状态头加 `nothing to commit, working tree clean`，所以判据两种形状都认；`.git/sequencer/todo` 不随执行消耗（进度记在别处），因此"保留空提交"后还要补一次 `--continue` 才会跑完剩下的队列（单条 pick 不留 sequencer 目录，多条才留）；`commit --allow-empty --no-edit` 会复用准备好的消息（revert 场景即 `Revert "m1"`）并结束当前步。若续跑队列时撞上下一步的真冲突，走既有冲突路径（打开文件 + 状态栏继续/终止），不再报"处理这一步失败"。顺带把 `cherry-pick --continue` 收进服务层并补 `GIT_EDITOR=true`——之前那条是唯一没设的，宿主里没有终端可交给交互式编辑器
 - **git 失败提示不再把 `Error: fatal: …` 原样甩给用户**：新增纯函数 `formatGitError`（src/services/gitUtils.ts）并替换全部 45 处 `String(error)`——剥掉字符串化 Error 带来的 `Error: ` 包装和 git 自己的 `fatal:`/`error:` 前缀，去掉重复行（`GitCommandRunner` 把同一句 stderr 同时写进 `message` 与 `stderr`，一条 fetch 失败过去会在同一条提示里出现两遍），限 4 行／400 字符。网络类失败再由 `_explainNetworkFailure` 按类别补一句可执行建议：凭据（沿用原有提示）、证书、连不上。"连不上"先读 `git config --get http.proxy` 看 git 到底配没配代理——没配就说"在代理网络里就给它配代理"，配了就说"代理是 {proxy}，确认它还在跑"，代理 URL 里的账号密码经 `redactUrlCredentials` 抹掉后才展示；建议写在第一行，因为通知条截的是尾部。关键词判定（push 的 `non-fast-forward`／`[rejected]` 等）改读 `combineErrorText` 的原文，不受显示截断影响。用户报的这条已实测：本机 `git config` 里没有 `http.proxy`、`127.0.0.1:7890` 有代理在听，直连 github.com:443 超时 21s，而同一个 `ls-remote` 走代理 1.5s 出结果——新提示会直接把这件事讲出来
 
@@ -40,6 +30,32 @@
 - **虚拟文档把文件名里的 `%` 读坏了**：`idea-git-diff` 的 provider 对 `uri.path` 又做了一次 `decodeURIComponent`，而 VSCode 的 `Uri` 各段本来就是解码值（`toString()` 才是编码的那一步，文档明说 `skipEncoding` "Do not percentage-encode the result"）。于是名字里含 `%` 的文件（`100%.md`）第二次解码直接抛 `URIError`，差异框变成一片空白；`%20` 这样的合法文件名也会被错读成空格。现在只剥前导斜杠、不再解码
 - **多仓库工作区面板卡在骨架屏**：冷启动时分支走 `workspaceState` 缓存、提交走热索引，比 webview 脚本加载还快，`setBranches`/`setCommits` 在 `ready` 握手之前就发了出去——而握手之前的消息会被 webview 静默丢弃且没人重投，于是前两栏永远停在骨架条（看起来像"图标全没了"），第三栏却靠握手后的往返拿到了真实提交。现在 `_post` 把刷屏类消息按 command 暂存最新值，`ready` 时先 flush 再投递权威仓库状态；隐藏即 DOM 销毁，因此隐藏时把 `_webviewReady` 置回 `false` 并清空缓冲，避免把消息打进已经死掉的帧（同源问题：隐藏期间的 `setFileIconTheme` 过去会丢，重显示后文件图标退化成兜底图标）
 - **对话框里的右键菜单"点了没反应"**：`.context-menu` 一直是 `z-index: 1000`，而所有面板内对话框（Reflog、文件历史、推送、对比）用的遮罩层是 `2000`——菜单确实弹出来了，只是画在遮罩底下，看起来就像右键失效。提到 `10001`（盖过全部遮罩与 `10000` 的自定义 tooltip），一处 CSS 修好所有对话框内的菜单，不用给每个弹层单独传层叠上下文
+
+### 文档
+
+- **AGENTS.md 再补三条本批约束**：切换仓库只准走 `GraphViewProvider.switchRepository`（否则各处重置的状态不一致，会把上一个项目的分支/选中项带进新仓库）；易失缓存与视图快照必须能识别自己属于哪个仓库（`repoPath` 不匹配即丢弃）；后台／定时任务不得走 `_execNetwork`（它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框）
+- **单测覆盖继续扩充**：`parseStashList`、`parsePathFilter`、`parseReflogList`、`parseGitConfigRemoteNames`、`pickFetchRemote`、`repositoryKey`、`collectRepositoryRoots`，以及本批后段的 `isEmptyCommitStop`／`emptyCommitStopInfo`、`mergeCommitFileStats`、`formatGitError`、`redactUrlCredentials` 全部是纯函数用例（不 import vscode），i18n 词典 zh/en key 集 parity 照常通过；合计 201 例全绿
+
+## [0.0.5] - 2026-10-11
+
+### 新增
+
+- **自有凭据输入（`GIT_ASKPASS`）**：远端要账号/密码/令牌时由扩展弹出输入框，不再依赖内置 Git 的 askpass。git 直接执行 `media/askpass/git-askpass.sh`，脚本用宿主自带的 Node 把提示词 POST 回扩展宿主的本地一次性服务（只绑 `127.0.0.1`、URL 含随机 token、请求体上限 4KB、120s 超时），密码类提示走掩码输入框且不入日志；取消即 204 → git 退出 128，并补一句"配置凭据助手或改用 SSH"的可执行提示。`push/pull/fetch` 统一走新的 `_execNetwork`（带 askpass 环境、不设超时，避免大仓库推送被 30s 掐断）
+- **工作区状态的完整解析与暂存服务层**：`parseStatusEntries` 解析 `status --porcelain -z` 的 XY 双状态（含 rename/copy 的源路径、六种冲突码、`!!` 忽略项），`GitService` 在其上提供 `add/stage/unstage/discard/getStatusEntries`，丢弃未跟踪文件前强制校验路径必须落在仓库内
+- **冲突解决完，分支上方的"继续/终止"自动收起**：面板可见时在同一条 git 目录监听上分流状态文件（`MERGE_HEAD`/`CHERRY_PICK_HEAD`/`rebase-merge`/`rebase-apply`），2s 轮询常开作兜底。git 在操作真正结束时才删掉这些文件，所以判据取"状态文件消失"——在外部终端 commit、`--continue`、`--abort` 都能跟上；只 `git add` 还没 commit 时 `MERGE_HEAD` 仍在，状态栏保留才对（merge 还没结束）。空闲态只做四次 `existsSync`（零子进程），只有已知在进行中才走会 spawn `ls-files -u` 的权威检测
+- **外部提交落地后提交列表自动跟上**：同一条轮询里比对"当前展示 rev 的 tip"——在分支树选了分支就读它的 ref，没选就读 `HEAD`，全是纯文件读取；tip 变了才带 force 重载一次，不做无条件刷新。自动刷新携带 `preserveSelection`，只在所选提交仍存在于新列表时保留选中项、第三栏详情、折叠态与滚动位置，用户在终端每提交一次面板就跳回顶部、详情被清空的情况不再出现
+
+### 优化
+
+- **彻底移除对内置 `vscode.git` 扩展的依赖**：分支列表、当前分支、upstream/ahead-behind、HEAD 哈希一律改由自有实现提供——refs（含 packed-refs）与 `HEAD` 直接读文件，track 信息用单条 `for-each-ref`，缓存失效改由 `fs.watch` git 目录驱动。`package.json` 不再声明 `extensionDependencies: ["vscode.git"]`，禁用内置 Git 扩展也能正常使用；面板首屏不再可能被内置扩展的仓库扫描（多子进程、大仓库秒级）拖慢
+- **缓存失效改为事件驱动**：`GitService.watchRepositoryChanges()` 监听 `HEAD`/`index`/`packed-refs` 与 `refs` 目录（递归），250ms 防抖后丢弃易失缓存；订阅方按 token 归还 Disposable，最后一个释放时才真正关监听。外部终端里的 checkout/commit 不再需要等缓存过期或轮询
+- **打包体积从 442KB 降到 156KB**：VSIX 内剔除 `resources/screenshots`（README 图片链接打包时会被 vsce 重写成 GitHub raw 绝对地址，市场不会请求包内副本）、`out/test`、`AGENTS.md`、`.tsbuildinfo`、`.eslintrc.json` 与上一版 `.vsix`；并删除冗余的 `onView` 激活事件（VS Code 会从 `contributes.views` 自动生成）
+- **能读文件就不启子进程**：`hasAnyCommit` 先看 refs 上有没有指针（零提交仓库才回落 `rev-list`），`dropLastCommit` 的脏工作区检查复用同一次 `status --porcelain -z` 解析（不再额外 `status`），`getHeadHash` 直接由 `HEAD` + refs 得出哈希
+- **冲突处理不再把用户踢走**：merge/rebase/cherry-pick 停在冲突时直接打开冲突文件（上限 10 个 tab），解决依旧用核心 merge-conflict 扩展的 Accept Current/Incoming 代码透镜；扩展只提供继续/终止入口和顶部持久化状态栏，不再 `executeCommand('workbench.view.scm')` 把人切进内置 Git 的源代码管理视图
+- **最低可安装宿主降到 VSCode 1.66**：逐个版本拉 `@types/vscode` 编译 `src` 实测出的真实下限（唯一卡点是文件图标用的 `ColorThemeKind.HighContrastLight`，1.65 报错、1.66 起干净），同时把 `@types/vscode` 从 `^1.85.0` 钉成 `~1.66.0`——caret 会把它装成最新 1.x（实测 1.137），等于版本下限没有任何编译期校验
+
+### 修复
+
 - **在 VS Code 里切分支时面板感知弱**：外部切换的探测原先把 `fs.watch` 绑在 `HEAD` 文件本身——git 是用 `HEAD.lock` + rename 覆写它，Windows 上还能收到事件，macOS/Linux 的 inotify 绑 inode，第一次切换后就变成孤儿监听；而 2s 轮询又只在 watcher 报 `error` 时才启动，孤儿监听并不报错、只是从此静默无事件，于是"切一次还行、后面全不刷新"。现在监听 git 目录并按 `HEAD` 过滤，轮询与监听常开并存（读 `HEAD` 是纯文件读取，不启子进程），任何一路失效另一路仍会跟上
 - **linked worktree 下 git 状态读不到**：worktree 的 `.git` 是 `gitdir:` 指针文件、refs 又共享在 `commondir` 指向的公共目录，旧代码拼 `repoPath/.git` 去读 `HEAD`、`MERGE_HEAD`、`rebase-merge`、`CHERRY_PICK_HEAD` 一律落空（冲突/变基状态栏不显示、分支与哈希退回子进程）。新增纯 fs 的 `resolveGitDir()` / `resolveCommonDir()`，所有状态文件读取统一走 worktree 感知路径
 - **git log 的位置参数存在参数注入面**：无 shell 的 argv 执行下，旧代码靠静默剥离 `" \` $` 来"消毒"，既会篡改合法分支名又挡不住以 `-` 开头的输入被 git 当成选项（如 hash 搜索框填入 `--output=…`）。现在分支 rev 走 `assertRef`（新增拒绝前导 `-`，合法 ref 本就不允许）、hash 走 `assertHash`，`--grep/--author/--since/--until` 作为选项值原样传递
@@ -52,8 +68,6 @@
 - **实测宿主下限的方法写进文档**：从 npmmirror 拉指定版本 `@types/vscode` 的 tarball，用临时 tsconfig 的 `paths` 把 `vscode` 指到该份 typings 编译 `src/**`，报错即下限；同时记录 npm caret 的坑——`^1.66.0` 会被装成最新 1.x（实测 1.137），只有 `~` 才真正钉住并使版本下限具备编译期校验
 - **单测覆盖扩充**：`parseStatusEntries` 补 8 例（XY 双状态、rename/copy 源路径、六种冲突码、`!!` 忽略项、`-z` NUL 分隔），内置 git 解耦守卫 2 例；移除 SCM Provider 的 21 个 `scm.*` 双语 key 后，i18n 词典 zh/en key 集一致性（parity）用例照常通过。后又补 `operationFromStateFiles` 4 例（各状态文件对应操作、rebase 优先于 cherry-pick 优先于 merge）与 `isOperationStateFile` 2 例，合计 112 例全绿
 - **AGENTS.md 补三条检测硬约束**：进行中操作复检以状态文件被清掉为准、空闲态禁止为"有没有 merge"起子进程；外部历史变更以展示 rev 的 tip 比对为准，且 `_collect` 必须用同一表达式同步基线（否则自己触发的刷新会被下一轮轮询误判成外部变化而重复跑 `git log`）；自动刷新必须带 `preserveSelection`
-- **AGENTS.md 再补三条本批约束**：切换仓库只准走 `GraphViewProvider.switchRepository`（否则各处重置的状态不一致，会把上一个项目的分支/选中项带进新仓库）；易失缓存与视图快照必须能识别自己属于哪个仓库（`repoPath` 不匹配即丢弃）；后台／定时任务不得走 `_execNetwork`（它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框）
-- **单测覆盖继续扩充**：`parseStashList`、`parsePathFilter`、`parseReflogList`、`parseGitConfigRemoteNames`、`pickFetchRemote`、`repositoryKey`、`collectRepositoryRoots` 全部是纯函数用例（不 import vscode），i18n 词典 zh/en key 集 parity 照常通过；合计 164 例全绿
 
 ## [0.0.4] - 2026-10-11
 
