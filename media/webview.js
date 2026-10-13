@@ -2888,10 +2888,13 @@ function showReflogDialog(scope, entries) {
         e.preventDefault();
         if (window._hideTooltip) window._hideTooltip();
         var hash = picked.getAttribute('data-hash');
+        // Every entry is a way out of a mistake, in the order the user needs them:
+        // first find out what happened, then either keep it or undo it.
         var items = [
-            ['showDiff', T('menu.showDiff')],
-            ['newBranchFrom', T('menu.newBranchFrom')],
-            ['reset', T('menu.reset')],
+            ['showDiff', T('reflog.menu.checkWhat')],
+            ['newBranchFrom', T('reflog.menu.keepOnBranch')],
+            ['reset', T('reflog.menu.undoToHere')],
+            ['cherryPick', T('reflog.menu.pickBack')],
             ['copy', T('menu.copyHash')]
         ];
         showMenu(e.clientX, e.clientY, items, function (action) {

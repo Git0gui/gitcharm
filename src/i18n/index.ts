@@ -233,7 +233,11 @@ const zh: Record<string, string> = {
 
     // reflog viewer (rescue lost commits)
     'reflog.title': '操作记录（Reflog）',
-    'reflog.hint': '右键某行可新建分支、回退或查看差异',
+    'reflog.hint': '误操作急救：右键某行可新建分支留住、回退到此撤销、把提交捡回来（双击看差异）',
+    'reflog.menu.checkWhat': '先看这次改了什么',
+    'reflog.menu.keepOnBranch': '新建分支，留住这一步',
+    'reflog.menu.undoToHere': '回退到这里（撤销这次误操作）',
+    'reflog.menu.pickBack': '把这个提交捡回当前分支',
     'reflog.empty': '没有可显示的操作记录',
     'reflog.failed': '读取操作记录失败: {error}',
     'reflog.scopeHead': 'HEAD（含切换分支的记录）',
@@ -749,7 +753,11 @@ const en: Record<string, string> = {
 
     // reflog viewer (rescue lost commits)
     'reflog.title': 'Reflog',
-    'reflog.hint': 'Right-click a row to branch from it, reset to it, or diff it',
+    'reflog.hint': 'Rescue a mistake: right-click a row to keep it on a branch, reset back to it, or pick it onto the current branch (double-click to diff)',
+    'reflog.menu.checkWhat': 'See what this step changed',
+    'reflog.menu.keepOnBranch': 'Keep this step on a new branch',
+    'reflog.menu.undoToHere': 'Reset here (undo this mistake)',
+    'reflog.menu.pickBack': 'Pick this commit onto the current branch',
     'reflog.empty': 'No reflog entries to show',
     'reflog.failed': 'Failed to read the reflog: {error}',
     'reflog.scopeHead': 'HEAD (includes branch checkouts)',
