@@ -828,10 +828,10 @@ function renderMultiCommitDetail(info, filesBox) {
     header += '<span class="multi-count">' + T('common.commitCount', { n: commits.length }) + '</span>';
     header += '</div>';
     
-    // Show all commit messages in chronological order (oldest first)
-    var sorted = commits.slice().reverse(); // Reverse to show oldest first
+    // The host returns these oldest → newest, so the order the user clicked
+    // (Ctrl+click picks in any order at all) never reaches the display.
     var msgHtml = '<div class="multi-commit-list">';
-    sorted.forEach(function(c) {
+    commits.forEach(function(c) {
         msgHtml += '<div class="multi-commit-item" data-hash="' + esc(c.hash) + '">';
         msgHtml += '<span class="hashchip">' + esc(c.shortHash) + '</span>';
         msgHtml += '<span class="cmsg">' + esc(c.message || T('commit.noMessage')) + '</span>';
@@ -842,17 +842,8 @@ function renderMultiCommitDetail(info, filesBox) {
     
     info.innerHTML = header + msgHtml;
     
-    // Show merged files (deduplicated)
-    var allFiles = state.multiFiles || [];
-    var fileMap = {};
-    allFiles.forEach(function(f) {
-        if (!fileMap[f.path]) {
-            fileMap[f.path] = { path: f.path, added: 0, deleted: 0, status: f.status };
-        }
-        fileMap[f.path].added += f.added || 0;
-        fileMap[f.path].deleted += f.deleted || 0;
-    });
-    var mergedFiles = Object.values(fileMap);
+    // One row per path, already merged, counted and ordered by the host.
+    var mergedFiles = state.multiFiles || [];
     
     if (mergedFiles.length === 0) {
         filesBox.innerHTML = '<div class="empty">' + T('common.noFileChanges') + '</div>';

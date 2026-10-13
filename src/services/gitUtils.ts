@@ -315,6 +315,51 @@ export function parsePathFilter(raw: string | undefined): string[] {
     return raw.split(',').map(part => part.trim()).filter(part => part.length > 0 && !/[\x00-\x1f]/.test(part));
 }
 
+/** A changed file of one commit, as the panel's file list needs it. */
+export interface FileStatLike {
+    status: string;
+    path: string;
+    added: number;
+    deleted: number;
+}
+
+/**
+ * Merge the file lists of several commits into one row per path — what the panel
+ * shows when the user selects a group of commits in the log.
+ *
+ * `batches` must arrive ordered oldest → newest, because the status a path ends up
+ * with is the *net* effect of those commits rather than whichever commit the user
+ * happened to click first: a file created inside the selection stays 'A' even when
+ * a later commit also modifies it, and a later deletion wins over earlier edits.
+ * Line counts accumulate — the number answers "how much did this group change the
+ * file", which is what a multi-commit selection is for.
+ */
+export function mergeCommitFileStats(batches: readonly (readonly FileStatLike[])[]): FileStatLike[] {
+    const merged = new Map<string, FileStatLike>();
+    for (const files of batches) {
+        for (const file of files) {
+            const row = merged.get(file.path);
+            if (!row) {
+                // Copy, never reuse: these entries come out of the host's file cache
+                // and the accumulation below must not rewrite what is cached.
+                merged.set(file.path, { ...file });
+                continue;
+            }
+            row.added += file.added;
+            row.deleted += file.deleted;
+            row.status = netFileStatus(row.status, file.status);
+        }
+    }
+    return [...merged.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function netFileStatus(previous: string, next: string): string {
+    if (next === 'A') {return 'A';}
+    if (next === 'D') {return 'D';}
+    if (previous === 'A') {return 'A';}
+    return next;
+}
+
 /** One reflog record: a movement of a rev, newest first. */
 export interface ReflogEntry {
     /** Selector as printed by `%gd`, e.g. `HEAD@{3}` or `main@{0}`. */

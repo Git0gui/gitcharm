@@ -6,7 +6,7 @@ import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, We
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
-import { isOperationStateFile, repositoryKey } from '../services/gitUtils';
+import { isOperationStateFile, mergeCommitFileStats, repositoryKey } from '../services/gitUtils';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -715,21 +715,24 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         
                         // Fetch all commits and their files in parallel
                         const results = await Promise.all(
-                            hashes.map(hash => 
+                            hashes.map(hash =>
                                 Promise.all([
                                     this._gitService.getCommitDetail(hash),
                                     this._gitService.getCommitFilesWithStats(hash)
                                 ])
                             )
                         );
-                        
-                        const commits = results.map(([commit]) => commit);
-                        const allFiles = results.flatMap(([, files]) => files);
-                        
-                        this._post({ 
-                            command: 'multiCommitsResponse', 
-                            commits, 
-                            files: allFiles 
+
+                        // The webview lists these oldest → newest and the merged file
+                        // status is the net effect in that order, so the order the user
+                        // clicked rows cannot decide either of them.
+                        results.sort((a, b) =>
+                            new Date(a[0].authorDate).getTime() - new Date(b[0].authorDate).getTime());
+
+                        this._post({
+                            command: 'multiCommitsResponse',
+                            commits: results.map(([commit]) => commit),
+                            files: mergeCommitFileStats(results.map(([, files]) => files))
                         });
                     } catch (error) {
                         vscode.window.showErrorMessage(t('view.loadDataFailed', { error: String(error) }));

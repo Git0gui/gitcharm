@@ -98,7 +98,8 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 
 ## 8. Git 操作行为约定
 
-- **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。
+- **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。**网络类（push/pull/手动 fetch）尤其：`_execNetwork` 刻意不设子进程超时（大仓库不能被 30s 掐断），凭据又要等用户在自己的输入框里填，没有进度指示就等于"界面卡死"**；进度一律 `cancellable: false`（git 子进程没有取消通道，别给假按钮）。
+- **多选提交的合并文件列表必须在宿主合并**（`mergeCommitFileStats`，`src/services/gitUtils.ts`），webview 只渲染。两条不变量：批次必须按**作者时间旧→新**排好再进去（状态取净效果：选择内新建的保持 `A`、之后被删则 `D`；点击顺序进来的话同一个文件会一会儿 `A` 一会儿 `M`）；条目必须**复制后再累加行数**——`getCommitFilesWithStats` 返回 `_filesCache` 里的同一批对象，原地加数字会让下一次多选变成双倍。
 - **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防止乐观结果被过期快照盖掉）；删除时若正在查看该分支的提交则切回当前分支。
 - 重命名/删除后必须同步内部状态（`_branch`、`selectedBranch`），否则后续命令报 `unknown revision`。
 - push 允许无 upstream 分支：`getUpstream` 包 try-catch；无 upstream 时用 `git log remote..local` 取待推送提交；推送对话框提交列表与箭头共用 `getBranchesWithDetails` 同一数据源，区分首次推送/已最新/有待推送三态，提交分页（首屏 20 条 + 加载更多）。

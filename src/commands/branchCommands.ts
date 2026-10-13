@@ -402,7 +402,14 @@ export function registerBranchCommands(
 
                 if (!result || result.action === 'cancel') {return;}
 
-                await gitService.push('origin', branchName, result.force === true);
+                // Progress, not a silent wait: a push over our own askpass can stop for
+                // a credential box, and `_execNetwork` sets no timeout so a large
+                // branch is not cut off — without an indicator that just looks frozen.
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('push.pushing', { name: branchName }),
+                    cancellable: false
+                }, () => gitService.push('origin', branchName, result.force === true));
                 vscode.window.showInformationMessage(t(result.force ? 'push.forceSuccess' : 'push.success', { name: branchName }));
 
                 // Invalidate cache after push to ensure fresh divergence data
@@ -458,7 +465,11 @@ export function registerBranchCommands(
                 // Execute pull based on strategy
                 const useRebase = pullStrategy === 'rebase';
                 logger.debug('[GitCharm] Executing pull with useRebase:', useRebase, 'branch:', branchName);
-                await gitService.pull('origin', branchName, useRebase);
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('pull.pulling', { name: branchName }),
+                    cancellable: false
+                }, () => gitService.pull('origin', branchName, useRebase));
 
                 const strategyLabel = t(pullStrategy === 'rebase' ? 'pull.strategyRebase' : 'pull.strategyMerge');
                 vscode.window.showInformationMessage(t('pull.success', { strategy: strategyLabel, name: branchName }));
@@ -513,7 +524,11 @@ export function registerBranchCommands(
 
         vscode.commands.registerCommand('idea-git.fetch', async () => {
             try {
-                await gitService.fetch();
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('fetch.fetching'),
+                    cancellable: false
+                }, () => gitService.fetch());
                 vscode.window.showInformationMessage(t('fetch.success'));
                 graphView.refresh();
             } catch (error) {

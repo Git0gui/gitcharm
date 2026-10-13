@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, parseReflogList } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -446,6 +446,50 @@ describe('parsePathFilter', () => {
 
     it('keeps a leading dash: the caller appends these only after a -- separator', () => {
         assert.deepEqual(parsePathFilter('--not-an-option'), ['--not-an-option']);
+    });
+
+    it('keeps unicode path segments untouched', () => {
+        assert.deepEqual(parsePathFilter('文档/测试.txt'), ['文档/测试.txt']);
+    });
+});
+
+describe('mergeCommitFileStats', () => {
+    const f = (status: string, path: string, added = 1, deleted = 0) => ({ status, path, added, deleted });
+
+    it('collapses one path into a single row and accumulates the line counts', () => {
+        const merged = mergeCommitFileStats([[f('M', 'a.ts', 3, 1)], [f('M', 'a.ts', 2, 0)]]);
+        assert.deepEqual(merged, [{ status: 'M', path: 'a.ts', added: 5, deleted: 1 }]);
+    });
+
+    it('keeps a file created by the selection as added when a later commit edits it', () => {
+        const merged = mergeCommitFileStats([[f('A', 'new.ts')], [f('M', 'new.ts', 4, 2)]]);
+        assert.deepEqual(merged[0], { status: 'A', path: 'new.ts', added: 5, deleted: 2 });
+    });
+
+    it('reports the removal when a later commit deletes it', () => {
+        assert.equal(mergeCommitFileStats([[f('M', 'gone.ts')], [f('D', 'gone.ts')]])[0].status, 'D');
+        assert.equal(mergeCommitFileStats([[f('A', 'temp.ts')], [f('D', 'temp.ts')]])[0].status, 'D');
+    });
+
+    it('orders by path so the click order cannot shuffle the list', () => {
+        const merged = mergeCommitFileStats([[f('M', 'z/b.ts')], [f('M', 'a.ts')], [f('M', 'z/a.ts')]]);
+        assert.deepEqual(merged.map(x => x.path), ['a.ts', 'z/a.ts', 'z/b.ts']);
+    });
+
+    it('never rewrites the caller entries, which come from the host file cache', () => {
+        const first = [f('M', 'a.ts', 1, 0)];
+        mergeCommitFileStats([first, [f('M', 'a.ts', 2, 0)]]);
+        assert.deepEqual(first[0], { status: 'M', path: 'a.ts', added: 1, deleted: 0 });
+    });
+
+    it('passes option-looking and unicode paths through verbatim', () => {
+        const merged = mergeCommitFileStats([[f('A', '文档/-rf.md')]]);
+        assert.equal(merged[0].path, '文档/-rf.md');
+    });
+
+    it('returns nothing for an empty selection', () => {
+        assert.deepEqual(mergeCommitFileStats([]), []);
+        assert.deepEqual(mergeCommitFileStats([[]]), []);
     });
 });
 

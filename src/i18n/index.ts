@@ -246,6 +246,7 @@ const zh: Record<string, string> = {
 
     // push / pull / fetch
     'push.upToDate': '"{name}" 已是最新，无需推送',
+    'push.pushing': '正在推送 "{name}" 到远程…',
     'push.success': '已推送 "{name}" 到远程',
     'push.forceSuccess': '已强制推送 "{name}" 到远程',
     'push.failed': '推送失败: {error}',
@@ -257,11 +258,13 @@ const zh: Record<string, string> = {
     'push.authFailed': '推送失败：认证失败，请检查凭据',
     'pull.strategyMerge': '合并式拉取',
     'pull.strategyRebase': '变基式拉取',
+    'pull.pulling': '正在拉取 "{name}"…',
     'pull.success': '{strategy}: 已从远程拉取 "{name}"',
     'pull.conflict': '拉取 "{name}" 时发生冲突，请先解决现有冲突',
     'pull.failed': '拉取失败: {error}',
     'pull.pulledFrom': '已从 {remote} 拉取',
     'pull.conflictTitle': '拉取 "{name}"',
+    'fetch.fetching': '正在获取远程更新…',
     'fetch.success': '已获取远程更新',
     'fetch.failed': '获取失败: {error}',
     'fetch.fetchedFrom': '已从 {remote} 获取',
@@ -750,6 +753,7 @@ const en: Record<string, string> = {
 
     // push / pull / fetch
     'push.upToDate': '"{name}" is up to date, nothing to push',
+    'push.pushing': 'Pushing "{name}" to remote…',
     'push.success': 'Pushed "{name}" to remote',
     'push.forceSuccess': 'Force-pushed "{name}" to remote',
     'push.failed': 'Push failed: {error}',
@@ -761,11 +765,13 @@ const en: Record<string, string> = {
     'push.authFailed': 'Push failed: authentication failed. Check your credentials.',
     'pull.strategyMerge': 'Merge pull',
     'pull.strategyRebase': 'Rebase pull',
+    'pull.pulling': 'Pulling "{name}"…',
     'pull.success': '{strategy}: pulled "{name}" from remote',
     'pull.conflict': 'Conflicts occurred while pulling "{name}". Resolve them first.',
     'pull.failed': 'Pull failed: {error}',
     'pull.pulledFrom': 'Pulled from {remote}',
     'pull.conflictTitle': 'Pull "{name}"',
+    'fetch.fetching': 'Fetching remote updates…',
     'fetch.success': 'Fetched remote updates',
     'fetch.failed': 'Fetch failed: {error}',
     'fetch.fetchedFrom': 'Fetched from {remote}',
