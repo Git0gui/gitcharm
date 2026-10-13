@@ -600,36 +600,28 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * URI of the read-only document holding several commits' patches for one file
-     * (matches the `idea-git-patch` provider registered in extension.ts). The
-     * `.patch` suffix is what makes the editor colorize it as a diff.
-     */
-    private _filePatchUri(filePath: string, hashes: readonly string[]): vscode.Uri {
-        return vscode.Uri.from({
-            scheme: 'idea-git-patch',
-            path: '/' + filePath + '.patch',
-            query: 'h=' + encodeURIComponent(hashes.join(','))
-        });
-    }
-
-    /**
-     * Open a file that the multi-commit selection changed: one read-only document
-     * containing each commit's own patch, oldest first, so both commits' edits are
-     * visible at once instead of only the last-clicked one.
+     * Diff a file across a group of selected commits: the right side is the newest
+     * commit's version, the left side the state before the oldest one, so every
+     * commit in the group shows up as a change instead of only the last-clicked one.
      *
-     * When the group turns out to change the file in a single commit (merges answer
-     * with an empty patch), the familiar two-pane diff is the better answer.
+     * Ordered by author time because that is the order the list is displayed in.
+     * A two-pane diff can only hold two versions of a file, so whatever the selected
+     * commits changed in between is inside the comparison as well — the question
+     * being asked is what the whole group leaves behind.
      */
-    private async _openCombinedFilePatch(hashes: string[], relativePath: string): Promise<void> {
+    private async _openCommitGroupFileDiff(hashes: string[], relativePath: string): Promise<void> {
         try {
-            const combined = await this._gitService.buildCombinedFilePatch(hashes, relativePath);
-            if (combined.hashes.length <= 1) {
-                this._gitService.selectedCommitHash = combined.hashes[0] ?? hashes[hashes.length - 1];
-                await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath });
-                return;
-            }
-            const doc = await vscode.workspace.openTextDocument(this._filePatchUri(relativePath, combined.hashes));
-            await vscode.window.showTextDocument(doc, { preview: false });
+            const details = await Promise.all(hashes.map(hash => this._gitService.getCommitDetail(hash)));
+            details.sort((a, b) => new Date(a.authorDate).getTime() - new Date(b.authorDate).getTime());
+            const oldest = details[0];
+            const newest = details[details.length - 1];
+            const title = `${relativePath} (${oldest.shortHash}^ ↔ ${newest.shortHash})`;
+            await vscode.commands.executeCommand(
+                'vscode.diff',
+                this._gitBlobUri(oldest.hash + '^', relativePath),
+                this._gitBlobUri(newest.hash, relativePath),
+                title
+            );
         } catch (error) {
             vscode.window.showErrorMessage(t('view.openDiffFailed', { error: String(error) }));
         }
@@ -1420,7 +1412,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     const hashes = (message.hashes ?? []).filter(Boolean);
                     this._gitService.selectedCommitHash = message.hash;
                     if (hashes.length > 1) {
-                        await this._openCombinedFilePatch(hashes, relPath);
+                        await this._openCommitGroupFileDiff(hashes, relPath);
                         return;
                     }
                     await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath: relPath });

@@ -23,8 +23,6 @@ import {
     parseStashList,
     parsePathFilter,
     parseReflogList,
-    formatCombinedFilePatch,
-    FilePatchSection,
     operationFromStateFiles,
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
@@ -106,12 +104,6 @@ export interface FileStat {
     path: string;
     added: number;
     deleted: number;
-}
-
-/** The combined-patch document and the commits that actually contributed to it. */
-export interface CombinedFilePatch {
-    text: string;
-    hashes: string[];
 }
 
 export interface CommitDetail {
@@ -684,68 +676,6 @@ export class GitService {
         }
         this._filesCache.set(key, files);
         return files;
-    }
-
-    /**
-     * The patch one commit applied to one path, as git prints it. Empty when the
-     * commit did not touch that path — which is also how a merge commit answers,
-     * since diff-tree does not diff merges without --cc.
-     *
-     * The path is a pathspec placed after `--`, so it is never read as an option
-     * and never rewritten: names like `-rf` or `文档/测试.txt` are legitimate here.
-     * `:(literal)` is git's own marker, added because git otherwise treats `* ? [ ]`
-     * as glob magic — a file actually named that way would pull other files' hunks
-     * into this document. The name itself stays byte-for-byte inside the marker.
-     */
-    async getCommitFilePatch(hash: string, relativePath: string): Promise<string> {
-        assertHash(hash);
-        return this.executeGitArgs(
-            ['diff-tree', '-p', '--root', '--no-commit-id', '-r', '-M', hash, '--', `:(literal)${relativePath}`],
-            { timeoutMs: 20000 }
-        );
-    }
-
-    /**
-     * Assemble the document shown when a file is opened from a multi-commit
-     * selection: one patch section per commit that actually changed that file,
-     * oldest first, so the group's effect stays attributable to its commits.
-     *
-     * A range diff would silently fold in the commits the user did not select
-     * whenever the picks are not adjacent, which is why this stitches patches.
-     */
-    async buildCombinedFilePatch(hashes: readonly string[], relativePath: string): Promise<CombinedFilePatch> {
-        const unique = [...new Set(hashes)];
-        unique.forEach(assertHash);
-        if (unique.length === 0) {
-            return { text: '', hashes: [] };
-        }
-
-        const details = await Promise.all(unique.map(hash => this.getCommitDetail(hash)));
-        const ordered = unique
-            .map((hash, i) => ({ hash, detail: details[i] }))
-            .sort((a, b) => new Date(a.detail.authorDate).getTime() - new Date(b.detail.authorDate).getTime());
-        const patches = await Promise.all(ordered.map(entry => this.getCommitFilePatch(entry.hash, relativePath)));
-
-        const changed = ordered
-            .map((entry, i) => ({ entry, patch: patches[i] }))
-            .filter(x => x.patch.trim().length > 0);
-
-        const sections: FilePatchSection[] = changed.map(({ entry, patch }) => ({
-            label: `${t('patch.commitLabel', {
-                shortHash: entry.detail.shortHash,
-                author: entry.detail.author,
-                date: entry.detail.authorDate
-            })}\n${entry.detail.message}`,
-            patch
-        }));
-
-        return {
-            text: formatCombinedFilePatch(
-                t('patch.title', { path: relativePath, n: changed.length }),
-                sections
-            ),
-            hashes: changed.map(x => x.entry.hash)
-        };
     }
 
     /**

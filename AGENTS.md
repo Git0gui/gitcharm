@@ -100,7 +100,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 
 - **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。**网络类（push/pull/手动 fetch）尤其：`_execNetwork` 刻意不设子进程超时（大仓库不能被 30s 掐断），凭据又要等用户在自己的输入框里填，没有进度指示就等于"界面卡死"**；进度一律 `cancellable: false`（git 子进程没有取消通道，别给假按钮）。
 - **多选提交的合并文件列表必须在宿主合并**（`mergeCommitFileStats`，`src/services/gitUtils.ts`），webview 只渲染。两条不变量：批次必须按**作者时间旧→新**排好再进去（状态取净效果：选择内新建的保持 `A`、之后被删则 `D`；点击顺序进来的话同一个文件会一会儿 `A` 一会儿 `M`）；条目必须**复制后再累加行数**——`getCommitFilesWithStats` 返回 `_filesCache` 里的同一批对象，原地加数字会让下一次多选变成双倍。
-- **多选提交里双击文件 = 逐提交补丁拼一份只读文档**（`buildCombinedFilePatch` + `idea-git-patch` scheme，`.patch` 后缀才有 diff 上色），按作者时间旧→新，每段带提交短哈希/作者/时间/消息。**禁止用区间 diff（`A..B`）代替**：多选未必相邻，区间会把用户没选的提交折进来，回答的就不是"我选的这两个提交各改了什么"。拼文本一律原样透传（`formatCombinedFilePatch` 只做排版）——重写一行就会让 hunk 的行号对不上。pathspec 除 `--` 兜底外还必须套 `:(literal)`：实测 git 默认展开 glob magic，真名叫 `AGEN*.md` 的文件会把别的文件 hunks 带进这份文档。`diff-tree -p` 对"这个提交没动这个路径"和 merge 提交都返回空串（exit 0），据此过滤出真正参与的那些提交；只剩一个提交时退回用户熟悉的双栏 diff，一个都没匹配上时同样退回（取最后点选的那个，不要让编辑器停在空文档上）。
+- **多选提交里双击文件 = 跨这一组提交的双栏对比**：左边取**最早**提交的父版本（`oldest^`），右边取**最晚**提交的版本，组里每个提交的改动才会都落在同一份 diff 里（只带最后点选的 `selectedHash` 就只看得到一个提交）。早/晚按**作者时间**判定，与列表显示顺序同一条规则。双栏只能放两个版本，选中项之间那些没被选的提交会一起出现在差异里——这是用户要的效果。**不要改成"逐提交补丁拼一份只读文档"**（已实现并被否掉，见 commit `6b098bf`）：用户要的一直是熟悉的左右对比，不是补丁文本。
 - **删除/重命名分支成功后不刷新**：乐观更新 + 失败回滚 + `pauseBranchCheck(5000)`；重命名成功后只做 `refreshBranchesOnly()` 权威刷新（防止乐观结果被过期快照盖掉）；删除时若正在查看该分支的提交则切回当前分支。
 - 重命名/删除后必须同步内部状态（`_branch`、`selectedBranch`），否则后续命令报 `unknown revision`。
 - push 允许无 upstream 分支：`getUpstream` 包 try-catch；无 upstream 时用 `git log remote..local` 取待推送提交；推送对话框提交列表与箭头共用 `getBranchesWithDetails` 同一数据源，区分首次推送/已最新/有待推送三态，提交分页（首屏 20 条 + 加载更多）。

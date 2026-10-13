@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, formatCombinedFilePatch, parseReflogList } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -490,30 +490,6 @@ describe('mergeCommitFileStats', () => {
     it('returns nothing for an empty selection', () => {
         assert.deepEqual(mergeCommitFileStats([]), []);
         assert.deepEqual(mergeCommitFileStats([[]]), []);
-    });
-});
-
-describe('formatCombinedFilePatch', () => {
-    it('lays the sections out in the given order, patch text untouched', () => {
-        const text = formatCombinedFilePatch('T', [
-            { label: 'C1', patch: 'diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n' },
-            { label: 'C2', patch: 'diff --git a/x b/x\n@@ -2 +2 @@\n-c\n+d\n' }
-        ]);
-        assert.ok(text.indexOf('C1') < text.indexOf('C2'));
-        assert.ok(text.includes('-a\n+b'));
-        assert.ok(text.includes('-c\n+d'));
-        assert.ok(text.startsWith('T'));
-    });
-
-    it('passes unusual names and content through verbatim, since rewriting would break hunk line numbers', () => {
-        const patch = 'diff --git "a/\\346\\226\\207/-rf.txt" "b/\\346\\226\\207/-rf.txt"\n--- /dev/null\n+++ b/文档/-rf.txt\n@@ -0,0 +1 @@\n+hi\n';
-        const text = formatCombinedFilePatch('T', [{ label: 'C1', patch }]);
-        assert.ok(text.includes(patch.trimEnd()));
-    });
-
-    it('renders one section without empty separators and none at all as just the title', () => {
-        assert.equal(formatCombinedFilePatch('T', [{ label: 'C', patch: 'p\n' }]), 'T\n\nC\n\np');
-        assert.equal(formatCombinedFilePatch('T', []), 'T');
     });
 });
 
