@@ -1351,11 +1351,18 @@ canvas.graph-canvas {
     display: flex;
     flex: 1;
     min-height: 0;
+    /* Flex items default to min-width:auto, which means "never shrink below the
+       content's min-content width" — and a nowrap commit message has a
+       min-content width equal to the whole line. Without this the dialog body
+       stays at the box width while the list inside it grows past it, and the
+       trailing columns (action, date) end up outside the dialog. */
+    min-width: 0;
     overflow: hidden;
 }
 .push-commits-list {
     width: 380px;
     flex: none;
+    min-width: 0;
     border-right: 1px solid var(--vscode-panel-border, #333);
     display: flex;
     flex-direction: column;
