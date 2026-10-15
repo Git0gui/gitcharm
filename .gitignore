@@ -1,6 +1,9 @@
 node_modules/
-out/
-.vscode-test/
+# Root-anchored on purpose: `out/` would also swallow docs/preview/out/, the
+# committed screenshots the docs articles link to.
+/out/
+/.vscode-test/
 *.vsix
 .qoder/
 .tsbuildinfo
+docs/preview/preview.html
