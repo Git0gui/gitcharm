@@ -313,6 +313,15 @@ node docs/preview/shot.mjs main branchMenu   # 无头 Chrome 截图，随后裁�
 
 两个已知缺口：示意图里的文件图标没有注入图标包，走的是兜底样式；预览页没有 IDE 外壳（活动栏、标签页）。还有一个坑值得记：无头截图会把 CSS 入场动画冻在第 0 帧，而面板的动画从 `opacity: 0` 起步，整页会拍成半透明——预览主题里全局关掉 animation/transition 才正常。
 
+要一份能直接发给别人的 Word 版：
+
+```bash
+npm i sharp docx --registry=https://registry.npmmirror.com   # 只给脚本用，不进扩展依赖
+NODE_PATH=<上面那个目录>/node_modules node scripts/build-docx.mjs
+```
+
+脚本按这份 markdown 重排成 `.docx`，9 张图缩到 1400px 宽、量化后内嵌进包里（0.9MB，发出去不带图文件夹也不掉图）。中文正文用微软雅黑、代码用 Consolas、二级标题分页。产物不提交（`docs/*.docx` 已忽略），markdown 才是源头——改了文章重跑一次就有 Word 版。
+
 ---
 
 ## 八、技术栈
