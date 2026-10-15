@@ -6,6 +6,7 @@ import { RefsReader } from './refsReader';
 import { GitAskpass } from './askpass';
 import { PersistedBranchCache } from './persistedBranchCache';
 import { resolveCommonDir, resolveGitDir } from './gitPaths';
+import { readWindowsSystemProxy } from './systemProxy';
 import { logger } from './logger';
 import {
     GitCommit,
@@ -871,16 +872,23 @@ export class GitService {
     }
 
     /**
-     * Connectivity failures split in two: a machine that reaches the host only
-     * through a proxy needs `http.proxy` set, and one that already has it set
-     * needs the proxy itself checked. Git's own wording cannot tell them apart,
-     * its configured value can.
+     * Connectivity failures split in three: git already has a proxy and that
+     * proxy is the suspect; git has none but the operating system does — the
+     * common shape of "my browser opens the site fine while git times out",
+     * because git is blind to the Windows registry value — and git has none and
+     * neither does anything else, which leaves the generic advice. Naming the
+     * address the machine is actually using is what makes the suggested command
+     * runnable instead of a guess-the-port exercise.
      */
     private async _unreachableHint(summary: string): Promise<string> {
         const host = gitFailureHost(summary) ?? t('label.remote');
         const proxy = await this._getHttpProxyConfig();
-        return proxy
-            ? t('err.unreachableWithProxy', { host, proxy: redactUrlCredentials(proxy) })
+        if (proxy) {
+            return t('err.unreachableWithProxy', { host, proxy: redactUrlCredentials(proxy) });
+        }
+        const systemProxy = await readWindowsSystemProxy();
+        return systemProxy
+            ? t('err.unreachableSystemProxy', { host, proxy: systemProxy })
             : t('err.unreachableNoProxy', { host });
     }
 

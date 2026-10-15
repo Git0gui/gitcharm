@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -867,3 +867,100 @@ describe('emptyCommitStopInfo', () => {
     });
 });
 
+
+describe('parseWindowsProxySettings', () => {
+    const dump = (lines: string[]) => [
+        'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings',
+        ...lines
+    ].join('\r\n') + '\r\n';
+
+    it('reads the shape this machine actually reports', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    127.0.0.1:7890',
+            '    ProxyOverride    REG_SZ    localhost;127.*;<local>'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'http://127.0.0.1:7890');
+    });
+
+    it('stays silent when the proxy is switched off', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x0',
+            '    ProxyServer    REG_SZ    127.0.0.1:7890'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), undefined);
+    });
+
+    it('stays silent when there is no ProxyServer value', () => {
+        assert.equal(parseWindowsProxySettings(dump(['    ProxyEnable    REG_DWORD    0x1'])), undefined);
+    });
+
+    it('keeps a full URL as configured', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    http://proxy.corp:8080'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'http://proxy.corp:8080');
+    });
+
+    it('prefers the https entry of a per-protocol list', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    http=127.0.0.1:7890;https=127.0.0.1:7890'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'http://127.0.0.1:7890');
+    });
+
+    it('honours a socks proxy scheme', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    socks5=127.0.0.1:1080'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'socks5://127.0.0.1:1080');
+    });
+
+    it('turns a bare socks entry into the scheme git knows', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    socks=127.0.0.1:1080'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'socks5://127.0.0.1:1080');
+    });
+
+    it('treats an https entry as a plain HTTP CONNECT proxy', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    https=proxy.corp:8080'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'http://proxy.corp:8080');
+    });
+
+    it('drops credentials so the value stays a runnable command', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    http://me:secret@10.0.0.1:3128'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'http://10.0.0.1:3128');
+    });
+
+    it('ignores bypass markers', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    <-'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), undefined);
+    });
+
+    it('assumes a bare host without a port', () => {
+        const text = dump([
+            '    ProxyEnable    REG_DWORD    0x1',
+            '    ProxyServer    REG_SZ    proxy.corp'
+        ]);
+        assert.equal(parseWindowsProxySettings(text), 'http://proxy.corp');
+    });
+
+    it('survives unrelated and empty output', () => {
+        assert.equal(parseWindowsProxySettings(''), undefined);
+        assert.equal(parseWindowsProxySettings('ERROR: The system was unable to find the specified registry key.'), undefined);
+    });
+});

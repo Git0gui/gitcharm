@@ -769,3 +769,60 @@ export function gitFailureHost(text: string): string | undefined {
     const scp = /[\w.-]+@([\w.-]+):/.exec(text);
     return scp ? scp[1] : undefined;
 }
+
+/**
+ * The proxy a browser on this machine uses, read from a
+ * `reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
+ * dump. git never consults the registry — it honours `http.proxy` and its own
+ * env vars — which is precisely why "the site works in my browser" and
+ * `Failed to connect to … port 443` are both true at the same time.
+ *
+ * Credentials are dropped rather than redacted: WinINET keeps them in a
+ * separate value, and the result is meant to be pasted into
+ * `git config --global http.proxy …`, so it has to stay a runnable URL.
+ */
+export function parseWindowsProxySettings(text: string): string | undefined {
+    const enabled = /ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)\b/i.exec(text);
+    if (!enabled || Number.parseInt(enabled[1], 16) === 0) {return undefined;}
+    const server = /ProxyServer\s+REG_SZ\s+(\S[^\r\n]*)/i.exec(text);
+    return server ? wininetProxyToUrl(server[1].trim()) : undefined;
+}
+
+/**
+ * `ProxyServer` is free-form: a bare `host:port`, a full URL, or a `;`-separated
+ * per-protocol list (`http=proxy:8080;https=proxy:8080`). `<local>`/`<-` markers
+ * are bypass rules, not proxies.
+ */
+function wininetProxyToUrl(raw: string): string | undefined {
+    const entries = raw.split(';').map(part => part.trim()).filter(part => part.length > 0 && !part.includes('<'));
+    if (entries.length === 0) {return undefined;}
+    const byProto: Record<string, string> = {};
+    let bare: string | undefined;
+    for (const entry of entries) {
+        const eq = entry.indexOf('=');
+        if (eq < 0) {
+            bare = bare ?? entry;
+            continue;
+        }
+        const value = entry.slice(eq + 1).trim();
+        if (value.length > 0) {byProto[entry.slice(0, eq).toLowerCase()] = value;}
+    }
+    let value = bare;
+    let proto: string | undefined;
+    if (value === undefined) {
+        const key = ['https', 'http', 'socks5', 'socks4', 'socks', 'all'].find(name => byProto[name] !== undefined)
+            ?? Object.keys(byProto)[0];
+        value = byProto[key];
+        proto = key;
+    }
+    if (!value) {return undefined;}
+    const withoutAuth = value.replace(/^((?:https?|socks\d\w*)):\/\/[^@/]+@/i, '$1://');
+    if (/^(?:https?|socks\d\w*):\/\//i.test(withoutAuth)) {return withoutAuth;}
+    if (!/^[\w.-]+(?::\d+)?$/.test(withoutAuth)) {return undefined;}
+    // WinINET's `https=` says which traffic uses this proxy, not that the proxy
+    // speaks TLS — the proxy itself takes a plain HTTP CONNECT, so git wants
+    // `http://` there. A socks entry is a different protocol and has to keep its
+    // scheme, and bare `socks` becomes `socks5` because git has no `socks://`.
+    if (!proto || !proto.startsWith('socks')) {return `http://${withoutAuth}`;}
+    return `${proto === 'socks' ? 'socks5' : proto}://${withoutAuth}`;
+}
