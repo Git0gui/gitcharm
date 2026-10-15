@@ -15,3 +15,6 @@ node_modules/**
 # README screenshots are rewritten to the public GitHub repo when packaging,
 # so the copies inside the VSIX are never requested.
 resources/screenshots/**
+# Docs articles and their mock-UI screenshots / capture tooling.
+docs/**
+scripts/**
