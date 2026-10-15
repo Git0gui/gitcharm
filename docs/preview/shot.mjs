@@ -41,21 +41,44 @@ for (const scene of list) {
 }
 
 /**
- * Chrome writes 32-bit PNGs (~500KB each); these shots are committed to git, so
- * quantise them to a palette. sharp is deliberately NOT a dependency of the
+ * Two post-processing passes. sharp is deliberately NOT a dependency of the
  * extension — install it in a scratch folder and point NODE_PATH at its
  * node_modules (require() honours NODE_PATH, dynamic import() does not).
+ *
+ * - cropToContent: the panel paints its background all the way down the 780px
+ *   viewport even when the commit list ends halfway, so half of every shot is
+ *   empty dark space. Cut at the last row that actually holds pixels.
+ * - quantise: Chrome writes 32-bit PNGs (~500KB each) and these are committed.
  */
 try {
     const sharp = createRequire(import.meta.url)('sharp');
+
+    const contentBottom = (buf, width, height) => {
+        const stride = width * 4;
+        const differs = (a, b) => Math.abs(buf[a] - buf[b]) + Math.abs(buf[a + 1] - buf[b + 1]) + Math.abs(buf[a + 2] - buf[b + 2]) > 6;
+        for (let y = height - 1; y >= 0; y--) {
+            const base = y * stride;
+            for (let x = stride - 4; x >= 0; x -= 4) {
+                if (differs(base, base + x)) return y;
+            }
+        }
+        return height - 1;
+    };
+
     for (const scene of list) {
         const p = path.join(out, `${scene}.png`);
         const before = statSync(p).size;
-        const tmp = p + '.quantised';
-        await sharp(p).png({ palette: true, quality: 80, effort: 10, colours: 128 }).toFile(tmp);
+        const img = sharp(p);
+        const { width, height } = await img.metadata();
+        const raw = await img.raw().toBuffer();
+        const bottom = contentBottom(raw, width, height);
+        const keep = Math.min(height, bottom + 24);
+        const tmp = p + '.processed';
+        await sharp(p).extract({ left: 0, top: 0, width, height: keep })
+            .png({ palette: true, quality: 80, effort: 10, colours: 128 }).toFile(tmp);
         renameSync(tmp, p);
-        console.log(`   ${scene}.png ${(before / 1024) | 0}KB -> ${(statSync(p).size / 1024) | 0}KB`);
+        console.log(`   ${scene}.png ${width}x${height} ${(before / 1024) | 0}KB -> ${width}x${keep} ${(statSync(p).size / 1024) | 0}KB`);
     }
 } catch {
-    console.log('skip quantising (sharp not resolvable; npm i sharp in a scratch dir and set NODE_PATH)');
+    console.log('skip post-processing (sharp not resolvable; npm i sharp in a scratch dir and set NODE_PATH)');
 }
