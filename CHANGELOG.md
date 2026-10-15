@@ -2,6 +2,24 @@
 
 所有重要更改都将记录在此文件中。
 
+## [0.0.8] - 2026-10-15
+
+本批不动运行时代码：全部是文档与文档配图链路，扩展行为与 0.0.7 一致（版本号按"合入 main 必 bump"的规则递增）。
+
+### 新增
+
+- **界面截图可以脱离 IDE 重出了**（`docs/preview/`）：过去每次界面改版，README 与市场页的截图就得手动重拍，实际状态是长期过期。现在 `build-preview.mjs` 从 `graphView.ts` 的 `_getHtmlForWebview` 模板里抽出**真实 DOM 骨架**，加载扩展自己的 `media/webview.css` 与 `webview.js`，只把 `acquireVsCodeApi()` 换成一个 shim，按 `src/views/messages.ts` 的真实消息协议喂进一份演示数据（提交哈希、提交消息、文件增删行数都取自本仓库真实历史）；右键菜单、推送与 Reflog 对话框、多选高亮都是派发真实 `MouseEvent` 走真实代码路径弹出来的，不是画出来的假界面。`shot.mjs` 用无头 Chrome 一次出 8 个状态，再从底部向上扫像素裁掉提交列表下面那片纯背景、量化成 128 色调色板（2800×1560/483KB → 2800×1193/177KB）。四个实测出来的坑记在文件里：无头截图把 CSS 入场动画冻在第 0 帧，而面板动画从 `opacity: 0` 起步，整页会拍成半透明（预览主题全局关掉 animation/transition）；`restoreViewState` 的 `expandedFolder` 并不会真的展开目录（改成点真实的 `.bfolder` 元素）；推送对话框默认选中 `__all__` 行，不响应 `getPushAllFiles` 就永远停在"加载文件…"；`revealCommit` 只设 `selectedHash` 不入 `selectedHashes`，所以多选场景必须先派发一次普通点击，否则菜单计数与高亮行数不一致。sharp 与 docx 都**不是**扩展依赖，脚本按 `NODE_PATH` 找临时安装目录（`require()` 认它，动态 `import()` 不认），找不到就跳过并提示一句
+- **markdown 直出 Word 文档**（`scripts/build-docx.mjs`）：文章要发给别人时，带相对路径的 md 会掉图，而 CSDN 的编辑器会剥掉 `data:` URI，只能走它自己的图床。脚本把这篇重排成自包含的 `.docx`：9 张图缩到 1400px 宽、量化后嵌进 `word/media`，整包 0.9MB；中文微软雅黑（含 `eastAsia` 声明，否则 Word 会回退成宋体）、代码 Consolas 加浅底纹、表格带表头底纹与竖向分隔线、每个二级标题另起一页。产物 `docs/*.docx` 不进版本库——md 才是源头，改完重跑
+
+### 文档
+
+- **新增 CSDN 使用说明**（`docs/CSDN-GitCharm使用说明.md`）：八节，重点是"几个只有真用过才知道的设计"那一节——面板凭什么跟着终端里的 git 操作自己跟上、为什么彻底拆掉 `vscode.git`、失败提示为什么要去读一次 Windows 系统代理（以及为什么不能替 git 读）、一步改动变空时的三选一、多项目工作区的管理规则。每条都对着代码核过，包括边界：没有一键 fetch all／pull all，向下扫仓库有深度上限所以嵌得更深的看不见。两张真机截图（编辑器 Blame、真实工作区的仓库切换器）裁掉了活动栏、编辑器代码、状态栏邮箱与任务栏，进 `docs/images/` 与自动生成的 `docs/preview/out/` 分开存放，免得被下一轮重截覆盖
+
+### 构建
+
+- **`docs/` 与 `scripts/` 不进 VSIX**：`.vscodeignore` 新增两条排除。这不是洁癖——本批的截图共 1.4MB、Word 文档 0.9MB，全都会被 vsce 默认打进包里，而 README 里写着"VSIX 从 442KB 降到 156KB"。实测 0.0.8 包体与 0.0.7 一致
+- **`.gitignore` 的 `out/` 锚到仓库根**（`/out/`）：不带斜杠的 `out/` 匹配任意层级，会把 `docs/preview/out/` 里那些被文章链接引用的截图一起吞掉（`git check-ignore` 实测命中）。同一条规则还顺手解释了为什么 `/.vscode-test/` 也该锚定
+
 ## [0.0.7] - 2026-10-15
 
 ### 优化
