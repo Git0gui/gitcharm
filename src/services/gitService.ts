@@ -32,6 +32,7 @@ import {
     assertRemoteName,
     formatGitError,
     classifyGitNetworkFailure,
+    isMissingGitBinary,
     redactUrlCredentials,
     gitFailureHost,
     pickFetchRemote,
@@ -207,6 +208,9 @@ export class GitService {
     private _pinnedRoot: string | undefined;
     private readonly _memento: vscode.Memento;
     private static readonly PINNED_REPOSITORY_KEY = 'idea-git.selectedRepository';
+    // A positive `git --version` probe from an earlier session. Stored per
+    // workspace; only the positive result is remembered (see the constructor).
+    private static readonly GIT_AVAILABLE_KEY = 'idea-git.gitAvailable';
     // Cached result of the `git --version` probe (undefined = not probed yet)
     private _gitAvailable: boolean | undefined;
 
@@ -226,6 +230,15 @@ export class GitService {
         // A pin from an earlier session is only honoured while that folder is
         // still a repository; otherwise discovery takes over unchanged.
         this._pinnedRoot = this._isRepository(memento.get<string>(GitService.PINNED_REPOSITORY_KEY));
+        // A machine that had git last session almost always still has it, so the
+        // remembered positive skips the `git --version` spawn that otherwise sits
+        // in front of the first data load. It is only a shortcut, not a belief:
+        // the first real command doubles as the re-probe, and a spawn that never
+        // reaches the binary (_noteMissingGit) flips this off. A remembered
+        // negative is never restored — git may have been installed since.
+        if (memento.get<boolean>(GitService.GIT_AVAILABLE_KEY) === true) {
+            this._gitAvailable = true;
+        }
         this._repositoryPath = this._resolveRoot();
 
         // Load persisted branch cache on startup
@@ -332,14 +345,27 @@ export class GitService {
         try {
             await runGit(['--version'], { cwd, timeoutMs: 8000 });
             this._gitAvailable = true;
+            // Fire and forget: failing to remember is harmless, the probe repeats.
+            void this._memento.update(GitService.GIT_AVAILABLE_KEY, true);
         } catch (error) {
             // Only a failed spawn (git missing / not executable) means "no git";
             // a non-zero exit comes from a binary that is installed and working.
-            const code = (error as { code?: unknown }).code;
-            this._gitAvailable = code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM';
+            this._gitAvailable = !isMissingGitBinary(error);
             logger.debug('[GitCharm] git binary probe:', this._gitAvailable, error);
         }
         return this._gitAvailable;
+    }
+
+    /**
+     * A spawn failed before git ran. Remember it so the next `isGitAvailable()`
+     * answers without another probe and the panel can fall back to the "no git"
+     * guidance instead of repeating a toast nobody can act on.
+     */
+    private _noteMissingGit(error: unknown): void {
+        if (!isMissingGitBinary(error) || this._gitAvailable === false) {return;}
+        logger.info('[GitCharm] git binary disappeared; dropping the remembered availability');
+        this._gitAvailable = false;
+        void this._memento.update(GitService.GIT_AVAILABLE_KEY, undefined);
     }
 
     /**
@@ -834,7 +860,12 @@ export class GitService {
         if (!repo) {
             throw new Error('No git repository found');
         }
-        return runGit(args, { cwd: repo, ...opts });
+        try {
+            return await runGit(args, { cwd: repo, ...opts });
+        } catch (error) {
+            this._noteMissingGit(error);
+            throw error;
+        }
     }
 
     /**

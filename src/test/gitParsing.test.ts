@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -837,6 +837,20 @@ describe('classifyGitNetworkFailure', () => {
 
     it('leaves local failures alone', () => {
         assert.equal(classifyGitNetworkFailure('nothing to commit, working tree clean'), 'unknown');
+    });
+});
+
+describe('isMissingGitBinary', () => {
+    it('recognises the spawn errors that mean git is absent or not executable', () => {
+        for (const code of ['ENOENT', 'EACCES', 'EPERM']) {
+            assert.equal(isMissingGitBinary(Object.assign(new Error('spawn git'), { code })), true);
+        }
+    });
+
+    it('does not treat a non-zero git exit or an unrelated error as a missing binary', () => {
+        assert.equal(isMissingGitBinary(Object.assign(new Error('fatal: not a repository'), { code: 128 })), false);
+        assert.equal(isMissingGitBinary(new Error('No git repository found')), false);
+        assert.equal(isMissingGitBinary(undefined), false);
     });
 });
 

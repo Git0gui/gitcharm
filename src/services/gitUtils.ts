@@ -799,6 +799,17 @@ export function classifyGitNetworkFailure(text: string): GitNetworkFailure {
 }
 
 /**
+ * A spawn that never reached git at all: the binary is missing or cannot be
+ * executed. Unlike a non-zero exit, this is the one failure that means "no git
+ * on this machine" rather than "git said no" — the availability memo uses it to
+ * drop a positive probe taken in an earlier session.
+ */
+export function isMissingGitBinary(error: unknown): boolean {
+    const code = (error as { code?: unknown })?.code;
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
+}
+
+/**
  * A sequencer stop caused by a step whose changes turned out to be empty —
  * typically after the user resolved a conflict by keeping the other side. git
  * answers this with a wall of advice (`The previous cherry-pick is now empty, …

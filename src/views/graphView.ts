@@ -48,6 +48,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly SESSION_RESTORE_TTL_MS = 2 * 60 * 60 * 1000;
     /** Short pause after the panel opens before the first background fetch. */
     private static readonly AUTO_FETCH_FIRST_DELAY_MS = 5000;
+    /** A visibility event this soon after resolve is the same show, not a new one. */
+    private static readonly SHOW_RELOAD_GRACE_MS = 1000;
 
     private _view: vscode.WebviewView | undefined;
     private _gitService: GitService;
@@ -76,6 +78,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _lastStashSignature: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
+    /** When the current webview was (re)resolved; its own load covers that show. */
+    private _resolvedAt = 0;
     /** Screen messages held until the webview script reports 'ready'. */
     private _pendingScreen = new Map<ExtToWebviewMessage['command'], ExtToWebviewMessage>();
     // Last known in-progress operation; also the value replayed on the 'ready'
@@ -736,6 +740,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     async resolveWebviewView(webviewView: vscode.WebviewView) {
         this._view = webviewView;
         this._webviewReady = false;
+        this._resolvedAt = Date.now();
         this._pendingScreen.clear();
         this._grantedThemeRoot = undefined;
         this._applyWebviewOptions(webviewView.webview, true);
@@ -953,17 +958,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // Step 1: Show skeleton UI immediately (no git commands)
         webviewView.webview.html = this._getSkeletonHtml();
         
-        // Step 1.5: Detect in-progress operation (merge/rebase/cherry-pick) in background;
-        // delivered to the webview when it reports 'ready' (messages sent before the
-        // webview script loads can be dropped)
-        this._gitService.getInProgressOperation()
-            .then(op => {
-                this._lastInProgress = op || null;
-                if (this._view && this._webviewReady) {
-                    this._post({ command: 'setInProgress', inProgress: this._lastInProgress });
-                }
-            })
-            .catch(() => {});
+        // Step 1.5: Idle-state check only looks at state files (pure filesystem).
+        // `getInProgressOperation()` would spawn `ls-files -u` on every open just
+        // to confirm there is nothing to see; the poll escalates to it once a
+        // state file appears. Delivered to the webview when it reports 'ready'.
+        this._lastInProgress = this._gitService.detectOperationFromFiles() ?? null;
 
         // Step 2: Restore the previously viewed branch first so the initial commit
         // load targets it directly (Git Graph-style state restoration), but only
@@ -1000,7 +999,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /** Panel became visible: refresh the repository state, then history. */
     private async _onPanelShown(): Promise<void> {
         if (this._repoState === 'ready') {
-            this._reload(true);
+            // resolveWebviewView starts its own load when the view is (re)created;
+            // a visibility event this soon is the same show, not a second one.
+            if (Date.now() - this._resolvedAt > GraphViewProvider.SHOW_RELOAD_GRACE_MS) {
+                // Hiding disposes the webview, so the payload must be re-sent.
+                // Only a moved tip forces a git log; otherwise the cached graph is
+                // replayed as-is. The tip is a filesystem read, so the check itself
+                // is free, and it also covers the watcher's debounce window where
+                // the cache has not been dropped yet.
+                const tip = await this._tipOfDisplayedRev();
+                void this._reload(!!tip && tip !== this._lastKnownTip);
+            }
             this._startBranchCheck();
             return;
         }
@@ -1582,13 +1591,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             headHash = await this._gitService.getHeadHash();
         } catch { /* empty repo */ }
         
-        // Check for in-progress rebase/merge/cherry-pick/revert operation
-        let inProgress: OperationKind | undefined;
-        try {
-            inProgress = await this._gitService.getInProgressOperation();
-        } catch (error) {
-            // Ignore errors
-        }
+        // Check for in-progress rebase/merge/cherry-pick/revert operation.
+        // State files are authoritative and cost no subprocess; the extra
+        // `ls-files -u` probe is reserved for the watcher path that already
+        // knows an operation is running (idle probes would spawn on every load).
+        const inProgress = this._gitService.detectOperationFromFiles();
         // setData carries the same field: keep the baseline in sync so the
         // auto re-check does not report a change that was just delivered.
         this._lastInProgress = inProgress ?? null;
@@ -1647,6 +1654,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /**
+     * A load failed with the git binary itself gone (uninstalled between
+     * sessions). Switch to the guidance page instead of a toast the user cannot
+     * act on. Free once the failed spawn has been recorded as ENOENT; otherwise
+     * this is the single probe taken on the failure path.
+     */
+    private async _recoverMissingGit(): Promise<boolean> {
+        if (await this._gitService.isGitAvailable()) {return false;}
+        await this.refreshRepoState(true);
+        return true;
+    }
+
     private async _reload(force: boolean = false, preserveSelection = false) {
         if (!this._view) {return;}
         if (this._repoState !== 'ready') {
@@ -1673,6 +1692,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             });
             this._refreshDivergence();
         } catch (error) {
+            if (await this._recoverMissingGit()) {return;}
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('rows', false);
@@ -1850,6 +1870,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const totalTime = Date.now() - startTime;
             logger.debug(`[GitCharm] Total commit load: ${totalTime}ms (fetch: ${fetchTime}ms, postMessage: ${postTime}ms)`);
         } catch (error) {
+            if (await this._recoverMissingGit()) {return;}
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('rows', false);
