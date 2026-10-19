@@ -145,17 +145,42 @@ export function parseLogLine(line: string): GitCommit | null {
     };
 }
 
-export function parseGraphLine(line: string): { hash: string; shortHash: string; message: string; author: string; date: string; parents: string[] } | null {
-    const parts = line.split('|');
-    if (parts.length < 6) {return null;}
-    const [hash, shortHash, message, author, date, ...parentParts] = parts;
+export interface ParsedGraphLine {
+    hash: string;
+    shortHash: string;
+    message: string;
+    author: string;
+    authorEmail: string;
+    date: string;
+    committer: string;
+    committerEmail: string;
+    committerDate: string;
+    parents: string[];
+}
+
+/**
+ * One `git log` record. Fields are NUL-separated (`%x00`), not pipe-separated:
+ * a commit subject legally contains `|`, which used to shift every field after
+ * the message, and it can never contain NUL.
+ */
+export function parseGraphLine(line: string): ParsedGraphLine | null {
+    const parts = line.split('\0');
+    if (parts.length < 10) {return null;}
+    const [
+        hash, shortHash, message, author, authorEmail, date,
+        committer, committerEmail, committerDate, parentPart
+    ] = parts;
     return {
         hash,
         shortHash,
         message,
         author,
+        authorEmail,
         date,
-        parents: parentParts.join('|').split(' ').filter(p => p.length > 0)
+        committer,
+        committerEmail,
+        committerDate,
+        parents: parentPart.split(' ').filter(p => p.length > 0)
     };
 }
 

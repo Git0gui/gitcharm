@@ -81,7 +81,11 @@ export interface GraphCommit {
     shortHash: string;
     message: string;
     author: string;
+    authorEmail: string;
     date: string;
+    committer: string;
+    committerEmail: string;
+    committerDate: string;
     parents: string[];
     refs: string[];
     /** Subset of `refs` that are tags — authoritative, from the refs directory. */
@@ -661,14 +665,35 @@ export class GitService {
         const hit = force ? undefined : this._detailCache.get(key);
         if (hit) {return hit;}
 
-        // Format includes both author and committer info
+        // The graph log already carries every field this card shows, so a row
+        // the user clicked needs no second process. Only commits reached from
+        // outside the list (blame, file history, reflog) fall back to `show`.
+        const indexed = force ? undefined : this._commitIndex.get(hash);
+        if (indexed) {
+            const detail: CommitDetail = {
+                hash: indexed.hash,
+                shortHash: indexed.shortHash,
+                message: indexed.message,
+                author: indexed.author,
+                authorEmail: indexed.authorEmail,
+                authorDate: indexed.date,
+                committer: indexed.committer,
+                committerEmail: indexed.committerEmail,
+                committerDate: indexed.committerDate
+            };
+            this._detailCache.set(key, detail);
+            return detail;
+        }
+
+        // Format includes both author and committer info. NUL-separated for the
+        // same reason as the graph log: a subject may contain any other char.
         // %an=author name, %ae=author email, %ai=author date
         // %cn=committer name, %ce=committer email, %ci=committer date
         const output = (await this.executeGitArgs([
-            'show', '-s', '--format=%H|%h|%s|%an|%ae|%ai|%cn|%ce|%ci', hash
-        ])).trim();
-        const parts = output.split('|');
-        
+            'show', '-s', '--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci', hash
+        ])).trimEnd();
+        const parts = output.split('\0');
+
         const detail: CommitDetail = {
             hash: parts[0] || hash,
             shortHash: parts[1] || hash.substring(0, 7),
@@ -2388,9 +2413,11 @@ export class GitService {
         }
         logger.debug('[GitCharm] Using git commands');
         
-        // Use git log with graph format to get topology info
-        // %ai = author date (matches GitCharm default display)
-        const format = '%H|%h|%s|%an|%ai|%P';
+        // Use git log with graph format to get topology info.
+        // %ai = author date (matches GitCharm default display). Author/committer
+        // fields ride along so selecting a row later needs no `git show`; NUL
+        // separators keep a subject containing `|` from shifting the fields.
+        const format = '%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci%x00%P';
 
         const buildArgs = (forHash: boolean, useBranch: string | undefined): string[] => {
             const a: string[] = ['log'];
