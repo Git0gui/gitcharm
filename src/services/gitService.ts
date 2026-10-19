@@ -33,6 +33,8 @@ import {
     redactUrlCredentials,
     gitFailureHost,
     pickFetchRemote,
+    remoteNameFromUpstream,
+    matchRemoteBranch,
     collectRepositoryRoots,
     discoverRepositoryRoots,
     repositoryKey,
@@ -1352,16 +1354,16 @@ export class GitService {
         const current = await this.getCurrentBranch();
         let upstream = await this.getUpstream(branchName);
         
-        // If no upstream configured, try to infer from remote branches
+        // If no upstream configured, infer it from a remote branch of the same
+        // name. Any remote counts, not just origin — a fork-only checkout has no
+        // `origin` at all, and a branch name may contain slashes.
         if (!upstream) {
             const branchDetails = await this.getBranchesWithDetails(false);
-            const remoteBranchName = `origin/${branchName}`;
-            const hasRemoteBranch = branchDetails.remote.some(b => b.name === remoteBranchName);
-            
-            if (hasRemoteBranch) {
+            const match = matchRemoteBranch(branchDetails.remote.map(b => b.name), branchName);
+            if (match) {
                 // Set upstream tracking relationship
-                upstream = remoteBranchName;
-                await this._execMutate(['branch', `--set-upstream-to=${remoteBranchName}`, branchName]);
+                upstream = match.ref;
+                await this._execMutate(['branch', `--set-upstream-to=${match.ref}`, branchName]);
             } else {
                 throw new Error(t('err.noUpstreamNoRemote', { name: branchName }));
             }
@@ -1373,7 +1375,8 @@ export class GitService {
             const pullStrategy = config.get('pullStrategy', 'merge');
             const useRebase = pullStrategy === 'rebase';
             logger.debug('[GitCharm] updateBranch() pulling current branch with useRebase:', useRebase);
-            return this.pull('origin', undefined, useRebase);
+            // Pull from the remote the branch tracks; "origin" is only a fallback.
+            return this.pull(remoteNameFromUpstream(upstream) ?? 'origin', undefined, useRebase);
         }
         // upstream is like "origin/main"; split into remote and remote branch
         const slash = upstream.indexOf('/');
@@ -1383,7 +1386,6 @@ export class GitService {
         
         // Try to fast-forward update the local branch reference
         // Use git update-ref for a safer approach that respects branch protection
-        const remoteBranch = upstream.slice(remote.length + 1);
         try {
             // First try: use merge-base to check if fast-forward is possible
             const baseOutput = await this.executeGitArgs(['merge-base', branchName, upstream]);
