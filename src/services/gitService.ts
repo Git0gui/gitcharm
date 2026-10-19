@@ -180,6 +180,12 @@ const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir'
 export class GitService {
     /** Max cached entries per cache (branch list / commit log / per-commit files). */
     static readonly CACHE_MAX = 20; // Reduced from 30 to save memory
+    /**
+     * Per-commit payloads are fetched in browsing bursts (a multi-select, then
+     * arrow-keying through rows); a shallow cache evicted the very entries the
+     * next click needed. Still bounded, just wider than the graph caches.
+     */
+    static readonly DETAIL_CACHE_MAX = 100;
 
     /**
      * Lines of a single file's diff the panel is willing to draw. Past this the
@@ -200,8 +206,8 @@ export class GitService {
     private _graphCache = new LruCache<GraphData>(GitService.CACHE_MAX);
     private _branchCache = new LruCache<BranchDetails>(GitService.CACHE_MAX);
     // Immutable caches: keyed by commit hash, safe until evicted
-    private _filesCache = new LruCache<FileStat[]>(GitService.CACHE_MAX);
-    private _detailCache = new LruCache<CommitDetail>(GitService.CACHE_MAX);
+    private _filesCache = new LruCache<FileStat[]>(GitService.DETAIL_CACHE_MAX);
+    private _detailCache = new LruCache<CommitDetail>(GitService.DETAIL_CACHE_MAX);
     /** commit -> diff base. A commit's parent never moves, so this one needs no invalidation. */
     private _diffBaseCache = new LruCache<string>(100);
     /** `git worktree list` output, tagged with the filesystem stamp it was read under. */
@@ -1063,17 +1069,18 @@ export class GitService {
 
     /**
      * Drop caches whose contents depend on refs/history (commit log).
-     * Branch cache is now persistent and only cleared manually or when repo changes.
+     * The persisted branch list stays: it is the startup fast path and is
+     * replaced wholesale by the next forced detail load.
      */
     invalidateVolatile(): void {
         this._graphCache.clear();
+        this._branchCache.clear();
         this._trackInfoCache = undefined;
         // Head hashes must be re-read: divergence checks compare them against
         // remote-tracking refs, and a stale cache hides the arrows.
         this._refsReader.invalidate();
-        // Don't clear branch cache - it's now persistent
-        // Only clear persisted cache file if needed (but we're keeping it persistent now)
-        // this._persistedCache.clear();
+        // The in-memory detail map holds ahead/behind; the persisted snapshot
+        // (workspaceState) is untouched and still seeds the next startup.
     }
 
     /**
