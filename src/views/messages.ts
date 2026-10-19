@@ -89,6 +89,7 @@ export type ExtToWebviewMessage =
     }
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
+    | { command: 'loadMoreFailed' }
     | { command: 'setHeadHash'; headHash: string }
     | { command: 'setInProgress'; inProgress: OperationKind | null }
     | { command: 'setDivergence'; divergence: Record<string, DivergenceEntry> }

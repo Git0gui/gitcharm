@@ -495,15 +495,23 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         remote: string = 'origin'
     ): Promise<{ action: string; force?: boolean } | undefined> {
         return new Promise((resolve) => {
-            if (!this._view) {
+            const view = this._view;
+            if (!view) {
                 resolve(undefined);
                 return;
             }
             const allBase = baseRef ?? EMPTY_TREE_HASH;
-            const handler = this._view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+            const subscriptions: vscode.Disposable[] = [];
+            let settled = false;
+            const settle = (result?: { action: string; force?: boolean }) => {
+                if (settled) {return;}
+                settled = true;
+                while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+                resolve(result);
+            };
+            subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
                 if (msg.command === 'pushDialogAction') {
-                    handler.dispose();
-                    resolve({ action: msg.action, force: msg.force });
+                    settle({ action: msg.action, force: msg.force });
                 } else if (msg.command === 'pushDialogFileDiff') {
                     if (msg.hash === ALL_COMMITS_ROW) {
                         void this._openRefFileDiff(allBase, branchName, msg.path);
@@ -520,7 +528,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         }
                     })();
                 }
-            });
+            }));
+            // Hiding the view destroys its DOM, taking an open dialog with it.
+            // Settle then, or the push command would await a promise nobody can
+            // resolve any more. No timeout: a dialog left open is still usable.
+            subscriptions.push(view.onDidChangeVisibility(() => {
+                if (!view.visible) {settle(undefined);}
+            }));
+            subscriptions.push(view.onDidDispose(() => settle(undefined)));
             this._post({
                 command: 'showPushDialog',
                 branchName,
@@ -529,10 +544,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 isFirstPush,
                 remote
             });
-            setTimeout(() => {
-                handler.dispose();
-                resolve(undefined);
-            }, 60000);
         });
     }
 
@@ -552,10 +563,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         currentBranch: string,
         commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }>
     ): void {
-        if (!this._view) {return;}
-        const handler = this._view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+        const view = this._view;
+        if (!view) {return;}
+        const subscriptions: vscode.Disposable[] = [];
+        let closed = false;
+        const close = () => {
+            if (closed) {return;}
+            closed = true;
+            while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+        };
+        subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
             if (msg.command === 'compareDialogClosed') {
-                handler.dispose();
+                close();
             } else if (msg.command === 'getCompareFiles') {
                 void (async () => {
                     try {
@@ -585,9 +604,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     void this._openFileDiff(msg.hash, msg.path);
                 }
             }
-        });
+        }));
+        // Same lifetime as the dialog itself: closing it, hiding the panel, or
+        // disposing the webview ends the listener — never a wall-clock timeout.
+        subscriptions.push(view.onDidChangeVisibility(() => {
+            if (!view.visible) {close();}
+        }));
+        subscriptions.push(view.onDidDispose(close));
         this._post({ command: 'showCompareDialog', branchName, currentBranch, commits });
-        setTimeout(() => handler.dispose(), 300000);
     }
 
     /**
@@ -1522,6 +1546,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             for (const c of data.commits) {this._loadedHashes.add(c.hash);}
             this._post({ command: 'appendCommits', commits: data.commits, hasMore: this._hasMore });
         } catch (error) {
+            // The spinner is driven by the webview; without this it stays on and
+            // its scroll handler never asks again (state.loadingMore stays true).
+            // hasMore stays as-is so the next scroll retries.
+            this._post({ command: 'loadMoreFailed' });
             vscode.window.showErrorMessage(t('view.loadMoreFailed', { error: formatGitError(error) }));
         } finally {
             this._loadingMore = false;

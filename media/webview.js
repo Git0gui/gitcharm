@@ -2359,7 +2359,13 @@ window.addEventListener('message', function (ev) {
         state.hasMore = !!m.hasMore;
         setLoader(false);
         renderRows();
+    } else if (m.command === 'loadMoreFailed') {
+        // Keep hasMore: the next scroll retries instead of silently ending the list.
+        setLoader(false);
     } else if (m.command === 'setDetail') {
+        // A slower answer for a commit the user already clicked away from must
+        // not overwrite the panel (revealCommit / refreshFiles can interleave).
+        if (!state.selectedHash || m.commit.hash !== state.selectedHash) { return; }
         state.detail = { commit: m.commit, files: m.files };
         renderDetail();
     } else if (m.command === 'setCurrentBranch') {
@@ -2494,8 +2500,16 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'showReflog') {
         showReflogDialog(m.scope, m.entries || []);
     } else if (m.command === 'multiCommitsResponse') {
-        // Handle multi-select commits response
-        state.multiCommits = m.commits || [];
+        // Rapid clicks fire one request each; an older response can land after a
+        // newer one. Apply it only if it still matches the live selection.
+        var wanted = state.selectedHashes || [];
+        var got = m.commits || [];
+        var gotHashes = {};
+        for (var gi = 0; gi < got.length; gi++) { gotHashes[got[gi].hash] = true; }
+        var matches = wanted.length > 0 && got.length === wanted.length
+            && wanted.every(function (h) { return gotHashes[h]; });
+        if (!matches) { return; }
+        state.multiCommits = got;
         state.multiFiles = m.files || [];
         renderDetail();
     }
