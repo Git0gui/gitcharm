@@ -2037,6 +2037,22 @@ function repoStateCopy(repoState, folder, files) {
         };
     }
     if (repoState === 'noRepo') {
+        var found = state.repositories || [];
+        // The guidance page is an opaque overlay, so the switcher underneath it is
+        // unreachable. In a workspace that is a plain parent of several projects
+        // (the layout this panel is built for) the useful action is picking one of
+        // them — list them right here instead of only offering to `git init`.
+        if (found.length > 0) {
+            return {
+                title: T('repo.noRepoTitle'),
+                body: T('repo.noRepoFoundBody', { n: found.length }),
+                actions: [
+                    { key: 'initRepository', label: T('repo.init') },
+                    { key: 'recheckRepository', label: T('repo.recheck') }
+                ],
+                repos: found
+            };
+        }
         return {
             title: T('repo.noRepoTitle'),
             body: T('repo.noRepoBody', { folder: folder || '' }),
@@ -2175,11 +2191,18 @@ function renderRepoState() {
         return '<button type="button" class="dialog-btn ' + (a.primary ? 'primary' : 'secondary') +
             '" data-repo-action="' + a.key + '">' + esc(a.label) + '</button>';
     }).join('');
+    var picks = (copy.repos || []).map(function (r) {
+        return '<button type="button" class="rs-repo" data-repo-pick="' + esc(r.path) + '" data-title="' + esc(r.path) + '">' +
+            '<span class="rs-repo-name">' + esc(r.name) + '</span>' +
+            '<span class="rs-repo-path">' + esc(r.path) + '</span>' +
+            '</button>';
+    }).join('');
     box.className = 'on ' + state.repoState;
     box.innerHTML = '<div class="rs-card">' +
         '<div class="rs-icon">' + (REPO_ICONS[state.repoState] || '') + '</div>' +
         '<div class="rs-title">' + esc(copy.title) + '</div>' +
         '<div class="rs-body">' + esc(copy.body) + '</div>' +
+        (picks ? '<div class="rs-repos">' + picks + '</div>' : '') +
         '<div class="rs-actions">' + btns + '</div>' +
         '</div>';
 }
@@ -2187,6 +2210,11 @@ function renderRepoState() {
 var repoStateBox = document.getElementById('repo-state');
 if (repoStateBox) {
     repoStateBox.addEventListener('click', function (e) {
+        var pick = e.target.closest('[data-repo-pick]');
+        if (pick) {
+            vscode.postMessage({ command: 'selectRepository', path: pick.getAttribute('data-repo-pick') });
+            return;
+        }
         var btn = e.target.closest('[data-repo-action]');
         if (!btn) { return; }
         vscode.postMessage({ command: btn.getAttribute('data-repo-action') });
@@ -2331,14 +2359,28 @@ window.addEventListener('message', function (ev) {
         state.hasMore = !!m.hasMore;
         setLoader(false);
         renderRows();
+    } else if (m.command === 'loadMoreFailed') {
+        // Keep hasMore: the next scroll retries instead of silently ending the list.
+        setLoader(false);
     } else if (m.command === 'setDetail') {
+        // A slower answer for a commit the user already clicked away from must
+        // not overwrite the panel (revealCommit / refreshFiles can interleave).
+        if (!state.selectedHash || m.commit.hash !== state.selectedHash) { return; }
         state.detail = { commit: m.commit, files: m.files };
         renderDetail();
     } else if (m.command === 'setCurrentBranch') {
         state.current = m.branch;
         renderTree();
     } else if (m.command === 'revealCommit') {
+        // A reveal is a single-selection jump from another surface (blame, file
+        // history): keep the multi-select set in sync, and drop the previous
+        // multi-commit payload — renderDetail() prefers it over state.detail,
+        // so leaving it behind would show the old commit's data.
         state.selectedHash = m.hash;
+        state.selectedHashes = [m.hash];
+        state.lastClickedIndex = -1;
+        state.multiCommits = null;
+        state.multiFiles = null;
         state.detailVisible = true;
         applyRowSelection();
         var el = document.querySelector('.row[data-hash="' + m.hash + '"]');
@@ -2356,6 +2398,12 @@ window.addEventListener('message', function (ev) {
         state.remote = m.remote || [];
         if (m.currentBranch) {
             state.current = m.currentBranch;
+        }
+        // The selected row may have been deleted outside the panel; keep the
+        // highlight only while the branch is still in one of the lists.
+        if (state.selectedBranch && state.local.indexOf(state.selectedBranch) < 0 &&
+            state.remote.indexOf(state.selectedBranch) < 0) {
+            state.selectedBranch = '';
         }
         
         // Mark branches as loaded and hide skeleton
@@ -2454,7 +2502,7 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'showSquashMessageDialog') {
         showSquashMessageDialog(m.prompt, m.initialValue, m.placeholder);
     } else if (m.command === 'showPushDialog') {
-        showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush);
+        showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush, m.remote || 'origin', m.remotes || []);
     } else if (m.command === 'pushFilesResponse') {
         window._handlePushFiles(m.hash, m.files || []);
     } else if (m.command === 'showCompareDialog') {
@@ -2466,8 +2514,16 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'showReflog') {
         showReflogDialog(m.scope, m.entries || []);
     } else if (m.command === 'multiCommitsResponse') {
-        // Handle multi-select commits response
-        state.multiCommits = m.commits || [];
+        // Rapid clicks fire one request each; an older response can land after a
+        // newer one. Apply it only if it still matches the live selection.
+        var wanted = state.selectedHashes || [];
+        var got = m.commits || [];
+        var gotHashes = {};
+        for (var gi = 0; gi < got.length; gi++) { gotHashes[got[gi].hash] = true; }
+        var matches = wanted.length > 0 && got.length === wanted.length
+            && wanted.every(function (h) { return gotHashes[h]; });
+        if (!matches) { return; }
+        state.multiCommits = got;
         state.multiFiles = m.files || [];
         renderDetail();
     }
@@ -2646,7 +2702,11 @@ function renderDialogDetail(el, commit, commits) {
 
 var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', remoteExists: true, visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
-function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
+function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, remotes) {
+    // The host re-sends this message when the target remote changes; replace the
+    // open dialog instead of stacking a second overlay.
+    var existing = document.getElementById('push-dialog');
+    if (existing) { existing.remove(); }
     // '__all__' is the synthetic aggregate row ("全部提交") diffing base ref vs local tip
     pushState = { commits: commits, selectedHash: commits.length > 0 ? '__all__' : null, filesCache: {}, branchName: branchName, remoteExists: remoteExists !== false, visibleCount: 20, fileViewMode: state.fileViewMode || 'tree', collapsedDirs: {} };
     var overlay = document.createElement('div');
@@ -2673,12 +2733,22 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
 
     // Add placeholder when no commits (for new branches or first push)
     var emptyStateHtml = '';
-    if (commits.length === 0 && (isFirstPush || !pushState.remoteExists)) {
-        emptyStateHtml = '<div class="push-empty-state">' +
-            '<div class="push-empty-icon">📦</div>' +
-            '<div class="push-empty-text">' + T('pushDlg.firstPushText') + '</div>' +
-            '<div class="push-empty-hint">' + T('pushDlg.firstPushHint') + '</div>' +
-            '</div>';
+    if (commits.length === 0) {
+        if (isFirstPush || !pushState.remoteExists) {
+            emptyStateHtml = '<div class="push-empty-state">' +
+                '<div class="push-empty-icon">📦</div>' +
+                '<div class="push-empty-text">' + T('pushDlg.firstPushText') + '</div>' +
+                '<div class="push-empty-hint">' + T('pushDlg.firstPushHint') + '</div>' +
+                '</div>';
+        } else {
+            // The dialog opens even when nothing is ahead — say why it is empty
+            // instead of showing a blank list the user has to interpret.
+            emptyStateHtml = '<div class="push-empty-state">' +
+                '<div class="push-empty-icon">✓</div>' +
+                '<div class="push-empty-text">' + T('pushDlg.upToDateText') + '</div>' +
+                '<div class="push-empty-hint">' + T('pushDlg.upToDateHint') + '</div>' +
+                '</div>';
+        }
     }
 
     // Add "Load More" button if there are more than 20 commits
@@ -2688,7 +2758,24 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
         loadMoreHtml = '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: commits.length - 20 }) + '</button></div>';
     }
 
-    var remoteLabel = pushState.remoteExists ? 'origin/' + esc(branchName) : 'origin/' + esc(branchName) + ' <span class="push-new-badge">(new)</span>';
+    var targetRemote = remote || 'origin';
+    // Multi-remote repositories get a picker; switching it reloads the preview
+    // from the host, so the commit list always describes the visible target.
+    var remoteOptions = remotes || [];
+    if (remoteOptions.length > 1 && remoteOptions.indexOf(targetRemote) < 0) {
+        remoteOptions = [targetRemote].concat(remoteOptions);
+    }
+    var remoteControl = esc(targetRemote);
+    if (remoteOptions.length > 1) {
+        var optionHtml = remoteOptions.map(function (r) {
+            return '<option value="' + esc(r) + '"' + (r === targetRemote ? ' selected' : '') + '>' + esc(r) + '</option>';
+        }).join('');
+        remoteControl = '<select class="push-remote-select" id="push-remote-select" data-title="' +
+            esc(T('pushDlg.target')) + '">' + optionHtml + '</select>';
+    }
+    var remoteLabel = remoteControl + '<button class="push-remote-manage" id="push-remote-manage" data-title="' +
+        esc(T('remote.manageTitle')) + '">' + esc(T('remote.manageBtn')) + '</button>' +
+        '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
     var commitCountText = commits.length > 0 ? T('common.commitCount', { n: commits.length }) : (pushState.remoteExists ? T('pushDlg.upToDate') : T('pushDlg.firstPush'));
     var headerText = esc(branchName) + ' <span class="push-arrow">→</span> ' + remoteLabel + ' — ' + commitCountText;
 
@@ -2705,6 +2792,26 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+
+    // Disable the picker while the host recomputes; the replacement dialog
+    // (same id) arrives with the new commit list and an enabled picker.
+    var remoteSelect = overlay.querySelector('#push-remote-select');
+    if (remoteSelect) {
+        remoteSelect.addEventListener('change', function () {
+            remoteSelect.disabled = true;
+            vscode.postMessage({ command: 'pushDialogRemote', remote: remoteSelect.value });
+        });
+    }
+
+    // Remote management opens the host's quick-pick flow; the host re-renders
+    // this dialog afterwards, so add/remove/rename is reflected in the picker.
+    var manageRemotes = overlay.querySelector('#push-remote-manage');
+    if (manageRemotes) {
+        manageRemotes.addEventListener('click', function () {
+            manageRemotes.disabled = true;
+            vscode.postMessage({ command: 'manageRemotes' });
+        });
+    }
 
     // Commit row click handler
     function attachCommitClickHandlers() {

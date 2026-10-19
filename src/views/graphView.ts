@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitService, GraphCommit, LogFilters, ReflogEntry } from '../services/gitService';
+import { GitService, GraphCommit, LogFilters, ReflogEntry, PushPreview } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
@@ -48,6 +48,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly SESSION_RESTORE_TTL_MS = 2 * 60 * 60 * 1000;
     /** Short pause after the panel opens before the first background fetch. */
     private static readonly AUTO_FETCH_FIRST_DELAY_MS = 5000;
+    /** A visibility event this soon after resolve is the same show, not a new one. */
+    private static readonly SHOW_RELOAD_GRACE_MS = 1000;
 
     private _view: vscode.WebviewView | undefined;
     private _gitService: GitService;
@@ -76,6 +78,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _lastStashSignature: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
+    /** When the current webview was (re)resolved; its own load covers that show. */
+    private _resolvedAt = 0;
     /** Screen messages held until the webview script reports 'ready'. */
     private _pendingScreen = new Map<ExtToWebviewMessage['command'], ExtToWebviewMessage>();
     // Last known in-progress operation; also the value replayed on the 'ready'
@@ -274,8 +278,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._postRepoState();
 
         if (state === 'ready') {
+            // The branch remembered in view state may have been deleted since the
+            // snapshot; `git log <gone>` would fail with "unknown revision".
+            const dropped = this._dropVanishedBranch();
             Promise.all([
-                this._loadAndDisplayBranches(),
+                this._loadAndDisplayBranches(dropped),
                 this._loadAndDisplayCommits()
             ]).catch(error => {
                 vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
@@ -481,56 +488,109 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Show a push confirmation dialog with commit list and file diffs.
-     * Returns { action: string, force?: boolean } or undefined.
-     * baseRef: ref the push is compared against (upstream or origin/<branch>);
-     * undefined for a first push (falls back to the empty tree).
+     * Show the push confirmation dialog for a computed preview. The dialog can
+     * switch the target remote; each switch recomputes the preview on the host.
+     * Resolves with the action and the preview that was on screen when the user
+     * confirmed, or undefined when dismissed.
      */
-    showPushDialog(
-        branchName: string,
-        commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }>,
-        remoteExists: boolean,
-        isFirstPush: boolean = false,
-        baseRef?: string
-    ): Promise<{ action: string; force?: boolean } | undefined> {
+    showPushDialog(preview: PushPreview): Promise<{ action: string; force?: boolean; preview: PushPreview } | undefined> {
         return new Promise((resolve) => {
-            if (!this._view) {
+            const view = this._view;
+            if (!view) {
                 resolve(undefined);
                 return;
             }
-            const allBase = baseRef ?? EMPTY_TREE_HASH;
-            const handler = this._view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+            const subscriptions: vscode.Disposable[] = [];
+            let current = preview;
+            let previewSeq = 0;
+            let settled = false;
+            const settle = (result?: { action: string; force?: boolean; preview: PushPreview }) => {
+                if (settled) {return;}
+                settled = true;
+                while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+                resolve(result);
+            };
+            const postDialog = (p: PushPreview) => {
+                this._post({
+                    command: 'showPushDialog',
+                    branchName: p.branch,
+                    commits: p.commits,
+                    remoteExists: p.remoteExists,
+                    isFirstPush: p.isFirstPush,
+                    remote: p.remote,
+                    remotes: p.remotes
+                });
+            };
+            subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
                 if (msg.command === 'pushDialogAction') {
-                    handler.dispose();
-                    resolve({ action: msg.action, force: msg.force });
+                    settle({ action: msg.action, force: msg.force, preview: current });
+                } else if (msg.command === 'pushDialogRemote') {
+                    const seq = ++previewSeq;
+                    void (async () => {
+                        try {
+                            const next = await this._gitService.getPushPreview(current.branch, msg.remote);
+                            if (settled || seq !== previewSeq) {return;}
+                            current = next;
+                            postDialog(next);
+                        } catch (error) {
+                            if (settled || seq !== previewSeq) {return;}
+                            // Re-render the unchanged target: its select was disabled
+                            // while this request was in flight.
+                            postDialog(current);
+                            vscode.window.showErrorMessage(t('push.previewFailed', { error: formatGitError(error) }));
+                        }
+                    })();
+                } else if (msg.command === 'manageRemotes') {
+                    const seq = ++previewSeq;
+                    void (async () => {
+                        await vscode.commands.executeCommand('idea-git.manageRemotes');
+                        if (settled || seq !== previewSeq) {return;}
+                        try {
+                            // The target may have just been removed or renamed; fall
+                            // back to the normal resolution instead of previewing a
+                            // remote that no longer exists.
+                            const stillThere = (await this._gitService.getRemotes())
+                                .some(remote => remote.name === current.remote);
+                            const next = await this._gitService.getPushPreview(
+                                current.branch,
+                                stillThere ? current.remote : undefined
+                            );
+                            if (settled || seq !== previewSeq) {return;}
+                            current = next;
+                            postDialog(next);
+                        } catch (error) {
+                            if (settled || seq !== previewSeq) {return;}
+                            postDialog(current);
+                            vscode.window.showErrorMessage(t('push.previewFailed', { error: formatGitError(error) }));
+                        }
+                    })();
                 } else if (msg.command === 'pushDialogFileDiff') {
+                    const base = current.baseRef ?? EMPTY_TREE_HASH;
                     if (msg.hash === ALL_COMMITS_ROW) {
-                        void this._openRefFileDiff(allBase, branchName, msg.path);
+                        void this._openRefFileDiff(base, current.branch, msg.path);
                     } else {
                         void this._openFileDiff(msg.hash, msg.path);
                     }
                 } else if (msg.command === 'getPushAllFiles') {
+                    const p = current;
                     void (async () => {
                         try {
-                            const files = await this._gitService.getDiffFilesBetweenRefs(allBase, branchName);
+                            const files = await this._gitService.getDiffFilesBetweenRefs(p.baseRef ?? EMPTY_TREE_HASH, p.branch);
                             this._post({ command: 'pushFilesResponse', hash: ALL_COMMITS_ROW, files });
                         } catch {
                             this._post({ command: 'pushFilesResponse', hash: ALL_COMMITS_ROW, files: [] });
                         }
                     })();
                 }
-            });
-            this._post({
-                command: 'showPushDialog',
-                branchName,
-                commits,
-                remoteExists,
-                isFirstPush
-            });
-            setTimeout(() => {
-                handler.dispose();
-                resolve(undefined);
-            }, 60000);
+            }));
+            // Hiding the view destroys its DOM, taking an open dialog with it.
+            // Settle then, or the push command would await a promise nobody can
+            // resolve any more. No timeout: a dialog left open is still usable.
+            subscriptions.push(view.onDidChangeVisibility(() => {
+                if (!view.visible) {settle(undefined);}
+            }));
+            subscriptions.push(view.onDidDispose(() => settle(undefined)));
+            postDialog(preview);
         });
     }
 
@@ -550,10 +610,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         currentBranch: string,
         commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }>
     ): void {
-        if (!this._view) {return;}
-        const handler = this._view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+        const view = this._view;
+        if (!view) {return;}
+        const subscriptions: vscode.Disposable[] = [];
+        let closed = false;
+        const close = () => {
+            if (closed) {return;}
+            closed = true;
+            while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+        };
+        subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
             if (msg.command === 'compareDialogClosed') {
-                handler.dispose();
+                close();
             } else if (msg.command === 'getCompareFiles') {
                 void (async () => {
                     try {
@@ -583,9 +651,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     void this._openFileDiff(msg.hash, msg.path);
                 }
             }
-        });
+        }));
+        // Same lifetime as the dialog itself: closing it, hiding the panel, or
+        // disposing the webview ends the listener — never a wall-clock timeout.
+        subscriptions.push(view.onDidChangeVisibility(() => {
+            if (!view.visible) {close();}
+        }));
+        subscriptions.push(view.onDidDispose(close));
         this._post({ command: 'showCompareDialog', branchName, currentBranch, commits });
-        setTimeout(() => handler.dispose(), 300000);
     }
 
     /**
@@ -667,18 +740,32 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     async resolveWebviewView(webviewView: vscode.WebviewView) {
         this._view = webviewView;
         this._webviewReady = false;
+        this._resolvedAt = Date.now();
         this._pendingScreen.clear();
         this._grantedThemeRoot = undefined;
         this._applyWebviewOptions(webviewView.webview, true);
 
         webviewView.webview.onDidReceiveMessage(async (message: WebviewToExtMessage) => {
             switch (message.command) {
-                case 'selectBranch':
-                    this._branch = message.branch || undefined;
+                case 'selectBranch': {
+                    const branch = message.branch || undefined;
+                    // Rows can outlive their refs (persisted branch list, external
+                    // delete); loading history for one would only produce an
+                    // "unknown revision" toast.
+                    if (branch && !this._branchExists(branch)) {
+                        logger.info(`[GitCharm] Ignoring vanished branch "${branch}"`);
+                        this._branch = undefined;
+                        vscode.window.setStatusBarMessage(t('view.branchGone', { name: branch }), 5000);
+                        await this._reload(true);
+                        break;
+                    }
+
+                    this._branch = branch;
                     // Clear cherry-pick resume state when switching branches
                     await this._gitService.clearCherryPickResume(this._memento);
                     await this._reload();
                     break;
+                }
                 case 'refresh':
                     await this._reload(true);
                     break;
@@ -871,17 +958,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // Step 1: Show skeleton UI immediately (no git commands)
         webviewView.webview.html = this._getSkeletonHtml();
         
-        // Step 1.5: Detect in-progress operation (merge/rebase/cherry-pick) in background;
-        // delivered to the webview when it reports 'ready' (messages sent before the
-        // webview script loads can be dropped)
-        this._gitService.getInProgressOperation()
-            .then(op => {
-                this._lastInProgress = op || null;
-                if (this._view && this._webviewReady) {
-                    this._post({ command: 'setInProgress', inProgress: this._lastInProgress });
-                }
-            })
-            .catch(() => {});
+        // Step 1.5: Idle-state check only looks at state files (pure filesystem).
+        // `getInProgressOperation()` would spawn `ls-files -u` on every open just
+        // to confirm there is nothing to see; the poll escalates to it once a
+        // state file appears. Delivered to the webview when it reports 'ready'.
+        this._lastInProgress = this._gitService.detectOperationFromFiles() ?? null;
 
         // Step 2: Restore the previously viewed branch first so the initial commit
         // load targets it directly (Git Graph-style state restoration), but only
@@ -918,7 +999,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /** Panel became visible: refresh the repository state, then history. */
     private async _onPanelShown(): Promise<void> {
         if (this._repoState === 'ready') {
-            this._reload(true);
+            // resolveWebviewView starts its own load when the view is (re)created;
+            // a visibility event this soon is the same show, not a second one.
+            if (Date.now() - this._resolvedAt > GraphViewProvider.SHOW_RELOAD_GRACE_MS) {
+                // Hiding disposes the webview, so the payload must be re-sent.
+                // Only a moved tip forces a git log; otherwise the cached graph is
+                // replayed as-is. The tip is a filesystem read, so the check itself
+                // is free, and it also covers the watcher's debounce window where
+                // the cache has not been dropped yet.
+                const tip = await this._tipOfDisplayedRev();
+                void this._reload(!!tip && tip !== this._lastKnownTip);
+            }
             this._startBranchCheck();
             return;
         }
@@ -1136,6 +1227,30 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         } catch (err) {
             // Ignore errors during branch check
         }
+    }
+
+    /**
+     * Whether a branch still resolves on disk. Refs are cached for a few
+     * seconds, so a miss is re-read once before believing it — a branch created
+     * moments ago must not be mistaken for a deleted one.
+     */
+    private _branchExists(name: string): boolean {
+        if (this._gitService.getBranchTipHash(name)) {return true;}
+        this._gitService.invalidateVolatile();
+        return !!this._gitService.getBranchTipHash(name);
+    }
+
+    /**
+     * Drop a selection whose ref vanished while it was remembered (view state
+     * from an earlier session, or a delete outside the panel). Without this,
+     * `git log <gone>` answers "ambiguous argument ... unknown revision".
+     */
+    private _dropVanishedBranch(): boolean {
+        if (!this._branch || this._branchExists(this._branch)) {return false;}
+        logger.info(`[GitCharm] Selected branch "${this._branch}" no longer exists; showing all refs`);
+        vscode.window.setStatusBarMessage(t('view.branchGone', { name: this._branch }), 5000);
+        this._branch = undefined;
+        return true;
     }
 
     /**
@@ -1454,6 +1569,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _collect(force: boolean = false): Promise<GraphPayload> {
+        // A selection can outlive its ref (deleted in a terminal or another
+        // worktree); re-resolve it before it reaches `git log`.
+        const dropped = this._dropVanishedBranch();
         logger.debug(`[GitCharm] _collect called with branch=${this._branch || 'all'}, force=${force}`);
         logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}`);
         const [graphData, details] = await Promise.all([
@@ -1463,7 +1581,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 filters: this._filters,
                 force
             }),
-            this._gitService.getBranchesWithDetails(force)
+            // A vanished branch must also disappear from the tree immediately;
+            // the cached list would keep the row that produced the error.
+            this._gitService.getBranchesWithDetails(force || dropped)
         ]);
         logger.debug(`[GitCharm] _collect got ${graphData.commits.length} commits for branch=${this._branch || 'all'}`);
         let headHash = '';
@@ -1471,13 +1591,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             headHash = await this._gitService.getHeadHash();
         } catch { /* empty repo */ }
         
-        // Check for in-progress rebase/merge/cherry-pick/revert operation
-        let inProgress: OperationKind | undefined;
-        try {
-            inProgress = await this._gitService.getInProgressOperation();
-        } catch (error) {
-            // Ignore errors
-        }
+        // Check for in-progress rebase/merge/cherry-pick/revert operation.
+        // State files are authoritative and cost no subprocess; the extra
+        // `ls-files -u` probe is reserved for the watcher path that already
+        // knows an operation is running (idle probes would spawn on every load).
+        const inProgress = this._gitService.detectOperationFromFiles();
         // setData carries the same field: keep the baseline in sync so the
         // auto re-check does not report a change that was just delivered.
         this._lastInProgress = inProgress ?? null;
@@ -1509,6 +1627,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (this._loadingMore || !this._hasMore || !this._view) {return;}
         this._loadingMore = true;
         try {
+            if (this._dropVanishedBranch()) {
+                // The rows so far belong to a branch that is gone; restart from
+                // all refs instead of appending a mismatched page.
+                void this._reload(true);
+                return;
+            }
             const data = await this._gitService.getCommitGraphData({
                 limit: GraphViewProvider.PAGE_MORE,
                 skip: this._loaded,
@@ -1520,10 +1644,26 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             for (const c of data.commits) {this._loadedHashes.add(c.hash);}
             this._post({ command: 'appendCommits', commits: data.commits, hasMore: this._hasMore });
         } catch (error) {
+            // The spinner is driven by the webview; without this it stays on and
+            // its scroll handler never asks again (state.loadingMore stays true).
+            // hasMore stays as-is so the next scroll retries.
+            this._post({ command: 'loadMoreFailed' });
             vscode.window.showErrorMessage(t('view.loadMoreFailed', { error: formatGitError(error) }));
         } finally {
             this._loadingMore = false;
         }
+    }
+
+    /**
+     * A load failed with the git binary itself gone (uninstalled between
+     * sessions). Switch to the guidance page instead of a toast the user cannot
+     * act on. Free once the failed spawn has been recorded as ENOENT; otherwise
+     * this is the single probe taken on the failure path.
+     */
+    private async _recoverMissingGit(): Promise<boolean> {
+        if (await this._gitService.isGitAvailable()) {return false;}
+        await this.refreshRepoState(true);
+        return true;
     }
 
     private async _reload(force: boolean = false, preserveSelection = false) {
@@ -1552,6 +1692,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             });
             this._refreshDivergence();
         } catch (error) {
+            if (await this._recoverMissingGit()) {return;}
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('rows', false);
@@ -1614,12 +1755,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /**
      * Load branches in background and update webview when ready.
      */
-    private async _loadAndDisplayBranches(): Promise<void> {
+    private async _loadAndDisplayBranches(force: boolean = false): Promise<void> {
         if (!this._view || this._repoState !== 'ready') {return;}
         
         try {
             // Get cached branch data (fast, no git commands if cache hit)
-            const detailsPromise = this._gitService.getBranchesWithDetails(false);
+            const detailsPromise = this._gitService.getBranchesWithDetails(force);
             
             // Get head hash in parallel (may require git command, but don't block branches)
             const headHashPromise = this._gitService.getHeadHash().catch(() => '');
@@ -1729,6 +1870,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const totalTime = Date.now() - startTime;
             logger.debug(`[GitCharm] Total commit load: ${totalTime}ms (fetch: ${fetchTime}ms, postMessage: ${postTime}ms)`);
         } catch (error) {
+            if (await this._recoverMissingGit()) {return;}
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('rows', false);

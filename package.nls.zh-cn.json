@@ -11,6 +11,7 @@
     "cmd.rebaseOnto": "变基到...",
     "cmd.pushBranch": "推送",
     "cmd.pullBranch": "拉取",
+    "cmd.showLog": "显示日志",
     "cmd.fetch": "获取远程更新",
     "cmd.compareBranch": "与当前分支比较",
     "cmd.newBranchFrom": "从此处新建分支",
@@ -30,6 +31,7 @@
     "cmd.amendCommit": "修补最近提交（并入当前改动）",
     "cmd.openCommitOnRemote": "在远端网页打开该提交",
     "cmd.openBranchOnRemote": "在远端网页打开该分支",
+    "cmd.manageRemotes": "管理远端",
     "cmd.createTag": "在该提交上创建标签（轻量/附注）",
     "cmd.deleteTag": "删除本地标签",
     "cmd.pushTag": "推送标签到远端",
@@ -49,5 +51,6 @@
     "config.language.zh-cn": "简体中文",
     "config.language.en": "English",
     "config.debug": "启用调试日志（输出到扩展宿主控制台，用于问题排查）",
-    "config.autoFetchMinutes": "GitCharm 面板打开时每隔 N 分钟自动 fetch 一次远端。0 表示关闭（默认）。静默执行：不弹凭据输入、不弹错误提示。"
+    "config.autoFetchMinutes": "GitCharm 面板打开时每隔 N 分钟自动 fetch 一次远端。0 表示关闭（默认）。静默执行：不弹凭据输入、不弹错误提示。",
+    "config.protectedBranches": "受保护分支的模式列表：强制推送或删除这些分支前会再确认一次。`*` 匹配任意字符（如 `release/*`）。只增加确认步骤，不会直接禁止操作。"
 }

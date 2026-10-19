@@ -516,6 +516,88 @@ export function pickFetchRemote(names: readonly string[]): string {
     return names.includes('origin') ? 'origin' : (names[0] ?? '');
 }
 
+/**
+ * The remote half of an upstream ref: `origin/main` → `origin`, and also
+ * `fork` for the less common `fork/dev/main` (branch names carry slashes,
+ * remote names are read as the leading segment — same split `updateBranch` uses).
+ */
+export function remoteNameFromUpstream(upstream: string | undefined): string | undefined {
+    const text = (upstream || '').trim();
+    if (!text) {return undefined;}
+    const slash = text.indexOf('/');
+    return slash > 0 ? text.slice(0, slash) : undefined;
+}
+
+export interface RemoteBranchMatch {
+    remote: string;
+    /** The remote-tracking ref as listed by the repository, e.g. `fork/dev/x`. */
+    ref: string;
+}
+
+/**
+ * Find the remote branch a local branch would push to. `origin` wins because it
+ * is the remote every other tool assumes; otherwise the first listing that
+ * carries the same tail matches. Comparing tails is what makes nested branch
+ * names work — `dev/x` on `origin` is stored as the single string
+ * `origin/dev/x`, so a plain "strip the first segment" split would miss it.
+ */
+export function matchRemoteBranch(
+    remoteRefs: readonly string[],
+    branchName: string,
+    preferredRemote: string = 'origin'
+): RemoteBranchMatch | undefined {
+    if (!branchName) {return undefined;}
+    const suffix = `/${branchName}`;
+    let fallback: RemoteBranchMatch | undefined;
+    for (const ref of remoteRefs) {
+        if (!ref.endsWith(suffix)) {continue;}
+        const remote = ref.slice(0, ref.length - suffix.length);
+        if (!remote) {continue;}
+        if (remote === preferredRemote) {return { remote, ref };}
+        if (!fallback) {fallback = { remote, ref };}
+    }
+    return fallback;
+}
+
+export interface PushTarget {
+    remote: string;
+    /** Whether the remote already has a branch of this name. */
+    exists: boolean;
+    /** Remote-tracking ref carrying the branch, when it exists. */
+    ref?: string;
+    /** The local branch's configured upstream is this remote's branch. */
+    hasUpstream: boolean;
+}
+
+/**
+ * Decide where a push of `branchName` goes. An explicit `preferredRemote`
+ * (the dialog's remote picker) wins outright and must NOT fall back to another
+ * remote that happens to carry a twin branch: choosing `fork` for a branch that
+ * only exists on `origin` is a first push to `fork`, not a push to `origin`.
+ * Without a preference: the tracked remote, then any remote with the same
+ * branch (`origin` preferred), then `origin` as the conventional default.
+ */
+export function resolvePushTarget(
+    remoteRefs: readonly string[],
+    branchName: string,
+    upstream: string | undefined,
+    preferredRemote?: string
+): PushTarget {
+    const picked = (preferredRemote || '').trim()
+        || remoteNameFromUpstream(upstream)
+        || matchRemoteBranch(remoteRefs, branchName)?.remote
+        || 'origin';
+    const match = matchRemoteBranch(remoteRefs, branchName, picked);
+    const onPicked = match && match.remote === picked ? match : undefined;
+    const hasUpstream = !!upstream && remoteNameFromUpstream(upstream) === picked;
+    return {
+        remote: picked,
+        exists: hasUpstream || !!onPicked,
+        ref: hasUpstream ? upstream : onPicked?.ref,
+        hasUpstream
+    };
+}
+
 /** One repository of a multi-root workspace, as offered by the panel's switcher. */
 export interface RepositoryOption {
     path: string;
@@ -717,6 +799,17 @@ export function classifyGitNetworkFailure(text: string): GitNetworkFailure {
 }
 
 /**
+ * A spawn that never reached git at all: the binary is missing or cannot be
+ * executed. Unlike a non-zero exit, this is the one failure that means "no git
+ * on this machine" rather than "git said no" — the availability memo uses it to
+ * drop a positive probe taken in an earlier session.
+ */
+export function isMissingGitBinary(error: unknown): boolean {
+    const code = (error as { code?: unknown })?.code;
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
+}
+
+/**
  * A sequencer stop caused by a step whose changes turned out to be empty —
  * typically after the user resolved a conflict by keeping the other side. git
  * answers this with a wall of advice (`The previous cherry-pick is now empty, …
@@ -826,3 +919,56 @@ function wininetProxyToUrl(raw: string): string | undefined {
     if (!proto || !proto.startsWith('socks')) {return `http://${withoutAuth}`;}
     return `${proto === 'socks' ? 'socks5' : proto}://${withoutAuth}`;
 }
+
+/** One configured remote: `git remote -v` gives the name and its fetch URL. */
+export interface RemoteInfo {
+    name: string;
+    url: string;
+}
+
+/**
+ * `git remote -v` output → one entry per remote. Each remote prints a fetch and
+ * a push line; the fetch URL is the one every other part of the panel uses
+ * (web links, push preview), so the push line only stands in when fetch is
+ * absent. GitHub Actions-style multiline values cannot appear here: git
+ * prints one line per URL by contract.
+ */
+export function parseRemoteList(raw: string): RemoteInfo[] {
+    const byName = new Map<string, string>();
+    for (const line of raw.split(/\r?\n/)) {
+        const match = /^(\S+)\t(.+) \((fetch|push)\)$/.exec(line.trim());
+        if (!match) {continue;}
+        if (match[3] === 'fetch' || !byName.has(match[1])) {
+            byName.set(match[1], match[2]);
+        }
+    }
+    return Array.from(byName, ([name, url]) => ({ name, url }));
+}
+
+/**
+ * Remote names end up in ref names (`refs/remotes/<name>/...`) and as argv, so
+ * they follow git's conservative shape: no whitespace, no `..`, no leading
+ * dash. `--` already keeps a leading dash from being read as an option, but a
+ * name that git itself would reject should fail here with a readable message.
+ */
+export function assertRemoteName(value: string): string {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) || value.includes('..')) {
+        throw new Error(t('err.invalidRemoteName', { value }));
+    }
+    return value;
+}
+
+/**
+ * Whether a branch name matches one of the protected patterns. `*` matches any
+ * run of characters (`release/*`), everything else is literal. Branch names are
+ * case-sensitive on every platform git supports, so this is too.
+ */
+export function matchesBranchPattern(name: string, patterns: readonly string[]): boolean {
+    return patterns.some(raw => {
+        const pattern = raw.trim();
+        if (!pattern) {return false;}
+        const source = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+        return new RegExp(`^${source}$`).test(name);
+    });
+}
+

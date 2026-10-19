@@ -47,10 +47,12 @@ GitCharm provides a three-panel Git log view:
 ### Git Operations
 
 - **Branches**: create, checkout, rename, delete, merge into current, rebase onto, push (force push offered when behind the remote), pull, fetch, update (safe fast-forward for non-current branches)
+- **Remotes**: add a remote, edit its URL, rename or delete it right from the push dialog; switching the target remote recomputes the commit preview, and pushes / pulls use the branch's actual tracking remote instead of a hard-coded `origin`
+- **Protected branches**: force-pushing or deleting a branch that matches `idea-git.protectedBranches` (default `main` / `master`, `*` wildcards supported) asks for one more confirmation
 - **Commits**: show diff, cherry-pick (multi-select batch + conflict-resumable), squash, drop commit, amend message, revert commit (single or several, newest first), reset to commit, copy the commit message, open the commit or a branch on the remote web page
 - **Reflog**: one click for HEAD's reflog (the only place `checkout` and `reset` are recorded), or a branch row's own movements — a dialog where any row can be diffed, branched from or reset to, so work a `reset --hard` hid is recoverable
 - **Tags**: create lightweight or annotated tags on a commit, delete local tags, push a tag to the remote; annotated tags now resolve through the tag object, so their badges show up on the right commit
-- **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes, and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically
+- **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes (optionally including untracked files), and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically
 - **Files**: compare file with another branch, compare with the local working copy, pick a single file from a commit, view every commit that touched a file (cross-branch), view diff introduced by a single commit
 - **Blame**: inline annotation of last author & date per line, full commit info on hover, click to jump to the commit
 
@@ -60,6 +62,7 @@ GitCharm provides a three-panel Git log view:
 - **Filesystem refs**: resolves the git directory (plain clones, linked worktrees, shared `commondir`) and parses its refs (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
 - **No built-in git extension needed**: GitCharm never activates or reads `vscode.git`; branch lists, the current branch and ahead/behind counts all come from our own refs reader and a single `for-each-ref`, so the panel works even with the built-in Git extension disabled
 - **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; a filesystem watch on the git directory drops stale caches when you commit, fetch or switch branches elsewhere
+- **No idle subprocesses**: git availability is remembered across sessions, in-progress operations are detected by reading `.git` state files, and a re-shown panel replays its cached graph unless the displayed tip actually moved
 - **Canvas graph**: pixel-precise commit graph rendered on Canvas with high-DPI support, several times faster than SVG/DOM
 
 ### Experience & Reliability
@@ -77,6 +80,7 @@ GitCharm provides a three-panel Git log view:
 - **The panel follows real git state**: resolve the conflicts and commit in your own terminal and the operation bar retracts on its own once git's state files are gone, while the commit list reloads as soon as the displayed branch tip moves — keeping your selection, detail panel, folds and scroll position instead of jumping back to the top
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
 - **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
+- **Full error detail on demand**: the error notification stays short, while the complete git output (credentials redacted) goes to the GitCharm output channel, reachable from a Show Log button on the notification
 - **Optional background fetch**: set `idea-git.autoFetchMinutes` and the panel fetches from the remote every N minutes while it is open, refreshing the branch tree and the ahead/behind arrows. Silent by design — no credential prompt, no error toast, and no subprocess at all when the repository has no remote
 - **Several repositories in one workspace**: whether they come from several workspace folders or from a plain parent directory holding a dozen sibling projects, GitCharm discovers them all and puts a repository switcher above the branch tree (and `GitCharm: Switch Repository` in the command palette); the choice is remembered per workspace, and switching clears what belonged to the other repository instead of reusing branch names and hashes that only look valid
 
@@ -133,6 +137,7 @@ Search `idea-git` in settings:
 | `idea-git.language` | UI language: `auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | Enable debug logging to the extension host console | `false` |
 | `idea-git.autoFetchMinutes` | Fetch from the remote every N minutes while the panel is open (silent; `0` disables) | `0` |
+| `idea-git.protectedBranches` | Branch patterns that get an extra confirmation before force-push or delete (`*` wildcards supported) | `["main", "master"]` |
 
 ## Development
 
@@ -205,10 +210,12 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 ### Git 操作
 
 - **分支**：新建、检出、重命名、删除、合并到当前分支、变基到…、推送（落后远程时提供强制推送）、拉取、获取、更新（非当前分支可快进时安全更新）
+- **远端**：在推送对话框里新增远端、修改地址、重命名或删除；切换目标远端会立即重算提交预览，推送与拉取都使用分支真正跟踪的远端，不再写死 `origin`
+- **保护分支**：强制推送或删除命中 `idea-git.protectedBranches` 的分支（默认 `main` / `master`，支持 `*` 通配）时多一次确认
 - **提交**：显示差异、精选提交（Cherry-Pick，支持多选批量 + 冲突持久化恢复）、压缩提交、删除提交、编辑提交信息、回退提交（可多选，按时间从新到旧逐个回退）、修补最近提交、重置到此提交、复制提交消息、在远端网页打开该提交 / 该分支
 - **Reflog（操作记录）**：工具栏一键看 `HEAD` 的操作记录（只有 `HEAD` 记录 `checkout` 与 `reset`，正是把工作"藏起来"的两个操作），分支行右键则看该分支自己的 movements；对话框里任意一行都能查看差异、新建分支或回退过去——被 `reset --hard` 藏掉的提交还能捞回来
 - **标签**：在提交上新建轻量或附注标签、删除本地标签、推送标签到远端；附注标签会穿过 tag 对象解析到真正的提交，徽章不再贴错位置
-- **贮藏（Stash）**：分支树第三分区列出贮藏栈，工具栏一键贮藏当前改动，行上可应用 / 弹出 / 删除；在终端里 `git stash` 也会自动跟上
+- **贮藏（Stash）**：分支树第三分区列出贮藏栈，工具栏一键贮藏当前改动（可选择一并收走未跟踪文件），行上可应用 / 弹出 / 删除；在终端里 `git stash` 也会自动跟上
 - **文件**：与其他分支对比此文件、与当前本地文件对比、从提交中挑选单个文件、跨分支查看该文件的全部历史提交、查看单次提交引入的差异
 - **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击跳转到对应提交
 
@@ -218,6 +225,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **直读 refs**：先定位 git 目录（普通克隆、linked worktree、共享 `commondir` 都能解析），再直接读 refs（loose + packed-refs），数百分支也不卡死，避免大量 `git rev-parse` 子进程
 - **不依赖内置 git 扩展**：全程不激活、不读取 `vscode.git`；分支列表、当前分支、超前/落后全部来自自研 refs 读取器 + 单条 `for-each-ref`，禁用内置 Git 扩展也能正常用
 - **智能缓存**：分支信息持久化到工作区状态（Memento），重启后立即可用；对 git 目录做文件监听，在别处提交 / 拉取 / 切分支时自动失效
+- **空闲时不启子进程**：git 可用性跨会话记忆，进行中操作靠读 `.git` 状态文件判断，面板重新显示时只要展示的 tip 没动就直接复用缓存
 - **Canvas 图谱**：提交图用 Canvas 像素级绘制，高 DPI 自适应，比 SVG/DOM 高效数倍
 
 ### 体验与可靠性
@@ -235,6 +243,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **面板跟着真实 git 状态走**：在自己终端里解决冲突并提交，操作状态栏会在 git 状态文件清掉后自动收起；提交列表也在所选分支 tip 移动时自动重载，并保留当前选中项、第三栏详情、折叠状态与滚动位置，不再跳回顶部
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
 - **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
+- **完整错误随时可查**：错误通知保持简短，完整的 git 输出（凭据已脱敏）写入 GitCharm 输出通道，通知条上的"显示日志"按钮可直接打开
 - **可选的后台定时 fetch**：设置 `idea-git.autoFetchMinutes` 后，面板打开期间每隔 N 分钟静默 fetch 一次，只更新分支树与超前/落后箭头。刻意保持安静：不弹凭据输入、不弹错误提示，仓库没有远端时一个子进程也不 spawn
 - **一个工作区里有多个仓库**：不管它们来自多个工作区文件夹，还是一个普通父目录下并排的十几个工程，都会被一并发现，分支树上方出现仓库切换器（命令面板另有 `GitCharm: 切换仓库`），选择按工作区记忆；切换会清掉属于另一个仓库的状态，而不是拿"看着像真的"的同名分支与短哈希继续用。只有一个仓库时这个控件不出现
 
@@ -291,6 +300,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | `idea-git.language` | 界面显示语言：`auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | 启用调试日志（输出到扩展宿主控制台） | `false` |
 | `idea-git.autoFetchMinutes` | 面板打开期间每隔 N 分钟静默 fetch 一次远端（`0` 表示关闭） | `0` |
+| `idea-git.protectedBranches` | 强制推送或删除前需要二次确认的分支模式（支持 `*` 通配） | `["main", "master"]` |
 
 ## 开发
 

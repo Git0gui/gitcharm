@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -581,6 +581,92 @@ describe('pickFetchRemote', () => {
     });
 });
 
+describe('remoteNameFromUpstream', () => {
+    it('takes the leading segment, keeping slashed branch names intact', () => {
+        assert.equal(remoteNameFromUpstream('origin/main'), 'origin');
+        assert.equal(remoteNameFromUpstream('fork/dev/login'), 'fork');
+    });
+
+    it('returns undefined when there is no upstream', () => {
+        assert.equal(remoteNameFromUpstream(undefined), undefined);
+        assert.equal(remoteNameFromUpstream(''), undefined);
+        assert.equal(remoteNameFromUpstream('main'), undefined);
+    });
+});
+
+describe('matchRemoteBranch', () => {
+    it('prefers origin over another remote carrying the same name', () => {
+        assert.deepEqual(
+            matchRemoteBranch(['upstream/main', 'origin/main'], 'main'),
+            { remote: 'origin', ref: 'origin/main' }
+        );
+    });
+
+    it('finds nested branch names and reports their remote', () => {
+        assert.deepEqual(
+            matchRemoteBranch(['origin/dev/login', 'origin/main'], 'dev/login'),
+            { remote: 'origin', ref: 'origin/dev/login' }
+        );
+    });
+
+    it('falls back to a non-origin remote', () => {
+        assert.deepEqual(matchRemoteBranch(['fork/feature/x'], 'feature/x'), { remote: 'fork', ref: 'fork/feature/x' });
+    });
+
+    it('does not mistake a parent branch for a nested one', () => {
+        assert.equal(matchRemoteBranch(['origin/dev'], 'dev/login'), undefined);
+    });
+
+    it('returns undefined without a matching remote branch', () => {
+        assert.equal(matchRemoteBranch([], 'main'), undefined);
+        assert.equal(matchRemoteBranch(['origin/other'], 'main'), undefined);
+    });
+});
+
+describe('resolvePushTarget', () => {
+    it('follows the tracked remote when no target is chosen', () => {
+        assert.deepEqual(
+            resolvePushTarget(['origin/main', 'fork/main'], 'main', 'fork/main'),
+            { remote: 'fork', exists: true, ref: 'fork/main', hasUpstream: true }
+        );
+    });
+
+    it('prefers origin among twin branches when nothing is tracked', () => {
+        assert.deepEqual(
+            resolvePushTarget(['fork/main', 'origin/main'], 'main', undefined),
+            { remote: 'origin', exists: true, ref: 'origin/main', hasUpstream: false }
+        );
+    });
+
+    it('honours an explicit remote even when another remote has the branch', () => {
+        assert.deepEqual(
+            resolvePushTarget(['origin/main', 'fork/main'], 'main', 'origin/main', 'fork'),
+            { remote: 'fork', exists: true, ref: 'fork/main', hasUpstream: false }
+        );
+    });
+
+    it('treats a branch missing on the chosen remote as a first push', () => {
+        assert.deepEqual(
+            resolvePushTarget(['origin/main'], 'main', 'origin/main', 'fork'),
+            { remote: 'fork', exists: false, ref: undefined, hasUpstream: false }
+        );
+    });
+
+    it('handles nested branch names on the chosen remote', () => {
+        assert.deepEqual(
+            resolvePushTarget(['fork/dev/login'], 'dev/login', undefined, 'fork'),
+            { remote: 'fork', exists: true, ref: 'fork/dev/login', hasUpstream: false }
+        );
+    });
+
+    it('defaults to origin when nothing matches', () => {
+        assert.deepEqual(
+            resolvePushTarget([], 'main', undefined),
+            { remote: 'origin', exists: false, ref: undefined, hasUpstream: false }
+        );
+    });
+});
+
 describe('repositoryKey', () => {
     it('unifies separators and drops trailing ones', () => {
         assert.equal(repositoryKey('D:\\Work\\repo\\', false), 'D:/Work/repo');
@@ -751,6 +837,20 @@ describe('classifyGitNetworkFailure', () => {
 
     it('leaves local failures alone', () => {
         assert.equal(classifyGitNetworkFailure('nothing to commit, working tree clean'), 'unknown');
+    });
+});
+
+describe('isMissingGitBinary', () => {
+    it('recognises the spawn errors that mean git is absent or not executable', () => {
+        for (const code of ['ENOENT', 'EACCES', 'EPERM']) {
+            assert.equal(isMissingGitBinary(Object.assign(new Error('spawn git'), { code })), true);
+        }
+    });
+
+    it('does not treat a non-zero git exit or an unrelated error as a missing binary', () => {
+        assert.equal(isMissingGitBinary(Object.assign(new Error('fatal: not a repository'), { code: 128 })), false);
+        assert.equal(isMissingGitBinary(new Error('No git repository found')), false);
+        assert.equal(isMissingGitBinary(undefined), false);
     });
 });
 
@@ -962,5 +1062,103 @@ describe('parseWindowsProxySettings', () => {
     it('survives unrelated and empty output', () => {
         assert.equal(parseWindowsProxySettings(''), undefined);
         assert.equal(parseWindowsProxySettings('ERROR: The system was unable to find the specified registry key.'), undefined);
+    });
+});
+
+describe('parseRemoteList', () => {
+    it('pairs fetch and push lines by remote name', () => {
+        const raw = [
+            'origin\tgit@github.com:me/repo.git (fetch)',
+            'origin\tgit@github.com:me/repo.git (push)',
+            'fork\thttps://github.com/other/repo.git (fetch)',
+            'fork\thttps://github.com/other/repo.git (push)'
+        ].join('\n');
+        assert.deepEqual(parseRemoteList(raw), [
+            { name: 'origin', url: 'git@github.com:me/repo.git' },
+            { name: 'fork', url: 'https://github.com/other/repo.git' }
+        ]);
+    });
+
+    it('prefers the fetch url when they differ', () => {
+        const raw = [
+            'origin\thttps://mirror.example/fetch.git (fetch)',
+            'origin\thttps://example/push.git (push)'
+        ].join('\n');
+        assert.deepEqual(parseRemoteList(raw), [
+            { name: 'origin', url: 'https://mirror.example/fetch.git' }
+        ]);
+    });
+
+    it('does not depend on fetch line order', () => {
+        const raw = [
+            'origin\thttps://example/push.git (push)',
+            'origin\thttps://example/fetch.git (fetch)'
+        ].join('\n');
+        assert.deepEqual(parseRemoteList(raw), [
+            { name: 'origin', url: 'https://example/fetch.git' }
+        ]);
+    });
+
+    it('skips malformed and empty lines', () => {
+        const raw = 'not a remote line\n\norigin\tgit@host:repo.git (fetch)\n';
+        assert.deepEqual(parseRemoteList(raw), [
+            { name: 'origin', url: 'git@host:repo.git' }
+        ]);
+    });
+
+    it('keeps urls containing spaces', () => {
+        const raw = 'local\tfile:///C:/My Repo/repo.git (fetch)';
+        assert.deepEqual(parseRemoteList(raw), [
+            { name: 'local', url: 'file:///C:/My Repo/repo.git' }
+        ]);
+    });
+
+    it('returns an empty list for empty input', () => {
+        assert.deepEqual(parseRemoteList(''), []);
+    });
+});
+
+describe('assertRemoteName', () => {
+    it('accepts names made of letters, digits, dot, dash and underscore', () => {
+        for (const name of ['origin', 'fork-2', 'my_remote', 'team.origin', 'upstream123']) {
+            assert.equal(assertRemoteName(name), name);
+        }
+    });
+
+    it('rejects empty, spaced, leading-dash and traversal names', () => {
+        for (const name of ['', ' ', 'a b', '-bad', '.hidden', 'a..b', 'a/b', 'remote\n']) {
+            assert.throws(() => assertRemoteName(name), Error);
+        }
+    });
+});
+
+describe('matchesBranchPattern', () => {
+    it('matches literal names exactly', () => {
+        assert.equal(matchesBranchPattern('main', ['main']), true);
+        assert.equal(matchesBranchPattern('mainline', ['main']), false);
+        assert.equal(matchesBranchPattern('MAIN', ['main']), false);
+    });
+
+    it('treats * as any run of characters', () => {
+        assert.equal(matchesBranchPattern('release/1.2', ['release/*']), true);
+        assert.equal(matchesBranchPattern('release/', ['release/*']), true);
+        assert.equal(matchesBranchPattern('releases/1.2', ['release/*']), false);
+        assert.equal(matchesBranchPattern('anything', ['*']), true);
+    });
+
+    it('treats regex metacharacters in the pattern literally', () => {
+        assert.equal(matchesBranchPattern('v1.0', ['v1.0']), true);
+        assert.equal(matchesBranchPattern('v1x0', ['v1.0']), false);
+        assert.equal(matchesBranchPattern('fix(a+b)', ['fix(a+b)']), true);
+    });
+
+    it('ignores blank patterns and matches any entry in the list', () => {
+        assert.equal(matchesBranchPattern('dev', ['', '  ', 'main', 'dev']), true);
+        assert.equal(matchesBranchPattern('dev', []), false);
+        assert.equal(matchesBranchPattern('dev', ['main', 'release/*']), false);
+    });
+
+    it('trims surrounding whitespace in configured patterns', () => {
+        assert.equal(matchesBranchPattern('main', ['  main  ']), true);
     });
 });

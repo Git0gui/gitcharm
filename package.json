@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -186,6 +186,11 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.manageRemotes",
+        "title": "%cmd.manageRemotes%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.createTag",
         "title": "%cmd.createTag%",
         "category": "GitCharm"
@@ -228,6 +233,11 @@
       {
         "command": "idea-git.selectRepository",
         "title": "%cmd.selectRepository%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.showLog",
+        "title": "%cmd.showLog%",
         "category": "GitCharm"
       }
     ],
@@ -373,6 +383,17 @@
           "default": 0,
           "minimum": 0,
           "description": "%config.autoFetchMinutes%"
+        },
+        "idea-git.protectedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "main",
+            "master"
+          ],
+          "description": "%config.protectedBranches%"
         }
       }
     }

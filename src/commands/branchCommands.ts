@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
-import { parseLogLine, formatGitError } from '../services/gitUtils';
+import { formatGitError, matchesBranchPattern, redactUrlCredentials } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
@@ -20,6 +20,26 @@ export function registerBranchCommands(
     gitService: GitService,
     graphView: GraphViewProvider
 ): void {
+    /**
+     * Network failures hide long stderr behind a capped, friendly message; the
+     * output channel carries the full text. Offer it right where the failure is
+     * reported instead of making the user find the command on their own.
+     */
+    function showNetworkError(message: string): void {
+        void vscode.window.showErrorMessage(message, t('log.showEntry')).then(choice => {
+            if (choice) {void vscode.commands.executeCommand('idea-git.showLog');}
+        });
+    }
+
+    /**
+     * Patterns from `idea-git.protectedBranches`. They only add a confirmation
+     * step, never block the operation — a user who really means it can proceed.
+     */
+    const protectedPatterns = (): string[] => {
+        const configured = vscode.workspace.getConfiguration('idea-git').get<string[]>('protectedBranches', []);
+        return Array.isArray(configured) ? configured : [];
+    };
+
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.createBranch', async () => {
             const branchName = await vscode.window.showInputBox({
@@ -120,7 +140,9 @@ export function registerBranchCommands(
             }
 
             const confirm = await graphView.showDialog(
-                t('branch.deleteConfirm', { name: branchName }),
+                t(matchesBranchPattern(branchName, protectedPatterns())
+                    ? 'branch.deleteProtectedConfirm'
+                    : 'branch.deleteConfirm', { name: branchName }),
                 [t('branch.deleteBtn'), t('common.cancel')],
                 'warn'
             );
@@ -328,82 +350,30 @@ export function registerBranchCommands(
             }
 
             try {
-                // Remote-tracking branch names come from our refs cache (loose refs +
-                // packed-refs on disk), so this never waits on another extension.
-                const branchDetails = await gitService.getBranchesWithDetails(false);
-                const remoteNames = branchDetails.remote.map(b => b.name);
-                const searchName = branchName.startsWith('origin/') ? branchName : `origin/${branchName}`;
-                const remoteExists = remoteNames.includes(searchName);
-                logger.debug(`[GitCharm] Push check: looking for ${searchName}, found: ${remoteExists}`);
+                // Everything the dialog shows for a target remote, including the
+                // remote choice itself. The dialog can switch targets; the preview
+                // it resolved with comes back so the push uses the same one.
+                const preview = await gitService.getPushPreview(branchName);
+                logger.debug(`[GitCharm] Push check: branch ${branchName} -> ${preview.remote}, exists: ${preview.remoteExists}`);
 
-                // For existing branches, get commits for display
-                // For new branches, skip commit fetching (show empty list)
-                let commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> = [];
-                let hasUpstream = false;
-                let aheadCount = 0;
-                let baseRef: string | undefined; // ref the "全部提交" aggregate diff compares against
-                const isFirstPush = !remoteExists; // First push if remote branch doesn't exist
-
-                if (remoteExists) {
-                    baseRef = `origin/${branchName}`;
-                    // Get branch details from cache (same data source as divergence arrows)
-                    const branchDetails = await gitService.getBranchesWithDetails(false);
-                    const localBranch = branchDetails.local.find(b => b.name === branchName);
-
-                    if (localBranch) {
-                        aheadCount = localBranch.ahead || 0;
-                        baseRef = localBranch.upstream || baseRef;
-
-                        if (localBranch.upstream) {
-                            // Has upstream - use the same method as divergence arrows
-                            hasUpstream = true;
-                            if (aheadCount > 0) {
-                                const aheadCommits = await gitService.getAheadCommits(branchName, localBranch.upstream);
-                                commits = aheadCommits.map(c => ({
-                                    hash: c.hash, shortHash: c.shortHash, message: c.message, author: c.author, date: c.date
-                                }));
-                            }
-                        } else {
-                            // No upstream configured, but remote branch exists - compare directly
-                            const remoteRef = `origin/${branchName}`;
-                            const output = (await gitService.executeGitArgs([
-                                'log', `${remoteRef}..${branchName}`, '--format=%H|%h|%an|%ae|%ai|%ar|%s|%P'
-                            ])).trim();
-                            if (output) {
-                                for (const line of output.split('\n')) {
-                                    if (!line.trim()) {continue;}
-                                    const commit = parseLogLine(line);
-                                    if (commit) {
-                                        commits.push({
-                                            hash: commit.hash,
-                                            shortHash: commit.shortHash,
-                                            message: commit.message,
-                                            author: commit.author,
-                                            date: commit.date
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Only show "up to date" message if we have upstream AND no ahead commits AND no behind commits
-                    const behindCount = localBranch?.behind || 0;
-                    if (hasUpstream && aheadCount === 0 && behindCount === 0) {
-                        vscode.window.showInformationMessage(t('push.upToDate', { name: branchName }));
-                        return;
-                    }
-                    // If behind remote, still show dialog with force-push option
-                    if (behindCount > 0 && aheadCount === 0) {
-                        logger.debug(`[GitCharm] Branch ${branchName} is behind remote by ${behindCount} commits; showing push dialog with force option`);
-                    }
-                }
-                // For new branches or branches without upstream, commits array may be empty but we still show the dialog
-
-                // Show dialog with state information
-                const result = await graphView.showPushDialog(branchName, commits, remoteExists, isFirstPush, baseRef);
+                // Nothing ahead is not a reason to skip the dialog: it is where the
+                // user reviews what would be sent (and can force-push). The dialog
+                // itself labels this state "已是最新".
+                const result = await graphView.showPushDialog(preview);
 
                 if (!result || result.action === 'cancel') {return;}
+                const target = result.preview;
+
+                // Force-push is the one push that rewrites history others may
+                // already have; ask again when the target is protected.
+                if (result.force === true && matchesBranchPattern(branchName, protectedPatterns())) {
+                    const proceed = await graphView.showDialog(
+                        t('push.protectedConfirm', { name: branchName }),
+                        [t('push.forceAnyway'), t('common.cancel')],
+                        'warn'
+                    );
+                    if (proceed !== t('push.forceAnyway')) {return;}
+                }
 
                 // Progress, not a silent wait: a push over our own askpass can stop for
                 // a credential box, and `_execNetwork` sets no timeout so a large
@@ -412,8 +382,16 @@ export function registerBranchCommands(
                     location: vscode.ProgressLocation.Notification,
                     title: t('push.pushing', { name: branchName }),
                     cancellable: false
-                }, () => gitService.push('origin', branchName, result.force === true));
-                vscode.window.showInformationMessage(t(result.force ? 'push.forceSuccess' : 'push.success', { name: branchName }));
+                }, () => gitService.push(target.remote, branchName, result.force === true, !target.hasUpstream));
+                // git exits 0 with "Everything up-to-date" on stderr, so without this
+                // the user would be told a push happened when nothing was sent.
+                const pushedNothing = !result.force && target.hasUpstream
+                    && target.aheadCount === 0 && target.behindCount === 0;
+                if (pushedNothing) {
+                    vscode.window.showInformationMessage(t('push.upToDate', { name: branchName }));
+                } else {
+                    vscode.window.showInformationMessage(t(result.force ? 'push.forceSuccess' : 'push.success', { name: branchName }));
+                }
 
                 // Invalidate cache after push to ensure fresh divergence data
                 gitService.invalidateVolatile();
@@ -431,6 +409,7 @@ export function registerBranchCommands(
                 // Detect on git's raw output (a long dump can push the keyword past
                 // the display cap), show the formatted one.
                 const rawText = combineErrorText(error);
+                logger.error(`[GitCharm] push failed: ${redactUrlCredentials(rawText)}`);
                 // Parse common git push errors into user-friendly messages
                 let friendlyMsg: string;
                 if (rawText.includes('non-fast-forward') || rawText.includes('[rejected]')) {
@@ -444,7 +423,7 @@ export function registerBranchCommands(
                 } else {
                     friendlyMsg = t('push.failed', { error: formatGitError(error) });
                 }
-                vscode.window.showErrorMessage(friendlyMsg);
+                showNetworkError(friendlyMsg);
             }
         }),
 
@@ -496,6 +475,7 @@ export function registerBranchCommands(
                 if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 // Check for pull-specific conflict errors first
                 const errorText = combineErrorText(error);
+                logger.error(`[GitCharm] pull failed: ${redactUrlCredentials(errorText)}`);
                 const lowerError = errorText.toLowerCase();
                 const isPullConflict = lowerError.includes('pulling is not possible') ||
                                        lowerError.includes('unmerged files') ||
@@ -525,7 +505,7 @@ export function registerBranchCommands(
                 );
 
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('pull.failed', { error: formatGitError(error) }));
+                    showNetworkError(t('pull.failed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -540,7 +520,9 @@ export function registerBranchCommands(
                 vscode.window.showInformationMessage(t('fetch.success'));
                 graphView.refresh();
             } catch (error) {
-                vscode.window.showErrorMessage(t('fetch.failed', { error: formatGitError(error) }));
+                const fetchErrorText = combineErrorText(error);
+                logger.error(`[GitCharm] fetch failed: ${redactUrlCredentials(fetchErrorText)}`);
+                showNetworkError(t('fetch.failed', { error: formatGitError(error) }));
             }
         }),
 
@@ -583,7 +565,13 @@ export function registerBranchCommands(
             }
 
             try {
-                const result = await gitService.updateBranch(branchName);
+                // The panel's 拉取 entry lands here, and updateBranch fetches/pulls over
+                // the network — same rule as push/pull/fetch: never wait silently.
+                const result = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('branch.updating', { name: branchName }),
+                    cancellable: false
+                }, () => gitService.updateBranch(branchName));
                 const first = (result || '').split('\n')[0];
                 vscode.window.showInformationMessage(t('branch.updated', { name: branchName, detail: first ? `: ${first}` : '' }));
                 graphView.refresh();
@@ -595,6 +583,7 @@ export function registerBranchCommands(
                 if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 // Check for pull-specific conflict errors first
                 const errorText = combineErrorText(error);
+                logger.error(`[GitCharm] update failed: ${redactUrlCredentials(errorText)}`);
                 const lowerError = errorText.toLowerCase();
                 const isPullConflict = lowerError.includes('pulling is not possible') ||
                                        lowerError.includes('unmerged files') ||
@@ -624,7 +613,7 @@ export function registerBranchCommands(
                 );
 
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('branch.updateFailed', { error: formatGitError(error) }));
+                    showNetworkError(t('branch.updateFailed', { error: formatGitError(error) }));
                 }
             }
         }),

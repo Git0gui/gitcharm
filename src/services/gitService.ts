@@ -28,11 +28,17 @@ import {
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
     parseGitConfigRemoteNames,
+    parseRemoteList,
+    assertRemoteName,
     formatGitError,
     classifyGitNetworkFailure,
+    isMissingGitBinary,
     redactUrlCredentials,
     gitFailureHost,
     pickFetchRemote,
+    remoteNameFromUpstream,
+    matchRemoteBranch,
+    resolvePushTarget,
     collectRepositoryRoots,
     discoverRepositoryRoots,
     repositoryKey,
@@ -42,6 +48,7 @@ import {
     StashEntry,
     ReflogEntry,
     StatusEntry,
+    RemoteInfo,
     WorkingTreeSummary
 } from './gitUtils';
 import { t } from '../i18n';
@@ -100,6 +107,30 @@ export interface BranchDetails {
     current: string;
     local: Array<{ name: string; upstream?: string; ahead: number; behind: number }>;
     remote: Array<{ name: string }>;
+}
+
+export interface PushPreviewCommit {
+    hash: string;
+    shortHash: string;
+    message: string;
+    author: string;
+    date: string;
+}
+
+/** Everything the push dialog needs for one target remote. */
+export interface PushPreview {
+    branch: string;
+    remote: string;
+    /** Every configured remote, so the dialog can offer another target. */
+    remotes: string[];
+    remoteExists: boolean;
+    isFirstPush: boolean;
+    hasUpstream: boolean;
+    aheadCount: number;
+    behindCount: number;
+    /** Ref the aggregate diff compares against; undefined before the first push. */
+    baseRef?: string;
+    commits: PushPreviewCommit[];
 }
 
 type BranchTrackMap = Map<string, { upstream?: string; ahead: number; behind: number }>;
@@ -177,6 +208,9 @@ export class GitService {
     private _pinnedRoot: string | undefined;
     private readonly _memento: vscode.Memento;
     private static readonly PINNED_REPOSITORY_KEY = 'idea-git.selectedRepository';
+    // A positive `git --version` probe from an earlier session. Stored per
+    // workspace; only the positive result is remembered (see the constructor).
+    private static readonly GIT_AVAILABLE_KEY = 'idea-git.gitAvailable';
     // Cached result of the `git --version` probe (undefined = not probed yet)
     private _gitAvailable: boolean | undefined;
 
@@ -196,6 +230,15 @@ export class GitService {
         // A pin from an earlier session is only honoured while that folder is
         // still a repository; otherwise discovery takes over unchanged.
         this._pinnedRoot = this._isRepository(memento.get<string>(GitService.PINNED_REPOSITORY_KEY));
+        // A machine that had git last session almost always still has it, so the
+        // remembered positive skips the `git --version` spawn that otherwise sits
+        // in front of the first data load. It is only a shortcut, not a belief:
+        // the first real command doubles as the re-probe, and a spawn that never
+        // reaches the binary (_noteMissingGit) flips this off. A remembered
+        // negative is never restored — git may have been installed since.
+        if (memento.get<boolean>(GitService.GIT_AVAILABLE_KEY) === true) {
+            this._gitAvailable = true;
+        }
         this._repositoryPath = this._resolveRoot();
 
         // Load persisted branch cache on startup
@@ -302,14 +345,27 @@ export class GitService {
         try {
             await runGit(['--version'], { cwd, timeoutMs: 8000 });
             this._gitAvailable = true;
+            // Fire and forget: failing to remember is harmless, the probe repeats.
+            void this._memento.update(GitService.GIT_AVAILABLE_KEY, true);
         } catch (error) {
             // Only a failed spawn (git missing / not executable) means "no git";
             // a non-zero exit comes from a binary that is installed and working.
-            const code = (error as { code?: unknown }).code;
-            this._gitAvailable = code !== 'ENOENT' && code !== 'EACCES' && code !== 'EPERM';
+            this._gitAvailable = !isMissingGitBinary(error);
             logger.debug('[GitCharm] git binary probe:', this._gitAvailable, error);
         }
         return this._gitAvailable;
+    }
+
+    /**
+     * A spawn failed before git ran. Remember it so the next `isGitAvailable()`
+     * answers without another probe and the panel can fall back to the "no git"
+     * guidance instead of repeating a toast nobody can act on.
+     */
+    private _noteMissingGit(error: unknown): void {
+        if (!isMissingGitBinary(error) || this._gitAvailable === false) {return;}
+        logger.info('[GitCharm] git binary disappeared; dropping the remembered availability');
+        this._gitAvailable = false;
+        void this._memento.update(GitService.GIT_AVAILABLE_KEY, undefined);
     }
 
     /**
@@ -804,7 +860,12 @@ export class GitService {
         if (!repo) {
             throw new Error('No git repository found');
         }
-        return runGit(args, { cwd: repo, ...opts });
+        try {
+            return await runGit(args, { cwd: repo, ...opts });
+        } catch (error) {
+            this._noteMissingGit(error);
+            throw error;
+        }
     }
 
     /**
@@ -1248,17 +1309,6 @@ export class GitService {
     }
 
     /**
-     * Whether `git stash push` would save anything. Only tracked changes count:
-     * untracked files are left in place (no `-u`), so a tree whose only changes
-     * are untracked would produce "No local changes to save" and an empty stack.
-     */
-    async hasStashableChanges(): Promise<boolean> {
-        const entries = await this.getStatusEntries();
-        return entries.some(entry => !entry.untracked && !entry.ignored
-            && (entry.indexStatus !== ' ' || entry.worktreeStatus !== ' '));
-    }
-
-    /**
      * Create a new branch from a specific commit (default HEAD)
      */
     async createBranch(branchName: string, startPoint: string = 'HEAD'): Promise<void> {
@@ -1352,16 +1402,16 @@ export class GitService {
         const current = await this.getCurrentBranch();
         let upstream = await this.getUpstream(branchName);
         
-        // If no upstream configured, try to infer from remote branches
+        // If no upstream configured, infer it from a remote branch of the same
+        // name. Any remote counts, not just origin — a fork-only checkout has no
+        // `origin` at all, and a branch name may contain slashes.
         if (!upstream) {
             const branchDetails = await this.getBranchesWithDetails(false);
-            const remoteBranchName = `origin/${branchName}`;
-            const hasRemoteBranch = branchDetails.remote.some(b => b.name === remoteBranchName);
-            
-            if (hasRemoteBranch) {
+            const match = matchRemoteBranch(branchDetails.remote.map(b => b.name), branchName);
+            if (match) {
                 // Set upstream tracking relationship
-                upstream = remoteBranchName;
-                await this._execMutate(['branch', `--set-upstream-to=${remoteBranchName}`, branchName]);
+                upstream = match.ref;
+                await this._execMutate(['branch', `--set-upstream-to=${match.ref}`, branchName]);
             } else {
                 throw new Error(t('err.noUpstreamNoRemote', { name: branchName }));
             }
@@ -1373,7 +1423,8 @@ export class GitService {
             const pullStrategy = config.get('pullStrategy', 'merge');
             const useRebase = pullStrategy === 'rebase';
             logger.debug('[GitCharm] updateBranch() pulling current branch with useRebase:', useRebase);
-            return this.pull('origin', undefined, useRebase);
+            // Pull from the remote the branch tracks; "origin" is only a fallback.
+            return this.pull(remoteNameFromUpstream(upstream) ?? 'origin', undefined, useRebase);
         }
         // upstream is like "origin/main"; split into remote and remote branch
         const slash = upstream.indexOf('/');
@@ -1383,7 +1434,6 @@ export class GitService {
         
         // Try to fast-forward update the local branch reference
         // Use git update-ref for a safer approach that respects branch protection
-        const remoteBranch = upstream.slice(remote.length + 1);
         try {
             // First try: use merge-base to check if fast-forward is possible
             const baseOutput = await this.executeGitArgs(['merge-base', branchName, upstream]);
@@ -1688,11 +1738,16 @@ export class GitService {
 
     /**
      * Push current branch to remote
+     *
+     * `setUpstream` is what IDEA does on a first push: `git push -u` leaves the
+     * local branch tracking the one it just created. Without it the branch has
+     * no upstream afterwards, so ahead/behind stays empty and the next push
+     * looks like another first push.
      */
-    async push(remote: string = 'origin', branchName?: string, force: boolean = false): Promise<string> {
+    async push(remote: string = 'origin', branchName?: string, force: boolean = false, setUpstream: boolean = false): Promise<string> {
         assertRef(remote, t('label.remote'));
         if (branchName) {assertRef(branchName);}
-        const args = ['push', ...(force ? ['--force-with-lease'] : []), remote, ...(branchName ? [branchName] : [])];
+        const args = ['push', ...(force ? ['--force-with-lease'] : []), ...(setUpstream ? ['--set-upstream'] : []), remote, ...(branchName ? [branchName] : [])];
         const output = await this._execNetwork(args);
         return output || t('push.pushedTo', { remote, branch: branchName ? ' ' + branchName : '' });
     }
@@ -1718,21 +1773,75 @@ export class GitService {
     }
 
     /**
-     * Remote a background fetch should contact, read straight from the config
-     * file (no subprocess, worktree-safe like `getRemoteWebBase`). Empty when the
-     * repository has no remote, so the scheduler can skip instead of failing on a
-     * doomed `git fetch origin` every tick.
+     * Remotes configured for this repository, read straight from the config
+     * file. Unlike remote-tracking refs this also lists a remote that was just
+     * added and not fetched yet, which is exactly when a push target matters.
      */
-    getFetchRemote(): string {
+    getRemoteNames(): string[] {
         const repoPath = this._repositoryPath;
         const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
-        if (!gitDir) {return '';}
+        if (!gitDir) {return [];}
         try {
             const config = fs.readFileSync(path.join(resolveCommonDir(gitDir), 'config'), 'utf8');
-            return pickFetchRemote(parseGitConfigRemoteNames(config));
+            return parseGitConfigRemoteNames(config);
         } catch {
-            return '';
+            return [];
         }
+    }
+
+    /**
+     * Remote a background fetch should contact (no subprocess, worktree-safe
+     * like `getRemoteWebBase`). Empty when the repository has no remote, so the
+     * scheduler can skip instead of failing on a doomed `git fetch origin`
+     * every tick.
+     */
+    getFetchRemote(): string {
+        return pickFetchRemote(this.getRemoteNames());
+    }
+
+    /** Name + URL of every configured remote, for the management UI. */
+    async getRemotes(): Promise<RemoteInfo[]> {
+        return parseRemoteList(await this.executeGitArgs(['remote', '-v'], { timeoutMs: 5000 }));
+    }
+
+    async addRemote(name: string, url: string): Promise<void> {
+        assertRemoteName(name);
+        await this._execMutate(['remote', 'add', '--', name, this._assertRemoteUrl(url)]);
+        this.invalidateVolatile();
+    }
+
+    async renameRemote(oldName: string, newName: string): Promise<void> {
+        assertRemoteName(oldName);
+        assertRemoteName(newName);
+        // Renaming also moves refs/remotes/<old>/*, which the refs cache
+        // would otherwise keep serving under the old name.
+        await this._execMutate(['remote', 'rename', '--', oldName, newName]);
+        this.invalidateVolatile();
+    }
+
+    async setRemoteUrl(name: string, url: string): Promise<void> {
+        assertRemoteName(name);
+        await this._execMutate(['remote', 'set-url', '--', name, this._assertRemoteUrl(url)]);
+    }
+
+    async removeRemote(name: string): Promise<void> {
+        assertRemoteName(name);
+        await this._execMutate(['remote', 'remove', '--', name]);
+        this.invalidateVolatile();
+    }
+
+    /**
+     * URLs never go through a shell, so quotes and percent-escapes are fine.
+     * Only control characters are rejected: a newline would corrupt the config
+     * entry and split the value in two.
+     */
+    private _assertRemoteUrl(url: string): string {
+        const trimmed = url.trim();
+        // eslint-disable-next-line no-control-regex
+        if (!trimmed || /[\x00-\x1f]/.test(trimmed)) {
+            throw new Error(t('err.invalidRemoteUrl', { value: url }));
+        }
+        return trimmed;
     }
 
     /**
@@ -1839,6 +1948,68 @@ export class GitService {
         this._persistedCache.save(this._repositoryPath || '', { local: details.local, remote: details.remote });
         
         return details;
+    }
+
+    /**
+     * What a push of `branchName` to `preferredRemote` would send: the commit
+     * list the dialog shows, the ref its aggregate diff compares against, and
+     * ahead/behind counts. Recomputed when the user switches remotes in the
+     * dialog; see resolvePushTarget for how a target is chosen.
+     */
+    async getPushPreview(branchName: string, preferredRemote?: string): Promise<PushPreview> {
+        const details = await this.getBranchesWithDetails(false);
+        const localBranch = details.local.find(b => b.name === branchName);
+        const target = resolvePushTarget(
+            details.remote.map(b => b.name),
+            branchName,
+            localBranch?.upstream,
+            preferredRemote
+        );
+        const preview: PushPreview = {
+            branch: branchName,
+            remote: target.remote,
+            remotes: this.getRemoteNames(),
+            remoteExists: target.exists,
+            isFirstPush: !target.exists,
+            hasUpstream: target.hasUpstream,
+            aheadCount: 0,
+            behindCount: 0,
+            baseRef: target.ref,
+            commits: []
+        };
+        if (!target.exists) {return preview;}
+
+        if (target.hasUpstream && localBranch) {
+            preview.aheadCount = localBranch.ahead || 0;
+            preview.behindCount = localBranch.behind || 0;
+            if (preview.aheadCount > 0) {
+                const ahead = await this.getAheadCommits(branchName, localBranch.upstream!);
+                preview.commits = ahead.map(c => ({
+                    hash: c.hash, shortHash: c.shortHash, message: c.message, author: c.author, date: c.date
+                }));
+            }
+            return preview;
+        }
+
+        // No upstream on this remote: compare directly against the remote ref.
+        const output = (await this.executeGitArgs([
+            'log', `${target.ref}..${branchName}`, '--format=%H|%h|%an|%ae|%ai|%ar|%s|%P'
+        ])).trim();
+        for (const line of output.split('\n')) {
+            if (!line.trim()) {continue;}
+            const commit = parseLogLine(line);
+            if (commit) {
+                preview.commits.push({
+                    hash: commit.hash,
+                    shortHash: commit.shortHash,
+                    message: commit.message,
+                    author: commit.author,
+                    date: commit.date
+                });
+            }
+        }
+        preview.aheadCount = preview.commits.length;
+        return preview;
     }
 
     /**
@@ -1995,10 +2166,14 @@ export class GitService {
     }
 
     /**
-     * Save current changes as a stash with an optional message
+     * Save current changes as a stash with an optional message.
+     * `includeUntracked` maps to `-u`: new files are stored too, which is what
+     * makes the working tree actually clean afterwards.
      */
-    async saveStash(message?: string): Promise<void> {
-        await this._execMutate(['stash', 'push', ...(message ? ['-m', assertShellSafe(message, t('label.stashMessage'))] : [])]);
+    async saveStash(message?: string, includeUntracked = false): Promise<void> {
+        const args = ['stash', 'push', ...(includeUntracked ? ['--include-untracked'] : [])];
+        if (message) {args.push('-m', assertShellSafe(message, t('label.stashMessage')));}
+        await this._execMutate(args);
     }
 
     async applyStash(index: number = 0): Promise<void> {

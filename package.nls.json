@@ -11,6 +11,7 @@
     "cmd.rebaseOnto": "Rebase onto...",
     "cmd.pushBranch": "Push",
     "cmd.pullBranch": "Pull",
+    "cmd.showLog": "Show Log",
     "cmd.fetch": "Fetch Remote Updates",
     "cmd.compareBranch": "Compare with Current Branch",
     "cmd.newBranchFrom": "New Branch from Here",
@@ -30,6 +31,7 @@
     "cmd.amendCommit": "Amend Last Commit (Fold Current Changes In)",
     "cmd.openCommitOnRemote": "Open Commit on Remote Web",
     "cmd.openBranchOnRemote": "Open Branch on Remote Web",
+    "cmd.manageRemotes": "Manage Remotes",
     "cmd.createTag": "Create Tag on Commit (Lightweight or Annotated)",
     "cmd.deleteTag": "Delete Local Tag",
     "cmd.pushTag": "Push Tag to Remote",
@@ -49,5 +51,6 @@
     "config.language.zh-cn": "Chinese (Simplified)",
     "config.language.en": "English",
     "config.debug": "Enable debug logging (written to the extension host console for troubleshooting)",
-    "config.autoFetchMinutes": "Fetch from the remote every N minutes while the GitCharm panel is open. 0 (the default) disables it. Silent: no credential prompt, no error toast."
+    "config.autoFetchMinutes": "Fetch from the remote every N minutes while the GitCharm panel is open. 0 (the default) disables it. Silent: no credential prompt, no error toast.",
+    "config.protectedBranches": "Branch name patterns that ask for confirmation before a force-push or deletion. `*` matches any run of characters (e.g. `release/*`). The operation is never blocked outright."
 }
