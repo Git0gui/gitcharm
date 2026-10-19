@@ -2372,7 +2372,15 @@ window.addEventListener('message', function (ev) {
         state.current = m.branch;
         renderTree();
     } else if (m.command === 'revealCommit') {
+        // A reveal is a single-selection jump from another surface (blame, file
+        // history): keep the multi-select set in sync, and drop the previous
+        // multi-commit payload — renderDetail() prefers it over state.detail,
+        // so leaving it behind would show the old commit's data.
         state.selectedHash = m.hash;
+        state.selectedHashes = [m.hash];
+        state.lastClickedIndex = -1;
+        state.multiCommits = null;
+        state.multiFiles = null;
         state.detailVisible = true;
         applyRowSelection();
         var el = document.querySelector('.row[data-hash="' + m.hash + '"]');
