@@ -192,6 +192,8 @@ var state = {
     // cursor back on the same thing instead of jumping to another row.
     treeCursor: '',
     fileCursor: '',
+    /** The file whose diff is shown under the list; null hides that strip. */
+    preview: null,
     detail: null,
     collapsed: {},
     collapsedSec: {},
@@ -299,6 +301,11 @@ function applyRestoreNow() {
         document.getElementById('d-files').style.height = saved.filesHeight + 'px';
         document.getElementById('d-files').style.flex = 'none';
     }
+    if (saved.previewHeight) {
+        var savedPreview = document.getElementById('d-preview');
+        savedPreview.style.height = saved.previewHeight + 'px';
+        savedPreview.style.flex = 'none';
+    }
 
     function setup(resizerId, panelId, minW, invert) {
         var resizer = document.getElementById(resizerId);
@@ -329,7 +336,7 @@ function applyRestoreNow() {
         });
     }
 
-    function setupV(resizerId, targetId, minH) {
+    function setupV(resizerId, targetId, minH, stateKey) {
         var resizer = document.getElementById(resizerId);
         var target = document.getElementById(targetId);
         if (!resizer || !target) return;
@@ -351,7 +358,7 @@ function applyRestoreNow() {
                 document.body.style.cursor = '';
                 document.body.style.userSelect = '';
                 var st = vscode.getState() || {};
-                st['filesHeight'] = target.offsetHeight;
+                st[stateKey] = target.offsetHeight;
                 vscode.setState(st);
             }
             document.addEventListener('mousemove', onMove);
@@ -361,7 +368,8 @@ function applyRestoreNow() {
 
     setup('resizer-left', 'left', 120, false);
     setup('resizer-right', 'right', 180, true);
-    setupV('resizer-info', 'd-files', 60);
+    setupV('resizer-info', 'd-files', 60, 'filesHeight');
+    setupV('resizer-preview', 'd-preview', 80, 'previewHeight');
 })();
 
 var palette = ['#d060a0','#4a90d9','#4ab07a','#d9a04a','#8a6ad0','#4ab0a8','#d0704a','#7a8ab0','#e070b0','#60c0b0','#c0b060','#8070e0'];
@@ -893,6 +901,9 @@ function selectCommitIndex(index, extend) {
 
 /** Ask the host for the detail pane of the current selection (single or merged). */
 function loadSelectedDetail() {
+    // The file list is about to be replaced, so a diff of one of its rows would
+    // describe a file that may not even be in the new commit.
+    clearPreview();
     if (state.selectedHashes.length === 0) {
         state.multiCommits = null;
         state.multiFiles = null;
@@ -2055,6 +2066,14 @@ document.getElementById('d-files').addEventListener('click', function (e) {
         saveViewState();
         return;
     }
+    // A single click on a file previews its diff in this pane; double-click still
+    // opens the real two-column diff in the editor.
+    var file = e.target.closest('.frow.file');
+    if (file) {
+        state.fileCursor = file.getAttribute('data-path');
+        applyFileCursor();
+        requestFilePreview(state.fileCursor);
+    }
 });
 
 // Double-click a file in the detail panel to open its commit diff (was single-click)
@@ -2101,6 +2120,85 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
             return;
         }
         vscode.postMessage({ command: 'action', action: action, hash: state.selectedHash, path: path });
+    });
+});
+
+/* ---------- inline diff preview ---------- */
+
+/*
+ * One file's diff, drawn under the file list, so reading a change does not always
+ * cost an editor tab. The host classifies every line before sending it — the pane
+ * paints what it is handed and never parses a patch itself.
+ */
+function clearPreview() {
+    state.preview = null;
+    renderPreview();
+}
+
+function requestFilePreview(path) {
+    if (!state.selectedHash || !path) {return;}
+    var hashes = state.selectedHashes.length > 1 ? state.selectedHashes : undefined;
+    state.preview = { path: path, hash: state.selectedHash, loading: true };
+    renderPreview();
+    vscode.postMessage({ command: 'filePreview', path: path, hash: state.selectedHash, hashes: hashes });
+}
+
+function diffLineHtml(line) {
+    return '<div class="dl ' + esc(line.kind || 'context') + '">' +
+        '<span class="dn">' + (line.old === undefined ? '' : line.old) + '</span>' +
+        '<span class="dn">' + (line.next === undefined ? '' : line.next) + '</span>' +
+        '<span class="dt">' + esc(line.text || '') + '</span></div>';
+}
+
+function renderPreview() {
+    var box = document.getElementById('d-preview');
+    var resizer = document.getElementById('resizer-preview');
+    var body = document.getElementById('dp-body');
+    var p = state.preview;
+    if (!p) {
+        box.style.display = 'none';
+        if (resizer) {resizer.style.display = 'none';}
+        body.innerHTML = '';
+        document.getElementById('dp-path').textContent = '';
+        return;
+    }
+    box.style.display = 'flex';
+    if (resizer) {resizer.style.display = 'block';}
+    document.getElementById('dp-path').textContent = p.path;
+    if (p.loading) {
+        body.innerHTML = '<div class="dp-note">' + esc(T('preview.loading')) + '</div>';
+        return;
+    }
+    // Binary/error answers already say everything worth saying; repeating git's
+    // own "Binary files … differ" header under the note adds nothing.
+    var lines = (p.binary || p.error) ? [] : (p.lines || []);
+    var html = '';
+    if (p.error) {
+        html += '<div class="dp-note err">' + esc(T('preview.failed', { error: p.error })) + '</div>';
+    } else if (p.binary) {
+        html += '<div class="dp-note">' + esc(T('preview.binary')) + '</div>';
+    } else if (p.empty) {
+        html += '<div class="dp-note">' + esc(T('preview.empty')) + '</div>';
+    }
+    html += lines.map(diffLineHtml).join('');
+    if (p.truncated) {
+        html += '<div class="dp-note">' + esc(T('preview.truncated', { n: lines.length })) + '</div>';
+    }
+    body.innerHTML = html;
+    body.scrollTop = 0;
+}
+
+document.getElementById('dp-close').addEventListener('click', clearPreview);
+
+document.getElementById('dp-editor').addEventListener('click', function () {
+    var p = state.preview;
+    if (!p || p.loading) {return;}
+    vscode.postMessage({
+        command: 'action',
+        action: 'fileDiff',
+        hash: state.selectedHash,
+        hashes: state.selectedHashes,
+        path: p.path
     });
 });
 
@@ -2234,6 +2332,9 @@ function selectFileRow(row) {
     state.fileCursor = row.getAttribute('data-path');
     applyFileCursor();
     row.scrollIntoView({ block: 'nearest' });
+    // Arrowing through the list previews exactly what clicking it would, so the
+    // keyboard never needs the mouse to read a diff.
+    if (!isDirRow(row)) {requestFilePreview(state.fileCursor);}
 }
 
 function isDirRow(row) {
@@ -2741,6 +2842,8 @@ window.addEventListener('message', function (ev) {
             state.multiCommits = null;
             state.multiFiles = null;
             state.detail = null;
+            // The file list this preview belonged to is gone with the selection.
+            clearPreview();
         }
         
         // Render operation status bar immediately after setting inProgress state
@@ -2795,6 +2898,22 @@ window.addEventListener('message', function (ev) {
         if (!state.selectedHash || m.commit.hash !== state.selectedHash) { return; }
         state.detail = { commit: m.commit, files: m.files };
         renderDetail();
+    } else if (m.command === 'filePreviewResponse') {
+        // Clicking another file (or another commit) fires a new request; a patch
+        // that finishes late must not paint over the selection that replaced it.
+        var p = state.preview;
+        if (!p || p.loading !== true || p.path !== m.path || p.hash !== m.hash) { return; }
+        state.preview = {
+            path: m.path,
+            hash: m.hash,
+            loading: false,
+            lines: m.lines || [],
+            truncated: m.truncated === true,
+            binary: m.binary === true,
+            empty: m.empty === true,
+            error: m.error,
+        };
+        renderPreview();
     } else if (m.command === 'setCurrentBranch') {
         state.current = m.branch;
         renderTree();
@@ -2809,6 +2928,7 @@ window.addEventListener('message', function (ev) {
         state.multiCommits = null;
         state.multiFiles = null;
         state.detailVisible = true;
+        clearPreview();
         applyRowSelection();
         var el = document.querySelector('.row[data-hash="' + m.hash + '"]');
         if (el) el.scrollIntoView({ block: 'center' });

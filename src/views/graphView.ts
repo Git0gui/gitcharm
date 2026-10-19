@@ -6,7 +6,7 @@ import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, We
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
-import { isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
+import { EMPTY_TREE_HASH, isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
 import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { getLocale, t, webviewStrings } from '../i18n';
 
@@ -24,8 +24,6 @@ interface GraphPayload {
     recent: string[];
 }
 
-/** Well-known empty tree: diffing against it marks every file as added (first push). */
-const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
 const ALL_COMMITS_ROW = '__all__';
 /** How often to re-read HEAD while the panel is visible (watcher backstop). */
@@ -794,6 +792,47 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /**
+     * One file's diff for the panel's inline preview. The endpoints are the pair the
+     * editor diff uses on double-click — first parent against the commit, the empty
+     * tree for the initial commit — so the preview can never disagree with the diff
+     * the user opens next.
+     */
+    private async _postFilePreview(hash: string, hashes: string[] | undefined, path: string): Promise<void> {
+        if (!hash || !path) {return;}
+        try {
+            let baseRef = await this._gitService.getDiffBase(hash);
+            let targetRef = hash;
+            if (hashes && hashes.length > 1) {
+                // A group is compared oldest-to-newest, so the endpoints come from
+                // history order rather than the order the rows were clicked in.
+                const ordered = await this._gitService.orderCommitsByHistory(hashes);
+                targetRef = ordered[0];
+                baseRef = await this._gitService.getDiffBase(ordered[ordered.length - 1]);
+            }
+            const diff = await this._gitService.getFileDiffPreview(baseRef, targetRef, path);
+            this._post({
+                command: 'filePreviewResponse',
+                hash, path,
+                lines: diff.lines,
+                truncated: diff.truncated,
+                binary: diff.binary,
+                empty: diff.empty
+            });
+        } catch (error) {
+            logger.error('[GitCharm] Inline diff preview failed:', error);
+            this._post({
+                command: 'filePreviewResponse',
+                hash, path,
+                lines: [],
+                truncated: false,
+                binary: false,
+                empty: false,
+                error: formatGitError(error)
+            });
+        }
+    }
+
     private async _openFileDiff(hash: string, path: string): Promise<void> {
         try {
             const title = `${path} (${hash.substring(0, 7)})`;
@@ -947,6 +986,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     } finally {
                         this._postLoading('multiCommits', false);
                     }
+                    break;
+                case 'filePreview':
+                    await this._postFilePreview(message.hash, message.hashes, message.path);
                     break;
                 case 'refreshBranches':
                     await this._refreshBranchesOnly();
@@ -2132,6 +2174,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             <div id="d-busy" class="busy"><span class="spin"></span>${t('ui.loadingCommitFiles')}</div>
             <div id="d-files"></div>
             <div class="resizer-v" id="resizer-info"></div>
+            <div id="d-preview" style="display: none;">
+                <div class="dp-head">
+                    <span class="dp-path" id="dp-path"></span>
+                    <button class="col-refresh no-spin" id="dp-editor" type="button" title="${t('preview.openInEditor')}">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2.5h4.5V7"/><path d="M13.2 2.8 7.5 8.5"/><path d="M11 9.5v3.2a1.3 1.3 0 0 1-1.3 1.3H3.3A1.3 1.3 0 0 1 2 12.7V6.3A1.3 1.3 0 0 1 3.3 5h3.2"/></svg>
+                    </button>
+                    <button class="col-refresh no-spin" id="dp-close" type="button" title="${t('preview.close')}">&#10005;</button>
+                </div>
+                <div id="dp-body"></div>
+            </div>
+            <div class="resizer-v" id="resizer-preview" style="display: none;"></div>
             <div id="d-info"></div>
         </div>
     </div>

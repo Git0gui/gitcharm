@@ -1,5 +1,6 @@
 import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry, RepositoryOption } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
+import { DiffPreviewLine } from '../services/gitUtils';
 
 /**
  * Message protocol between the extension host and the graph webview.
@@ -107,6 +108,23 @@ export type ExtToWebviewMessage =
     | { command: 'setDivergence'; divergence: Record<string, DivergenceEntry> }
     | { command: 'setCurrentBranch'; branch: string }
     | { command: 'setDetail'; commit: CommitDetail; files: FileStat[] }
+    | {
+        command: 'filePreviewResponse';
+        /**
+         * The selection the answer belongs to. The panel drops the reply unless
+         * both still match: clicking through files fast must not paint an older
+         * file's diff under the newest one.
+         */
+        hash: string;
+        path: string;
+        lines: DiffPreviewLine[];
+        truncated: boolean;
+        binary: boolean;
+        /** No textual hunk at all — the file is unchanged in this commit or unmergeable. */
+        empty: boolean;
+        /** Already formatted for the user; only set when reading the diff failed. */
+        error?: string;
+    }
     | { command: 'setFileIconTheme'; pack?: FileIconPack }
     | { command: 'multiCommitsResponse'; commits: CommitDetail[]; files: FileStat[] }
     | { command: 'revealCommit'; hash: string }
@@ -183,6 +201,14 @@ export type WebviewToExtMessage =
     | { command: 'loadMore' }
     | { command: 'selectCommit'; hash: string; force?: boolean }
     | { command: 'selectCommits'; hashes: string[] }
+    | {
+        command: 'filePreview';
+        /** Commit (or newest of the group) whose version of the file to show. */
+        hash: string;
+        /** Every hash of a multi-select group; the host orders them by history. */
+        hashes?: string[];
+        path: string;
+    }
     | {
         command: 'action';
         action: WebviewAction;

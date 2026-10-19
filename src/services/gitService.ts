@@ -50,7 +50,10 @@ import {
     ReflogEntry,
     StatusEntry,
     RemoteInfo,
-    WorkingTreeSummary
+    WorkingTreeSummary,
+    EMPTY_TREE_HASH,
+    parseDiffPreview,
+    DiffPreview
 } from './gitUtils';
 import { t } from '../i18n';
 
@@ -168,6 +171,13 @@ const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir'
 export class GitService {
     /** Max cached entries per cache (branch list / commit log / per-commit files). */
     static readonly CACHE_MAX = 20; // Reduced from 30 to save memory
+
+    /**
+     * Lines of a single file's diff the panel is willing to draw. Past this the
+     * message payload and the DOM both stop being a preview; the full patch stays
+     * one double-click away in the editor.
+     */
+    static readonly DIFF_PREVIEW_LINES = 1200;
     
     private _repositoryPath: string | undefined;
     private _selectedBranch: string | undefined;
@@ -183,6 +193,8 @@ export class GitService {
     // Immutable caches: keyed by commit hash, safe until evicted
     private _filesCache = new LruCache<FileStat[]>(GitService.CACHE_MAX);
     private _detailCache = new LruCache<CommitDetail>(GitService.CACHE_MAX);
+    /** commit -> diff base. A commit's parent never moves, so this one needs no invalidation. */
+    private _diffBaseCache = new LruCache<string>(100);
 
     // Commit index cache: bounded LRU to avoid unbounded growth
     private _commitIndex = new LruCache<GraphCommit>(200); // Reduced from 500 to save memory
@@ -1376,6 +1388,48 @@ export class GitService {
             return `:${Number.isNaN(stage) ? 0 : stage}:${filePath}`;
         }
         return `${ref}:${filePath}`;
+    }
+
+    /**
+     * Left side of a commit's diff: its first parent, or the empty tree for the
+     * initial commit. Resolved as a hash rather than spelled `hash^` because git
+     * rejects `<root>^` outright, and a preview that fails on the first commit of
+     * a repository is not a preview. Merge commits resolve to parent #1, which is
+     * exactly what the editor diff (`hash^ ↔ hash`) shows, so the two agree.
+     */
+    async getDiffBase(hash: string): Promise<string> {
+        assertHash(hash);
+        const key = `${this._repositoryPath ?? ''}|${hash}`;
+        const hit = this._diffBaseCache.get(key);
+        if (hit) {return hit;}
+        // --quiet: an unresolvable revision exits 1 with no output, which is this
+        // method's answer for a parentless commit, not an error to report.
+        const output = await this.executeGitArgs(
+            ['rev-parse', '--verify', '--quiet', `${hash}^`]
+        ).catch(() => '');
+        const parent = output.trim().replace(/^"|"$/g, '');
+        const base = parent || EMPTY_TREE_HASH;
+        this._diffBaseCache.set(key, base);
+        return base;
+    }
+
+    /**
+     * One file's unified diff between two revisions, already split and counted —
+     * what the panel draws under the file list. Capped by `maxLines` because it is
+     * a preview: the whole patch stays one double-click away in the editor.
+     */
+    async getFileDiffPreview(
+        baseRef: string,
+        targetRef: string,
+        filePath: string,
+        maxLines: number = GitService.DIFF_PREVIEW_LINES
+    ): Promise<DiffPreview> {
+        assertShellSafe(baseRef, t('label.ref'));
+        assertShellSafe(targetRef, t('label.ref'));
+        const patch = await this.executeGitArgs([
+            'diff', '--no-color', '--no-ext-diff', `--unified=3`, `${baseRef}..${targetRef}`, '--', filePath
+        ]);
+        return parseDiffPreview(patch, maxLines);
     }
 
     /**

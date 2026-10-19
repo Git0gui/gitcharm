@@ -48,6 +48,11 @@
                     }
                 } else if (msg.command === 'saveViewState') {
                     /* persistence lives in the host; nothing to do in a preview */
+                } else if (msg.command === 'filePreview') {
+                    // The host answers with already-classified patch rows, so the
+                    // stub hands over the same shape rather than a raw patch.
+                    var pv = P.previews[msg.path] || P.previews.default;
+                    send(Object.assign({ command: 'filePreviewResponse', hash: msg.hash, path: msg.path }, pv));
                 } else if (msg.command === 'getPushAllFiles') {
                     send({ command: 'pushFilesResponse', hash: '__all__', files: P.pushFiles['__all__'] });
                 } else if (msg.command === 'getCommitFilesForPush') {

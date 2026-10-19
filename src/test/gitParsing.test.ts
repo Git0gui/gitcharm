@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern, parseDiffPreview, EMPTY_TREE_HASH } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -1160,5 +1160,89 @@ describe('matchesBranchPattern', () => {
 
     it('trims surrounding whitespace in configured patterns', () => {
         assert.equal(matchesBranchPattern('main', ['  main  ']), true);
+    });
+});
+
+describe('parseDiffPreview', () => {
+    const patchOf = (...rows: string[]) => rows.join('\n') + '\n';
+
+    it('numbers each side from the hunk header and stops counting the other side', () => {
+        const preview = parseDiffPreview(patchOf(
+            'diff --git a/f.txt b/f.txt',
+            'index 1111111..2222222 100644',
+            '--- a/f.txt',
+            '+++ b/f.txt',
+            '@@ -1,3 +1,3 @@',
+            ' line1',
+            '-line2',
+            '+LINE2',
+            ' line3'), 100);
+        assert.deepEqual(preview.lines.filter(l => l.kind !== 'meta').map(l => [l.kind, l.text, l.old, l.next]), [
+            ['hunk', '@@ -1,3 +1,3 @@', undefined, undefined],
+            ['context', 'line1', 1, 1],
+            ['del', 'line2', 2, undefined],
+            ['add', 'LINE2', undefined, 2],
+            ['context', 'line3', 3, 3]
+        ]);
+        assert.equal(preview.empty, false);
+        assert.equal(preview.binary, false);
+        assert.equal(preview.truncated, false);
+    });
+
+    it('handles a hunk whose old side is empty and one that omits the line count', () => {
+        const added = parseDiffPreview(patchOf('@@ -0,0 +1,2 @@', '+a', '+b'), 100);
+        assert.deepEqual(added.lines.map(l => [l.kind, l.old, l.next]), [
+            ['hunk', undefined, undefined],
+            ['add', undefined, 1],
+            ['add', undefined, 2]
+        ]);
+        const single = parseDiffPreview(patchOf('@@ -5 +7 @@', ' x'), 100);
+        const last = single.lines[single.lines.length - 1];
+        assert.deepEqual([last.old, last.next], [5, 7]);
+    });
+
+    it('drops the file headers and keeps mode and rename notices', () => {
+        const preview = parseDiffPreview(patchOf(
+            'diff --git a/o.txt b/n.txt',
+            'index 1111111..2222222 100644',
+            '--- a/o.txt',
+            '+++ b/n.txt',
+            'similarity index 90%',
+            'rename from o.txt',
+            'rename to n.txt',
+            '\\ No newline at end of file'), 100);
+        assert.deepEqual(preview.lines.map(l => `${l.kind}: ${l.text}`), [
+            'meta: similarity index 90%',
+            'meta: rename from o.txt',
+            'meta: rename to n.txt',
+            'meta: \\ No newline at end of file'
+        ]);
+        // nothing but notices: there is no textual hunk to show
+        assert.equal(preview.empty, true);
+    });
+
+    it('flags a binary file without reporting it as an empty change', () => {
+        const preview = parseDiffPreview(patchOf(
+            'diff --git a/x.png b/x.png',
+            'Binary files a/x.png and b/x.png differ'), 100);
+        assert.equal(preview.binary, true);
+        assert.equal(preview.empty, false);
+    });
+
+    it('caps the rendered patch and says it was cut', () => {
+        const preview = parseDiffPreview(patchOf('@@ -1,4 +1,4 @@', ' a', ' b', ' c', ' d'), 2);
+        assert.equal(preview.lines.length, 2);
+        assert.equal(preview.truncated, true);
+    });
+
+    it('reports an empty patch as nothing to show', () => {
+        const preview = parseDiffPreview('', 100);
+        assert.deepEqual(preview.lines, []);
+        assert.equal(preview.empty, true);
+        assert.equal(preview.binary, false);
+    });
+
+    it('uses git\'s well-known empty tree as the root-commit base', () => {
+        assert.equal(EMPTY_TREE_HASH, '4b825dc642cb6eb9a060e54bf8d69288fbee4904');
     });
 });

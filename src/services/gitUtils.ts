@@ -323,6 +323,94 @@ export interface FileStatLike {
     deleted: number;
 }
 
+/** Git's empty tree — the left side when there is no parent commit to diff against. */
+export const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+/** One line of the inline diff preview, already classified for the renderer. */
+export type DiffLineKind = 'add' | 'del' | 'hunk' | 'meta' | 'context';
+
+export interface DiffPreviewLine {
+    kind: DiffLineKind;
+    text: string;
+    /** Line number in the left image; undefined for added lines and headers. */
+    old: number | undefined;
+    /** Line number in the right image; undefined for deleted lines and headers. */
+    next: number | undefined;
+}
+
+export interface DiffPreview {
+    lines: DiffPreviewLine[];
+    truncated: boolean;
+    binary: boolean;
+    /** The file has no textual hunk at all: nothing changed, or git declined to diff it. */
+    empty: boolean;
+}
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const BINARY_MARK = /^Binary files .* differ$/m;
+/** The block that names the two sides: the panel already shows the path above it. */
+const FILE_HEADER = /^(diff --git |index |--- |\+\+\+ )/;
+/** Mode and rename notices: facts the file row alone does not carry. */
+const CHANGE_NOTE = /^(new|deleted|renamed|copied|similarity|rename|copy) /i;
+
+/**
+ * Turn one file's unified diff into the rows the panel draws.
+ *
+ * Line numbers are counted here rather than in the renderer because only the
+ * parser sees the `@@` headers that reset them. The cap is a guard for the DOM,
+ * not for git: the full patch is one double-click away in the editor, so cutting
+ * a 20 000-line diff is a preview decision instead of a lie about the change.
+ */
+export function parseDiffPreview(patch: string, maxLines: number): DiffPreview {
+    const binary = BINARY_MARK.test(patch);
+    const lines: DiffPreviewLine[] = [];
+    let old = 0;
+    let next = 0;
+    let truncated = false;
+
+    for (const raw of patch.split('\n')) {
+        // Cosmetic blank lines between headers carry nothing; a blank line inside
+        // the file itself arrives as ' ' (context prefix + empty text), not as ''.
+        if (raw === '' || FILE_HEADER.test(raw)) {continue;}
+        if (raw.startsWith('@@')) {
+            const m = HUNK_HEADER.exec(raw);
+            if (m) {
+                // A one-line hunk omits the count entirely; a zero count means the
+                // side has no lines in this hunk at all.
+                old = Number.parseInt(m[1], 10);
+                next = Number.parseInt(m[3], 10);
+            }
+            if (lines.length < maxLines) {lines.push({ kind: 'hunk', text: raw, old: undefined, next: undefined });}
+            continue;
+        }
+        if (raw.startsWith('\\') || raw.startsWith('Binary files ') || CHANGE_NOTE.test(raw)) {
+            if (lines.length < maxLines) {lines.push({ kind: 'meta', text: raw, old: undefined, next: undefined });}
+            continue;
+        }
+        const kind: DiffLineKind = raw.startsWith('+') ? 'add' : raw.startsWith('-') ? 'del' : 'context';
+        if (lines.length < maxLines) {
+            lines.push({
+                kind,
+                text: raw.substring(1),
+                old: kind === 'add' ? undefined : old || undefined,
+                next: kind === 'del' ? undefined : next || undefined
+            });
+        } else {
+            truncated = true;
+            break;
+        }
+        if (kind !== 'add') {old++;}
+        if (kind !== 'del') {next++;}
+    }
+
+    return {
+        lines,
+        truncated,
+        binary,
+        empty: !binary && lines.some(l => l.kind !== 'meta') === false
+    };
+}
+
 /**
  * Merge the file lists of several commits into one row per path — what the panel
  * shows when the user selects a group of commits in the log.
