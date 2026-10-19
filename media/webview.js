@@ -2226,13 +2226,14 @@ document.getElementById('d-files').addEventListener('click', function (e) {
         saveViewState();
         return;
     }
-    // A single click on a file previews its diff in this pane; double-click still
-    // opens the real two-column diff in the editor.
+    // A single click pins the keyboard cursor; double-click opens the real
+    // two-column diff in the editor. Only stash files preview inline on this
+    // branch — commit files keep the editor as their diff surface.
     var file = e.target.closest('.frow.file');
     if (file) {
         state.fileCursor = file.getAttribute('data-path');
         applyFileCursor();
-        requestFilePreview(state.fileCursor);
+        if (state.stashDetail) {requestFilePreview(state.fileCursor);}
     }
 });
 
@@ -2505,9 +2506,9 @@ function selectFileRow(row) {
     state.fileCursor = row.getAttribute('data-path');
     applyFileCursor();
     row.scrollIntoView({ block: 'nearest' });
-    // Arrowing through the list previews exactly what clicking it would, so the
-    // keyboard never needs the mouse to read a diff.
-    if (!isDirRow(row)) {requestFilePreview(state.fileCursor);}
+    // A stash's files preview as the cursor moves; a commit's files keep the
+    // editor as their only diff surface on this branch.
+    if (!isDirRow(row) && state.stashDetail) {requestFilePreview(state.fileCursor);}
 }
 
 function isDirRow(row) {

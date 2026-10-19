@@ -270,10 +270,6 @@
                 }
             }]
         }),
-        /** One file's patch drawn under the third pane's list: a single click opens it. */
-        diffPreview: Object.assign({}, base, {
-            steps: [{ do: 'click', sel: file('src/services/gitUtils.ts') }]
-        }),
         /** A stash picked in the tree: its files in the third pane, nothing applied. */
         stashDetail: Object.assign({}, base, {
             steps: [
