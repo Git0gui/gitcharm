@@ -170,7 +170,10 @@ var state = {
     commits: INITIAL.commits || [],
     local: INITIAL.local || [],
     remote: INITIAL.remote || [],
+    favorites: INITIAL.favorites || [],
+    recent: INITIAL.recent || [],
     stashes: [],
+    worktrees: [],
     divergence: {},
     detailVisible: false,
     current: INITIAL.currentBranch || '',
@@ -185,7 +188,20 @@ var state = {
     selectedHash: null,
     selectedHashes: [], // Multi-select support
     lastClickedIndex: -1, // For Shift+click range selection
+    // Which row the arrow keys are on in the tree and file list. Kept as an
+    // identity (branch name / path), not an index, so a re-render can put the
+    // cursor back on the same thing instead of jumping to another row.
+    treeCursor: '',
+    fileCursor: '',
+    /** The file whose diff is shown under the list; null hides that strip. */
+    preview: null,
     detail: null,
+    /**
+     * A stash picked in the tree, shown in place of the commit detail. It carries
+     * the message/date it was taken with: the stack renumbers after a drop, so an
+     * index alone would silently start naming a different stash.
+     */
+    stashDetail: null,
     collapsed: {},
     collapsedSec: {},
     expandedFolder: {},
@@ -292,6 +308,11 @@ function applyRestoreNow() {
         document.getElementById('d-files').style.height = saved.filesHeight + 'px';
         document.getElementById('d-files').style.flex = 'none';
     }
+    if (saved.previewHeight) {
+        var savedPreview = document.getElementById('d-preview');
+        savedPreview.style.height = saved.previewHeight + 'px';
+        savedPreview.style.flex = 'none';
+    }
 
     function setup(resizerId, panelId, minW, invert) {
         var resizer = document.getElementById(resizerId);
@@ -322,7 +343,7 @@ function applyRestoreNow() {
         });
     }
 
-    function setupV(resizerId, targetId, minH) {
+    function setupV(resizerId, targetId, minH, stateKey) {
         var resizer = document.getElementById(resizerId);
         var target = document.getElementById(targetId);
         if (!resizer || !target) return;
@@ -344,7 +365,7 @@ function applyRestoreNow() {
                 document.body.style.cursor = '';
                 document.body.style.userSelect = '';
                 var st = vscode.getState() || {};
-                st['filesHeight'] = target.offsetHeight;
+                st[stateKey] = target.offsetHeight;
                 vscode.setState(st);
             }
             document.addEventListener('mousemove', onMove);
@@ -354,7 +375,8 @@ function applyRestoreNow() {
 
     setup('resizer-left', 'left', 120, false);
     setup('resizer-right', 'right', 180, true);
-    setupV('resizer-info', 'd-files', 60);
+    setupV('resizer-info', 'd-files', 60, 'filesHeight');
+    setupV('resizer-preview', 'd-preview', 80, 'previewHeight');
 })();
 
 var palette = ['#d060a0','#4a90d9','#4ab07a','#d9a04a','#8a6ad0','#4ab0a8','#d0704a','#7a8ab0','#e070b0','#60c0b0','#c0b060','#8070e0'];
@@ -440,6 +462,14 @@ var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="no
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
 // Archive box: the lid, the body and the slot a stash is put through.
 var I_STASH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>';
+// Two overlapping folders: the same repository checked out in several places.
+var I_WORKTREE = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 4.2h4l1 1.3h3.6v6.3H2z"/><path d="M5 2.5h4l1 1.3h3.6v6.4"/></svg>';
+// Five-point star: outline means "not marked", filled is a favorite. Filled instead
+// of a different glyph keeps the mark readable at 12px in any theme.
+var I_STAR = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>';
+var I_STAR_ON = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>';
+// HEAD's own clock — the recent section is what git recorded, not what the user marked.
+var I_CLOCK = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.4 1.6"/></svg>';
 // Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
 // the stroke-based carets used across the panel. currentColor keeps it theme aware.
 var I_FOLDER = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
@@ -532,7 +562,8 @@ function renderTree() {
             }
         }
         
-        return '<div class="' + cls + '" data-branch="' + esc(n) + '" data-title="' + esc(tooltipText) + '" style="padding-left:' + (20 + depth * 12) + 'px">' + icon + '<span class="bname">' + esc(displayName) + '</span>' + arrows + '</div>';
+        return '<div class="' + cls + '" data-branch="' + esc(n) + '" data-title="' + esc(tooltipText) + '" style="padding-left:' + (20 + depth * 12) + 'px">' + icon + '<span class="bname">' + esc(displayName) + '</span>' +
+            (state.favorites.indexOf(n) >= 0 ? '<span class="bmark" data-title="' + esc(T('w.favoriteMark')) + '">' + I_STAR_ON + '</span>' : '') + arrows + '</div>';
     }
     function build(names) {
         var root = { children: {}, leaves: [] };
@@ -584,6 +615,22 @@ function renderTree() {
         }
         return s;
     }
+    // Favorites and Recent keep full names in a chosen order, so they are flat
+    // lists: folding them into the folder tree would sort them alphabetically and
+    // throw away the very order that makes them worth pinning. A name whose branch
+    // is gone drops out here — the mark stays stored (recreate the branch and it
+    // is favorite again), but a row that errors on click would not be acceptable.
+    function flatSection(key, title, names, icon) {
+        var visible = names.filter(function (n) {
+            return match(n) && (n === state.current || state.local.indexOf(n) >= 0 || state.remote.indexOf(n) >= 0);
+        });
+        if (visible.length === 0) {return '';}
+        var s = header(key, title, visible.length);
+        if (!state.collapsedSec[key]) {
+            visible.forEach(function (n) { s += item(n, icon, 0, n); });
+        }
+        return s;
+    }
     // Stash rows carry no branch, so they are not .bitem: the tree's dblclick ->
     // checkout handler must never fire on them.
     function stashItem(entry) {
@@ -591,7 +638,8 @@ function renderTree() {
         var label = entry.message || ref;
         var when = fmtRelativeTime(entry.date);
         var tooltip = ref + '\n' + label + (when ? '\n' + when : '');
-        return '<div class="sitem" data-stash="' + entry.index + '" data-title="' + esc(tooltip) + '" style="padding-left:20px">' +
+        var sel = state.stashDetail && state.stashDetail.index === entry.index ? ' sel' : '';
+        return '<div class="sitem' + sel + '" data-stash="' + entry.index + '" data-title="' + esc(tooltip) + '" style="padding-left:20px">' +
             I_STASH + '<span class="bname">' + esc(label) + '</span>' +
             (when ? '<span class="sdate">' + esc(when) + '</span>' : '') + '</div>';
     }
@@ -601,6 +649,32 @@ function renderTree() {
         var s = header('stash', T('w.stashSection'), visible.length);
         if (!state.collapsedSec['stash']) {
             visible.forEach(function (entry) { s += stashItem(entry); });
+        }
+        return s;
+    }
+    // Worktrees are branches checked out elsewhere. The section stays out of the
+    // way until there is something to compare: a lone current worktree tells the
+    // user nothing. Rows open on double-click; a single click opening a whole
+    // window would be too easy to trigger while browsing.
+    function worktreeItem(entry) {
+        var name = entry.path.split(/[\\/]/).filter(Boolean).pop() || entry.path;
+        var branch = entry.branch || T('w.worktreeDetached');
+        var tip = entry.path + '\n' + branch;
+        if (entry.head) {tip += '\n' + entry.head.substring(0, 7);}
+        if (entry.isCurrent) {tip += '\n' + T('w.worktreeCurrent');}
+        else {tip += '\n' + T('w.worktreeOpenHint');}
+        if (entry.lockReason) {tip += '\n' + entry.lockReason;}
+        var cls = 'witem' + (entry.isCurrent ? ' cur' : '') + (entry.main ? ' main' : '');
+        return '<div class="' + cls + '" data-worktree="' + esc(entry.path) + '" data-title="' + esc(tip) + '" style="padding-left:20px">' +
+            I_WORKTREE + '<span class="bname">' + esc(name) + '</span>' +
+            '<span class="sdate">' + esc(entry.isCurrent ? T('w.worktreeCurrent') : branch) + '</span></div>';
+    }
+    function worktreeSection() {
+        var visible = state.worktrees.filter(function (w) { return !w.prunable; });
+        if (visible.length <= 1) {return '';}
+        var s = header('worktree', T('w.worktreeSection'), visible.length);
+        if (!state.collapsedSec['worktree']) {
+            visible.forEach(function (entry) { s += worktreeItem(entry); });
         }
         return s;
     }
@@ -618,9 +692,14 @@ function renderTree() {
     }
     document.getElementById('btree').innerHTML =
         '<div id="btree-inner">' + head +
+        flatSection('favorites', T('w.favoritesSection'), state.favorites, I_STAR_ON) +
+        // The branch HEAD is on already has its own row at the top of the tree, so
+        // repeating it as "recently checked out" would add a row and no information.
+        flatSection('recent', T('w.recentSection'), state.recent.filter(function (n) { return n !== state.current; }), I_CLOCK) +
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
-        stashSection() + '</div>';
+        stashSection() + worktreeSection() + '</div>';
+    applyTreeCursor();
 }
 
 /* ---------- center commit list ---------- */
@@ -817,6 +896,77 @@ function applyRowSelection() {
     }
 }
 
+/** The rows the list currently shows, in display order — the keyboard counts these. */
+function commitRowList() {
+    return Array.from(document.querySelectorAll('#rows .row'));
+}
+
+/**
+ * Move the selection to the row at `index`; with `extend` the range from the
+ * last anchor is selected, exactly like Shift+click, so both paths obey one rule.
+ */
+function selectCommitIndex(index, extend) {
+    var rows = commitRowList();
+    if (rows.length === 0) {return false;}
+    var at = Math.max(0, Math.min(index, rows.length - 1));
+    var hash = rows[at].getAttribute('data-hash');
+    if (!hash) {return false;}
+
+    var anchor = (state.lastClickedIndex >= 0 && state.lastClickedIndex < rows.length)
+        ? state.lastClickedIndex : at;
+    if (extend) {
+        var start = Math.min(anchor, at), end = Math.max(anchor, at);
+        state.selectedHashes = [];
+        for (var i = start; i <= end; i++) {
+            var h = rows[i].getAttribute('data-hash');
+            if (h) {state.selectedHashes.push(h);}
+        }
+    } else {
+        state.selectedHashes = [hash];
+        state.lastClickedIndex = at;
+    }
+    // The row under the cursor is the "current" one even when extending upward,
+    // where the last hash in the range would be the other end of it.
+    state.selectedHash = hash;
+    state.fileCursor = '';
+    applyRowSelection();
+    rows[at].scrollIntoView({ block: 'nearest' });
+    loadSelectedDetail();
+    return true;
+}
+
+/** Ask the host for the detail pane of the current selection (single or merged). */
+function loadSelectedDetail() {
+    if (state.stashDetail) {
+        // The tree still marks the stash row; a commit selection takes over.
+        state.stashDetail = null;
+        renderTree();
+    }
+    // The file list is about to be replaced, so a diff of one of its rows would
+    // describe a file that may not even be in the new commit.
+    clearPreview();
+    if (state.selectedHashes.length === 0) {
+        state.multiCommits = null;
+        state.multiFiles = null;
+        state.detail = null;
+        renderDetail();
+        saveViewState();
+        return;
+    }
+    state.detail = null;
+    state.multiCommits = null; // Clear old multi-commit data
+    state.multiFiles = null;
+    state.detailVisible = true;
+
+    var info = document.getElementById('d-info');
+    var filesBox = document.getElementById('d-files');
+    info.innerHTML = '<div class="empty">' + T('ui.loading') + '</div>';
+    filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>';
+
+    saveViewState();
+    vscode.postMessage({ command: 'selectCommits', hashes: state.selectedHashes });
+}
+
 /**
  * Render details for multiple selected commits (merged view)
  */
@@ -856,6 +1006,7 @@ function renderMultiCommitDetail(info, filesBox) {
     fh += buildFileRows(mergedFiles, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
+    applyFileCursor();
 }
 
 /**
@@ -1079,11 +1230,83 @@ function applyDetailVisibility() {
     tg.classList.toggle('off', !state.detailVisible);
 }
 
+/** The stash picked in the tree: its own card, then the files it carries. */
+function renderStashDetail(info, filesBox) {
+    var s = state.stashDetail;
+    var ref = 'stash@{' + s.index + '}';
+    var tip = esc(ref) + '\n' + esc(s.message || '') + (s.date ? '\n' + esc(fmtDateTime(s.date)) : '');
+    var mh = '<div class="ccard" data-title="' + tip + '">';
+    mh += '<div class="crow"><span class="hashchip">' + esc(ref) + '</span><span class="cmeta">' + esc(T('w.stashSection')) + '</span></div>';
+    mh += '<div class="crow"><span class="cmsg">' + esc(s.message || ref) + '</span></div>';
+    if (s.date) {
+        mh += '<div class="crow"><span class="cmeta">' + esc(fmtRelativeTime(s.date)) + '</span></div>';
+    }
+    mh += '</div>';
+    info.innerHTML = mh;
+
+    if (s.error) {
+        filesBox.innerHTML = '<div class="empty">' + esc(T('stash.detailFailed', { error: s.error })) + '</div>';
+        return;
+    }
+    if (!s.files) {
+        filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>';
+        return;
+    }
+    if (s.files.length === 0) {
+        filesBox.innerHTML = '<div class="empty">' + T('stash.detailEmpty') + '</div>';
+        return;
+    }
+    var mode = state.fileViewMode || FILE_MODE_TREE;
+    var fh = fileHeadHtml(s.files.length, mode);
+    fh += buildFileRows(s.files, mode, state.collapsed, detailFileRowHtml);
+    filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
+    applyFileCursor();
+}
+
+/**
+ * Show a stash's files without applying it. The host renumbers the stack after a
+ * drop, so the message and date travel with the index: a row that no longer
+ * matches is a different stash and must not keep the old file list on screen.
+ */
+function selectStash(index) {
+    var entry = null;
+    for (var i = 0; i < state.stashes.length; i++) {
+        if (state.stashes[i].index === index) {entry = state.stashes[i]; break;}
+    }
+    clearPreview();
+    state.stashDetail = {
+        index: index,
+        message: entry ? entry.message : '',
+        date: entry ? entry.date : '',
+        files: null
+    };
+    state.selectedHash = null;
+    state.selectedHashes = [];
+    state.lastClickedIndex = -1;
+    state.multiCommits = null;
+    state.multiFiles = null;
+    state.detail = null;
+    state.fileCursor = '';
+    state.detailVisible = true;
+    applyRowSelection();
+    renderTree();
+    renderDetail();
+    saveViewState();
+    vscode.postMessage({ command: 'selectStash', index: index });
+}
+
 function renderDetail() {
     applyDetailVisibility();
     document.getElementById('repo-name').textContent = state.repoName;
     var info = document.getElementById('d-info');
     var filesBox = document.getElementById('d-files');
+    
+    // A stash is not a commit in the log, so it replaces the detail pane instead
+    // of trying to fit into the selected-commits model.
+    if (state.stashDetail) {
+        renderStashDetail(info, filesBox);
+        return;
+    }
     
     // Multi-select mode (2+ commits): show merged details
     if (state.selectedHashes.length > 1 && state.multiCommits) {
@@ -1134,6 +1357,7 @@ function renderDetail() {
     fh += buildFileRows(files, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
+    applyFileCursor();
 }
 
 /** One row of the detail panel's file list, in either display mode. */
@@ -1682,6 +1906,11 @@ document.getElementById('scroll').addEventListener('scroll', function () {
 
 // Click handler for folders/sections (expand/collapse) and HEAD section
 document.getElementById('btree').addEventListener('click', function (e) {
+    var stashRow = e.target.closest('.sitem');
+    if (stashRow) {
+        selectStash(parseInt(stashRow.getAttribute('data-stash'), 10));
+        return;
+    }
     var sec = e.target.closest('.bsec');
     if (sec) {
         var key = sec.getAttribute('data-sec');
@@ -1712,12 +1941,26 @@ document.getElementById('btree').addEventListener('click', function (e) {
 
 // Double-click handler for branch items only (switch branch)
 document.getElementById('btree').addEventListener('dblclick', function (e) {
+    var worktree = e.target.closest('.witem');
+    if (worktree) {
+        // The worktree this window already shows has nowhere to go.
+        if (worktree.classList.contains('cur')) {return;}
+        e.preventDefault();
+        vscode.postMessage({
+            command: 'action',
+            action: 'worktreeOpen',
+            worktreePath: worktree.getAttribute('data-worktree')
+        });
+        return;
+    }
     var item = e.target.closest('.bitem');
     if (!item) return;
     var name = item.getAttribute('data-branch');
     state.selectedBranch = name;
     state.highlight = name;
     state.detail = null;
+    state.stashDetail = null;
+    clearPreview();
     renderTree();
     renderDetail();
     saveViewState();
@@ -1739,12 +1982,39 @@ document.getElementById('tg-files').addEventListener('click', function () {
 });
 
 document.getElementById('rf-files').addEventListener('click', function () {
+    if (state.stashDetail) {
+        selectStash(state.stashDetail.index);
+        return;
+    }
     if (state.selectedHash) {
         vscode.postMessage({ command: 'refreshFiles', hash: state.selectedHash });
     }
 });
 
 document.getElementById('btree').addEventListener('contextmenu', function (e) {
+    var worktreeRow = e.target.closest('.witem');
+    if (worktreeRow) {
+        // This window already shows that worktree, so it has no actions — but the
+        // click still must not fall through to the native context menu.
+        if (worktreeRow.classList.contains('cur')) {
+            e.preventDefault();
+            return;
+        }
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+
+        var worktreePath = worktreeRow.getAttribute('data-worktree');
+        // Git refuses to remove the main worktree, so that row only offers to open.
+        var worktreeMenu = [['worktreeOpen', T('menu.worktreeOpen')]];
+        if (!worktreeRow.classList.contains('main')) {
+            worktreeMenu.push(['worktreeRemove', T('menu.worktreeRemove')]);
+        }
+        showMenu(e.clientX, e.clientY, worktreeMenu, function (action) {
+            vscode.postMessage({ command: 'action', action: action, worktreePath: worktreePath });
+        });
+        return;
+    }
+
     var stashRow = e.target.closest('.sitem');
     if (stashRow) {
         e.preventDefault();
@@ -1772,6 +2042,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
     
     var isRemote = state.remote.indexOf(branch) >= 0;
     var isCurrent = branch === state.current;
+    var isFavorite = state.favorites.indexOf(branch) >= 0;
     
     var menuItems;
     if (isRemote) {
@@ -1801,6 +2072,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['merge', T('menu.merge')],
             ['rebase', T('menu.rebase')],
             ['newBranchFrom', T('menu.newBranchFrom')],
+            ['worktreeAdd', T('menu.worktreeAdd')],
             ['compareBranch', T('menu.compareWithCurrent')],
             ['rename', T('menu.rename')],
             ['deleteBranch', T('menu.deleteBranch')],
@@ -1809,7 +2081,9 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         ];
     }
     
-    showMenu(e.clientX, e.clientY, menuItems, function (action) {
+    // Marking a branch is the one action every kind of row offers, so it goes on
+    // top and the type-specific list keeps its order below it.
+    showMenu(e.clientX, e.clientY, [['toggleFavorite', T(isFavorite ? 'menu.unfavorite' : 'menu.favorite')]].concat(menuItems), function (action) {
         vscode.postMessage({ command: 'action', action: action, branch: branch });
     });
 });
@@ -1849,37 +2123,11 @@ document.getElementById('rows').addEventListener('click', function (e) {
     
     // Update selectedHash for backward compatibility
     state.selectedHash = state.selectedHashes.length > 0 ? state.selectedHashes[state.selectedHashes.length - 1] : null;
-    
+    state.fileCursor = '';
+
     // Update UI
     applyRowSelection();
-    
-    // Load merged files and details for multi-select or single select
-    if (state.selectedHashes.length > 0) {
-        state.detail = null;
-        state.multiCommits = null; // Clear old multi-commit data
-        state.multiFiles = null;
-        state.detailVisible = true;
-        
-        // Show loading state immediately
-        var info = document.getElementById('d-info');
-        var filesBox = document.getElementById('d-files');
-        info.innerHTML = '<div class="empty">' + T('ui.loading') + '</div>';
-        filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>';
-        
-        saveViewState();
-        
-        // Send to extension (works for both single and multi-select)
-        vscode.postMessage({ 
-            command: 'selectCommits', 
-            hashes: state.selectedHashes 
-        });
-    } else {
-        // No selection - clear states
-        state.multiCommits = null;
-        state.multiFiles = null;
-        state.detail = null;
-        renderDetail();
-    }
+    loadSelectedDetail();
 });
 
 document.getElementById('rows').addEventListener('contextmenu', function (e) {
@@ -1978,12 +2226,27 @@ document.getElementById('d-files').addEventListener('click', function (e) {
         saveViewState();
         return;
     }
+    // A single click pins the keyboard cursor; double-click opens the real
+    // two-column diff in the editor. Only stash files preview inline on this
+    // branch — commit files keep the editor as their diff surface.
+    var file = e.target.closest('.frow.file');
+    if (file) {
+        state.fileCursor = file.getAttribute('data-path');
+        applyFileCursor();
+        if (state.stashDetail) {requestFilePreview(state.fileCursor);}
+    }
 });
 
 // Double-click a file in the detail panel to open its commit diff (was single-click)
 document.getElementById('d-files').addEventListener('dblclick', function (e) {
     var file = e.target.closest('.frow.file');
-    if (file && state.selectedHash) {
+    if (!file) {return;}
+    var path = file.getAttribute('data-path');
+    if (state.stashDetail) {
+        vscode.postMessage({ command: 'action', action: 'fileDiff', stash: state.stashDetail.index, path: path });
+        return;
+    }
+    if (state.selectedHash) {
         // With a group selected the host opens one patch document per commit, so it
         // needs every hash, not just the last-clicked one.
         vscode.postMessage({
@@ -1991,7 +2254,7 @@ document.getElementById('d-files').addEventListener('dblclick', function (e) {
             action: 'fileDiff',
             hash: state.selectedHash,
             hashes: state.selectedHashes,
-            path: file.getAttribute('data-path')
+            path: path
         });
     }
 });
@@ -2003,11 +2266,17 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     e.preventDefault();
     if (window._hideTooltip) window._hideTooltip();
     var path = file.getAttribute('data-path');
-    var items = [
+    var items = [];
+    // "Source" is the version the selected commit left behind; with a group
+    // selected there is no single such version, so the item stays single-only.
+    if (state.selectedHashes.length <= 1) {
+        items.push(['fileJumpToSource', T('menu.fileJumpToSource')]);
+    }
+    items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],
         ['fileCherryPick', T('menu.fileCherryPick')],
         ['filterPath', T('menu.filterByPath')]
-    ];
+    );
     showMenu(e.clientX, e.clientY, items, function (action) {
         if (action === 'filterPath') {
             // Purely local: fill the toolbar path box and re-query. Keeping it here
@@ -2019,6 +2288,446 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
         }
         vscode.postMessage({ command: 'action', action: action, hash: state.selectedHash, path: path });
     });
+});
+
+/* ---------- inline diff preview ---------- */
+
+/*
+ * One file's diff, drawn under the file list, so reading a change does not always
+ * cost an editor tab. The host classifies every line before sending it — the pane
+ * paints what it is handed and never parses a patch itself.
+ */
+function clearPreview() {
+    state.preview = null;
+    renderPreview();
+}
+
+function requestFilePreview(path) {
+    var stash = state.stashDetail ? state.stashDetail.index : undefined;
+    if ((!state.selectedHash && stash === undefined) || !path) {return;}
+    var hashes = state.selectedHashes.length > 1 ? state.selectedHashes : undefined;
+    // One key names the side the file list belongs to. It is a string because the
+    // commit side has no hash while a stash is shown, and undefined/null would
+    // otherwise have to compare equal across the two kinds of answer.
+    var key = stash === undefined ? 'commit:' + state.selectedHash : 'stash:' + stash;
+    state.preview = { path: path, key: key, loading: true };
+    renderPreview();
+    vscode.postMessage({ command: 'filePreview', path: path, hash: state.selectedHash || undefined, hashes: hashes, stash: stash });
+}
+
+function diffLineHtml(line) {
+    return '<div class="dl ' + esc(line.kind || 'context') + '">' +
+        '<span class="dn">' + (line.old === undefined ? '' : line.old) + '</span>' +
+        '<span class="dn">' + (line.next === undefined ? '' : line.next) + '</span>' +
+        '<span class="dt">' + esc(line.text || '') + '</span></div>';
+}
+
+function renderPreview() {
+    var box = document.getElementById('d-preview');
+    var resizer = document.getElementById('resizer-preview');
+    var body = document.getElementById('dp-body');
+    var p = state.preview;
+    if (!p) {
+        box.style.display = 'none';
+        if (resizer) {resizer.style.display = 'none';}
+        body.innerHTML = '';
+        document.getElementById('dp-path').textContent = '';
+        return;
+    }
+    box.style.display = 'flex';
+    if (resizer) {resizer.style.display = 'block';}
+    document.getElementById('dp-path').textContent = p.path;
+    if (p.loading) {
+        body.innerHTML = '<div class="dp-note">' + esc(T('preview.loading')) + '</div>';
+        return;
+    }
+    // Binary/error answers already say everything worth saying; repeating git's
+    // own "Binary files … differ" header under the note adds nothing.
+    var lines = (p.binary || p.error) ? [] : (p.lines || []);
+    var html = '';
+    if (p.error) {
+        html += '<div class="dp-note err">' + esc(T('preview.failed', { error: p.error })) + '</div>';
+    } else if (p.binary) {
+        html += '<div class="dp-note">' + esc(T('preview.binary')) + '</div>';
+    } else if (p.empty) {
+        html += '<div class="dp-note">' + esc(T('preview.empty')) + '</div>';
+    }
+    html += lines.map(diffLineHtml).join('');
+    if (p.truncated) {
+        html += '<div class="dp-note">' + esc(T('preview.truncated', { n: lines.length })) + '</div>';
+    }
+    body.innerHTML = html;
+    body.scrollTop = 0;
+}
+
+document.getElementById('dp-close').addEventListener('click', clearPreview);
+
+document.getElementById('dp-editor').addEventListener('click', function () {
+    var p = state.preview;
+    if (!p || p.loading) {return;}
+    var stash = state.stashDetail ? state.stashDetail.index : undefined;
+    vscode.postMessage({
+        command: 'action',
+        action: 'fileDiff',
+        hash: stash === undefined ? state.selectedHash : undefined,
+        hashes: stash === undefined ? state.selectedHashes : undefined,
+        stash: stash,
+        path: p.path
+    });
+});
+
+/* ---------- keyboard navigation ---------- */
+
+/*
+ * The three panes are focusable containers, so Tab walks branches -> commits ->
+ * files instead of leaving the panel, and the arrow keys then act inside whichever
+ * pane owns focus. Rows carry no tabindex of their own: a row per tab stop would
+ * make reaching the next pane take as many presses as there are commits.
+ */
+var KEY_PANES = [
+    { id: 'btree', name: 'branches' },
+    { id: 'scroll', name: 'commits' },
+    { id: 'd-files', name: 'files' }
+];
+
+function initPaneFocus() {
+    KEY_PANES.forEach(function (p) {
+        var el = document.getElementById(p.id);
+        if (!el) {return;}
+        el.tabIndex = 0;
+        el.dataset.pane = p.name;
+        // Chrome focuses a tabbable ancestor when a click lands on a plain child,
+        // but the rows inside these panes are re-rendered constantly, so a mouse
+        // press pins the focus here instead: the arrows have to belong to the pane
+        // the user just clicked, not wherever the click happened to land.
+        el.addEventListener('mousedown', function () {
+            el.focus({ preventScroll: true });
+        });
+    });
+}
+
+function paneNameOf(el) {
+    while (el) {
+        if (el.dataset && el.dataset.pane) {return el.dataset.pane;}
+        el = el.parentElement;
+    }
+    return '';
+}
+
+function isTypingTarget(el) {
+    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+        el.tagName === 'SELECT' || el.isContentEditable);
+}
+
+/** Which pane owns the arrow keys; '' while a text field does. */
+function activeKeyPane() {
+    var el = document.activeElement;
+    if (!el || el === document.body) {return '';}
+    if (isTypingTarget(el)) {return '';}
+    return paneNameOf(el);
+}
+
+/** A dialog, menu or popover owns the keyboard: never move the selection under it. */
+function uiOverlayIsOpen() {
+    if (authorDropdownState.isOpen || repoMenu.open) {return true;}
+    if (dateUi && dateUi.isOpen) {return true;}
+    return !!document.querySelector('.context-menu, .dialog-overlay, .squash-dialog-overlay, .push-dialog-overlay');
+}
+
+function movePaneFocus(step) {
+    var names = KEY_PANES.map(function (p) {return p.name;});
+    var at = names.indexOf(activeKeyPane());
+    var next = at < 0
+        ? (step > 0 ? 0 : names.length - 1)
+        : (at + step + names.length) % names.length;
+    var el = document.getElementById(KEY_PANES[next].id);
+    if (el) {el.focus();}
+}
+
+/* --- commit list --- */
+
+function handleCommitKeys(e) {
+    var rows = commitRowList();
+    if (rows.length === 0) {return;}
+    var at = commitCursorIndex(rows);
+    var page = Math.max(3, Math.floor(document.getElementById('scroll').clientHeight /
+        (rows[0].offsetHeight || 30)));
+    var next;
+    switch (e.key) {
+        case 'ArrowDown': next = at + 1; break;
+        case 'ArrowUp': next = at - 1; break;
+        case 'Home': next = 0; break;
+        case 'End': next = rows.length - 1; break;
+        case 'PageDown': next = at + page; break;
+        case 'PageUp': next = at - page; break;
+        case 'Enter':
+            if (state.selectedHash) {
+                vscode.postMessage({
+                    command: 'action',
+                    action: 'showDiff',
+                    hash: state.selectedHash,
+                    hashes: state.selectedHashes.length > 1 ? state.selectedHashes : undefined
+                });
+            }
+            e.preventDefault();
+            return;
+        default: return;
+    }
+    next = Math.max(0, Math.min(next, rows.length - 1));
+    e.preventDefault();
+    if (next !== at) {selectCommitIndex(next, e.shiftKey);}
+}
+
+function commitCursorIndex(rows) {
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-hash') === state.selectedHash) {return i;}
+    }
+    // Nothing selected (or the selected commit scrolled out of the loaded page):
+    // start from the anchor, or from the top of the list.
+    return (state.lastClickedIndex >= 0 && state.lastClickedIndex < rows.length)
+        ? state.lastClickedIndex : 0;
+}
+
+/* --- changed files list --- */
+
+function fileRowList() {
+    return Array.from(document.querySelectorAll('#d-files .frow'));
+}
+
+/** Re-mark the cursor row after the list was rebuilt (collapse, new selection). */
+function applyFileCursor() {
+    if (!state.fileCursor) {return;}
+    fileRowList().forEach(function (row) {
+        row.classList.toggle('kcur', row.getAttribute('data-path') === state.fileCursor);
+    });
+}
+
+function selectFileRow(row) {
+    state.fileCursor = row.getAttribute('data-path');
+    applyFileCursor();
+    row.scrollIntoView({ block: 'nearest' });
+    // A stash's files preview as the cursor moves; a commit's files keep the
+    // editor as their only diff surface on this branch.
+    if (!isDirRow(row) && state.stashDetail) {requestFilePreview(state.fileCursor);}
+}
+
+function isDirRow(row) {
+    return row.classList.contains('dir');
+}
+
+function dirRowIsOpen(row) {
+    return !state.collapsed[row.getAttribute('data-path')];
+}
+
+/** Enter / Right on a file row: the same thing a double-click does. */
+function openFileRow(row) {
+    if (isDirRow(row)) {
+        row.click();
+        return;
+    }
+    if (!state.selectedHash && !state.stashDetail) {return;}
+    // Reuse the dblclick handler instead of restating the diff message it sends —
+    // it is the one that knows about the multi-select hashes and the stash stack.
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+}
+
+function handleFileKeys(e) {
+    var rows = fileRowList();
+    if (rows.length === 0) {return;}
+    var at = -1;
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-path') === state.fileCursor) {at = i;break;}
+    }
+    var key = e.key;
+    if (at < 0 && key !== 'Enter' && key !== 'ArrowRight') {
+        selectFileRow(rows[key === 'ArrowUp' || key === 'PageUp' || key === 'End' ? rows.length - 1 : 0]);
+        e.preventDefault();
+        return;
+    }
+    var target;
+    switch (key) {
+        case 'ArrowDown': target = at + 1; break;
+        case 'ArrowUp': target = at - 1; break;
+        case 'Home': target = 0; break;
+        case 'End': target = rows.length - 1; break;
+        case 'PageDown': target = at + 10; break;
+        case 'PageUp': target = at - 10; break;
+        case 'Enter':
+        case 'ArrowRight':
+            if (at >= 0) {
+                if (isDirRow(rows[at]) && key === 'ArrowRight') {
+                    if (!dirRowIsOpen(rows[at])) {rows[at].click();}
+                } else if (isDirRow(rows[at]) && key === 'Enter') {
+                    rows[at].click();
+                } else {
+                    openFileRow(rows[at]);
+                }
+            }
+            e.preventDefault();
+            return;
+        case 'ArrowLeft':
+            if (at >= 0) {
+                if (isDirRow(rows[at]) && dirRowIsOpen(rows[at])) {
+                    rows[at].click();
+                } else {
+                    // Retreat to the folder the row sits in.
+                    var path = rows[at].getAttribute('data-path') || '';
+                    var parent = path.substring(0, path.lastIndexOf('/'));
+                    if (parent) {
+                        for (var j = 0; j < rows.length; j++) {
+                            if (rows[j].getAttribute('data-path') === parent) {
+                                selectFileRow(rows[j]);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            e.preventDefault();
+            return;
+        default: return;
+    }
+    e.preventDefault();
+    target = Math.max(0, Math.min(target, rows.length - 1));
+    if (target !== at) {selectFileRow(rows[target]);}
+}
+
+/* --- branch tree --- */
+
+function treeRowList() {
+    return Array.from(document.querySelectorAll('#btree .bsec, #btree .bfolder, #btree .bitem, #btree .sitem, #btree .witem'));
+}
+
+/** Stable identity for a tree row: re-applying the cursor after a re-render keys on it. */
+function treeRowId(row) {
+    if (row.classList.contains('bsec')) {return 's|' + row.getAttribute('data-sec');}
+    if (row.classList.contains('bfolder')) {return 'f|' + row.getAttribute('data-folder');}
+    if (row.classList.contains('sitem')) {return 't|' + row.getAttribute('data-stash');}
+    if (row.classList.contains('witem')) {return 'w|' + row.getAttribute('data-worktree');}
+    return 'b|' + row.getAttribute('data-branch');
+}
+
+function applyTreeCursor() {
+    if (!state.treeCursor) {return;}
+    treeRowList().forEach(function (row) {
+        row.classList.toggle('kcur', treeRowId(row) === state.treeCursor);
+    });
+}
+
+function selectTreeRow(row) {
+    state.treeCursor = treeRowId(row);
+    applyTreeCursor();
+    row.scrollIntoView({ block: 'nearest' });
+}
+
+function treeRowIsOpen(row) {
+    if (row.classList.contains('bsec')) {return !state.collapsedSec[row.getAttribute('data-sec')];}
+    if (row.classList.contains('bfolder')) {
+        // A branch filter forces every folder open, so the folder state does not
+        // decide what is visible while one is typed.
+        return !!state.bfilter || !!state.expandedFolder[row.getAttribute('data-folder')];
+    }
+    return false;
+}
+
+function handleBranchKeys(e) {
+    var rows = treeRowList();
+    if (rows.length === 0) {return;}
+    var at = -1;
+    for (var i = 0; i < rows.length; i++) {
+        if (treeRowId(rows[i]) === state.treeCursor) {at = i;break;}
+    }
+    var key = e.key;
+    if (at < 0 && key !== 'Enter' && key !== 'ArrowRight' && key !== 'ArrowLeft') {
+        selectTreeRow(rows[key === 'ArrowUp' || key === 'PageUp' || key === 'End' ? rows.length - 1 : 0]);
+        e.preventDefault();
+        return;
+    }
+    var target;
+    switch (key) {
+        case 'ArrowDown': target = at + 1; break;
+        case 'ArrowUp': target = at - 1; break;
+        case 'Home': target = 0; break;
+        case 'End': target = rows.length - 1; break;
+        case 'PageDown': target = at + 8; break;
+        case 'PageUp': target = at - 8; break;
+        case 'Enter':
+            if (at < 0) {return;}
+            if (rows[at].classList.contains('bitem')) {
+                // Same as double-click: load that branch's commits. Checking out
+                // stays a deliberate double-click / menu action.
+                rows[at].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            } else if (rows[at].classList.contains('sitem')) {
+                selectStash(parseInt(rows[at].getAttribute('data-stash'), 10));
+            } else if (rows[at].classList.contains('witem')) {
+                // Same as a double-click: open that worktree in a new window,
+                // unless it is the one this window already shows.
+                rows[at].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            } else if (!isTreeLeaf(rows[at])) {
+                rows[at].click();
+            }
+            e.preventDefault();
+            return;
+        case 'ArrowRight':
+            if (at >= 0 && !isTreeLeaf(rows[at]) && !treeRowIsOpen(rows[at])) {rows[at].click();}
+            e.preventDefault();
+            return;
+        case 'ArrowLeft':
+            if (at >= 0 && !isTreeLeaf(rows[at]) && treeRowIsOpen(rows[at])) {rows[at].click();}
+            e.preventDefault();
+            return;
+        default: return;
+    }
+    e.preventDefault();
+    target = Math.max(0, Math.min(target, rows.length - 1));
+    if (target !== at) {selectTreeRow(rows[target]);}
+}
+
+function isTreeLeaf(row) {
+    return row.classList.contains('bitem') || row.classList.contains('sitem') || row.classList.contains('witem');
+}
+
+var NAV_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Enter'];
+
+document.addEventListener('keydown', function (e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) {return;}
+    if (e.key === 'Escape') {
+        // The menu otherwise only goes away when the next click lands elsewhere,
+        // which is invisible to anyone reaching it from the keyboard.
+        var menu = document.querySelector('.context-menu');
+        if (menu) {
+            menu.remove();
+            if (window._hideTooltip) {window._hideTooltip();}
+            e.preventDefault();
+        }
+        return;
+    }
+    if (uiOverlayIsOpen()) {return;}
+
+    var pane = activeKeyPane();
+    if (!pane) {
+        if (e.key === 'Tab') {return;}
+        // Right after the panel opens nothing inside it has focus. The arrows then
+        // belong to the commit list — the one pane the panel is about — instead of
+        // doing nothing until the user clicks. Body-level scrolling is not a thing
+        // here: every scrollable region is a pane.
+        var focusedBody = !document.activeElement || document.activeElement === document.body ||
+            document.activeElement === document.documentElement;
+        if (!focusedBody || NAV_KEYS.indexOf(e.key) < 0) {return;}
+        pane = 'commits';
+        var scrollEl = document.getElementById('scroll');
+        if (scrollEl) {scrollEl.focus();}
+    }
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        movePaneFocus(e.shiftKey ? -1 : 1);
+        return;
+    }
+    // Shift only extends a commit range, as it does with the mouse.
+    if (e.shiftKey && pane !== 'commits') {return;}
+    if (pane === 'commits') {handleCommitKeys(e);}
+    else if (pane === 'files') {handleFileKeys(e);}
+    else {handleBranchKeys(e);}
 });
 
 /* ---------- repository guidance page (no git / no repo / no commits) ---------- */
@@ -2314,6 +3023,9 @@ window.addEventListener('message', function (ev) {
             state.multiCommits = null;
             state.multiFiles = null;
             state.detail = null;
+            state.stashDetail = null;
+            // The file list this preview belonged to is gone with the selection.
+            clearPreview();
         }
         
         // Render operation status bar immediately after setting inProgress state
@@ -2368,6 +3080,23 @@ window.addEventListener('message', function (ev) {
         if (!state.selectedHash || m.commit.hash !== state.selectedHash) { return; }
         state.detail = { commit: m.commit, files: m.files };
         renderDetail();
+    } else if (m.command === 'filePreviewResponse') {
+        // Clicking another file (or another commit) fires a new request; a patch
+        // that finishes late must not paint over the selection that replaced it.
+        var p = state.preview;
+        var key = m.stash !== undefined && m.stash !== null ? 'stash:' + m.stash : 'commit:' + m.hash;
+        if (!p || p.loading !== true || p.path !== m.path || p.key !== key) { return; }
+        state.preview = {
+            path: m.path,
+            key: key,
+            loading: false,
+            lines: m.lines || [],
+            truncated: m.truncated === true,
+            binary: m.binary === true,
+            empty: m.empty === true,
+            error: m.error,
+        };
+        renderPreview();
     } else if (m.command === 'setCurrentBranch') {
         state.current = m.branch;
         renderTree();
@@ -2381,7 +3110,12 @@ window.addEventListener('message', function (ev) {
         state.lastClickedIndex = -1;
         state.multiCommits = null;
         state.multiFiles = null;
+        if (state.stashDetail) {
+            state.stashDetail = null;
+            renderTree();
+        }
         state.detailVisible = true;
+        clearPreview();
         applyRowSelection();
         var el = document.querySelector('.row[data-hash="' + m.hash + '"]');
         if (el) el.scrollIntoView({ block: 'center' });
@@ -2396,6 +3130,8 @@ window.addEventListener('message', function (ev) {
         // Update only branch lists without affecting commits
         state.local = m.local || [];
         state.remote = m.remote || [];
+        if (m.favorites) {state.favorites = m.favorites;}
+        if (m.recent) {state.recent = m.recent;}
         if (m.currentBranch) {
             state.current = m.currentBranch;
         }
@@ -2414,10 +3150,37 @@ window.addEventListener('message', function (ev) {
         }
         
         renderTree();
+    } else if (m.command === 'setFavorites') {
+        // Starring or unstarring is a preference, not a git change: the branch
+        // lists and the commit rows are still accurate, only the marks moved.
+        state.favorites = m.favorites || [];
+        renderTree();
     } else if (m.command === 'setStashes') {
         // The stash stack lives in the same tree but is re-sent on its own: stashing
         // never moves HEAD, so the commit list has nothing to reload.
         state.stashes = m.stashes || [];
+        // Positions shifted (a stash was dropped, or a new one landed on top):
+        // what sits at the remembered index is no longer the same stash.
+        var sd = state.stashDetail;
+        if (sd && !state.stashes.some(function (s) {
+            return s.index === sd.index && s.message === sd.message && s.date === sd.date;
+        })) {
+            state.stashDetail = null;
+            state.detail = null;
+            clearPreview();
+            renderDetail();
+        }
+        renderTree();
+    } else if (m.command === 'setStashDetail') {
+        // Only the stash the user is still looking at may paint its files.
+        if (!state.stashDetail || state.stashDetail.index !== m.index) { return; }
+        state.stashDetail.files = m.files || [];
+        state.stashDetail.error = m.error;
+        renderDetail();
+    } else if (m.command === 'setWorktrees') {
+        // Worktrees are another checkout of the same repository. They sit in the
+        // tree on their own schedule: adding or removing one never moves HEAD.
+        state.worktrees = m.worktrees || [];
         renderTree();
     } else if (m.command === 'showCherryPickResume') {
         // Show resume button on current branch node
@@ -3405,6 +4168,7 @@ function renderOperationStatus() {
     });
 })();
 
+initPaneFocus();
 renderOperationStatus();
 renderTree();
 renderRows();

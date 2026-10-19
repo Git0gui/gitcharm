@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitService, GraphCommit, LogFilters, ReflogEntry, PushPreview } from '../services/gitService';
+import { GitService, GraphCommit, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
-import { isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
+import { EMPTY_TREE_HASH, isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
+import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -19,10 +20,10 @@ interface GraphPayload {
     hasMore: boolean;
     headHash: string;
     inProgress?: OperationKind;
+    favorites: string[];
+    recent: string[];
 }
 
-/** Well-known empty tree: diffing against it marks every file as added (first push). */
-const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
 const ALL_COMMITS_ROW = '__all__';
 /** How often to re-read HEAD while the panel is visible (watcher backstop). */
@@ -36,8 +37,8 @@ const BRANCH_POLL_MS = 2000;
  * and replaying it on the handshake is enough.
  */
 const SCREEN_COMMANDS: ReadonlySet<ExtToWebviewMessage['command']> = new Set([
-    'setData', 'setBranches', 'setCommits', 'setStashes', 'setRepoState',
-    'setHeadHash', 'setInProgress', 'setDivergence', 'setCurrentBranch',
+    'setData', 'setBranches', 'setStashes', 'setWorktrees', 'setRepoState', 'setFavorites',
+    'setCommits', 'setHeadHash', 'setInProgress', 'setDivergence', 'setCurrentBranch',
     'setDetail', 'setFileIconTheme'
 ]);
 
@@ -91,6 +92,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _memento: vscode.Memento;
     private _pendingViewState: PersistedViewState | undefined;
     private _viewStateTimer: NodeJS.Timeout | undefined;
+    /** Keyed list of starred branches, one entry per repository of the workspace. */
+    private static readonly FAVORITES_KEY = 'idea-git.favoriteBranches';
+    private _favorites: FavoriteStore;
     // Theme folder currently granted to the webview (undefined = none)
     private _grantedThemeRoot: string | undefined;
 
@@ -98,6 +102,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._gitService = gitService;
         this._extensionUri = extensionUri;
         this._memento = memento;
+        this._favorites = normalizeFavoriteStore(memento.get(GraphViewProvider.FAVORITES_KEY));
     }
 
     /** Type-checked postMessage; screen messages wait for the 'ready' handshake. */
@@ -263,6 +268,68 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Re-send the worktree list after this extension created or removed one.
+     * Worktrees change far less often than refs, so they are re-read whenever
+     * the branch tree is refreshed instead of on the 2s poll.
+     */
+    refreshWorktrees(): void {
+        void this._postWorktrees();
+    }
+
+    private async _postWorktrees(): Promise<void> {
+        if (!this._view) {return;}
+        try {
+            this._post({ command: 'setWorktrees', worktrees: await this._gitService.getWorktrees() });
+        } catch (error) {
+            // The branch list already reports repository failures; repeating the
+            // same toast for a section most repositories do not even show is noise.
+            logger.debug('[GitCharm] Reading worktrees failed:', error);
+        }
+    }
+
+    /**
+     * The branch tree's two pinned sections. Favorites are the user's own marks;
+     * recent branches come from git's HEAD checkout log, so switching a branch in
+     * a terminal lands there too. The tree draws only the names it also has a ref
+     * for, so a deleted branch leaves the section instead of becoming a row that
+     * errors when clicked.
+     */
+    private _branchMarks(currentBranch: string): { favorites: string[]; recent: string[] } {
+        return {
+            favorites: favoritesOf(this._favorites, this._gitService.repositoryPath),
+            recent: this._gitService.getRecentBranches(currentBranch)
+        };
+    }
+
+    /**
+     * Send the branch lists together with the two pinned sections. Every refresh
+     * path must carry all four — a setBranches without them blanks the favorites
+     * the user is looking at, and the tree would appear to lose the marks.
+     */
+    private _postBranchList(details: BranchDetails): void {
+        this._post({
+            command: 'setBranches',
+            local: details.local.map(b => b.name),
+            remote: details.remote.map(b => b.name),
+            currentBranch: details.current,
+            ...this._branchMarks(details.current)
+        });
+    }
+
+    /**
+     * Star or un-star a branch. The mark outlives the branch itself: the store
+     * keeps the name (so a branch recreated with the same name is favorite again)
+     * while the tree hides it until the ref exists.
+     */
+    private async _toggleFavorite(branch: string): Promise<void> {
+        const repoPath = this._gitService.repositoryPath;
+        const next = withFavoriteToggled(this._favorites, repoPath, branch);
+        this._favorites = next.store;
+        await this._memento.update(GraphViewProvider.FAVORITES_KEY, next.store);
+        this._post({ command: 'setFavorites', favorites: next.favorites });
+    }
+
+    /**
      * Decide what the panel can actually show, then either paint the guidance
      * page or load history. Every git query is skipped while git is missing,
      * the workspace is not a repository, or the repository has no commits —
@@ -292,8 +359,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
 
         // No history to show: reset both regions so nothing stale stays on screen
-        this._post({ command: 'setBranches', local: [], remote: [], currentBranch: '' });
+        this._post({ command: 'setBranches', local: [], remote: [], currentBranch: '', favorites: [], recent: [] });
         this._post({ command: 'setStashes', stashes: [] });
+        this._post({ command: 'setWorktrees', worktrees: [] });
         this._post({ command: 'setCommits', commits: [], hasMore: false });
         return state;
     }
@@ -400,7 +468,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (this._branch === oldName) {
             this._branch = newName;
         }
-        
+        // The mark belongs to the branch, not to its old spelling: without this the
+        // star silently disappears and the freed name stays in the store, ready to
+        // re-mark some future branch that happens to reuse it.
+        if (favoritesOf(this._favorites, this._gitService.repositoryPath).includes(oldName)) {
+            const renamed = withFavoriteRenamed(this._favorites, this._gitService.repositoryPath, oldName, newName);
+            this._favorites = renamed.store;
+            void this._memento.update(GraphViewProvider.FAVORITES_KEY, this._favorites);
+            this._post({ command: 'setFavorites', favorites: renamed.favorites });
+        }
+
         this._post({ command: 'renameBranchOptimistic', oldName, newName });
     }
 
@@ -673,6 +750,42 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * URI for the exact content at a ref. "Jump to Source" opens this instead of
+     * a diff side, so leading whitespace and the final newline have to survive.
+     */
+    private _gitSourceUri(ref: string, filePath: string): vscode.Uri {
+        return vscode.Uri.from({
+            scheme: 'idea-git-diff',
+            path: '/' + filePath,
+            query: 'ref=' + encodeURIComponent(ref) + '&raw=1'
+        });
+    }
+
+    /**
+     * IDEA's "Jump to Source": open the file as the selected commit left it, not
+     * the working-tree copy. A file deleted by that commit has no post-image, so
+     * the parent's content stands in and the user is told which version this is.
+     */
+    private async _openFileAtRevision(hash: string, relativePath: string): Promise<void> {
+        const fileName = relativePath.split('/').pop() || relativePath;
+        try {
+            let ref = hash;
+            if (!(await this._gitService.blobExists(ref, relativePath))) {
+                ref = `${hash}^`;
+                if (!(await this._gitService.blobExists(ref, relativePath))) {
+                    vscode.window.showWarningMessage(t('file.notInCommit', { ref: hash.substring(0, 7) }));
+                    return;
+                }
+                vscode.window.showInformationMessage(t('file.deletedOpenedParent', { file: fileName }));
+            }
+            await vscode.window.showTextDocument(this._gitSourceUri(ref, relativePath), { preview: true });
+            vscode.window.setStatusBarMessage(t('file.openedAtRevision', { file: fileName, ref: ref.substring(0, 7) }), 5000);
+        } catch (error) {
+            vscode.window.showErrorMessage(t('file.jumpToSourceFailed', { error: formatGitError(error) }));
+        }
+    }
+
+    /**
      * Diff a file across a group of selected commits: the right side is the newest
      * commit's version, the left side the state before the oldest one, so every
      * commit in the group shows up as a change instead of only the last-clicked one.
@@ -700,6 +813,60 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /**
+     * One file's diff for the panel's inline preview. For a commit the endpoints
+     * are the pair the editor diff uses on double-click — first parent against
+     * the commit, the empty tree for the initial commit — and a stash is bracketed
+     * by its own first parent, so both surfaces describe the same change.
+     */
+    private async _postFilePreview(message: {
+        hash?: string;
+        hashes?: string[];
+        stash?: number;
+        path: string;
+    }): Promise<void> {
+        const { hash, hashes, stash, path } = message;
+        if (!path) {return;}
+        try {
+            let baseRef: string;
+            let targetRef: string;
+            if (typeof stash === 'number') {
+                ({ baseRef, targetRef } = await this._gitService.getStashDiffRefs(stash, path));
+            } else {
+                if (!hash) {return;}
+                baseRef = await this._gitService.getDiffBase(hash);
+                targetRef = hash;
+                if (hashes && hashes.length > 1) {
+                    // A group is compared oldest-to-newest, so the endpoints come from
+                    // history order rather than the order the rows were clicked in.
+                    const ordered = await this._gitService.orderCommitsByHistory(hashes);
+                    targetRef = ordered[0];
+                    baseRef = await this._gitService.getDiffBase(ordered[ordered.length - 1]);
+                }
+            }
+            const diff = await this._gitService.getFileDiffPreview(baseRef, targetRef, path);
+            this._post({
+                command: 'filePreviewResponse',
+                hash, stash, path,
+                lines: diff.lines,
+                truncated: diff.truncated,
+                binary: diff.binary,
+                empty: diff.empty
+            });
+        } catch (error) {
+            logger.error('[GitCharm] Inline diff preview failed:', error);
+            this._post({
+                command: 'filePreviewResponse',
+                hash, stash, path,
+                lines: [],
+                truncated: false,
+                binary: false,
+                empty: false,
+                error: formatGitError(error)
+            });
+        }
+    }
+
     private async _openFileDiff(hash: string, path: string): Promise<void> {
         try {
             const title = `${path} (${hash.substring(0, 7)})`;
@@ -708,6 +875,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const beforeUri = this._gitBlobUri(hash + '^', path);
             const afterUri = this._gitBlobUri(hash, path);
             await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, title);
+        } catch (err) {
+            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
+        }
+    }
+
+    /** The editor twin of a stash's inline preview: same endpoints, own title. */
+    private async _openStashFileDiff(index: number, path: string): Promise<void> {
+        try {
+            const { baseRef, targetRef } = await this._gitService.getStashDiffRefs(index, path);
+            await vscode.commands.executeCommand(
+                'vscode.diff',
+                this._gitBlobUri(baseRef, path),
+                this._gitBlobUri(targetRef, path),
+                `${path} (stash@{${index}})`
+            );
         } catch (err) {
             vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
         }
@@ -853,6 +1035,25 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     } finally {
                         this._postLoading('multiCommits', false);
                     }
+                    break;
+                case 'selectStash':
+                    // Reading a stash is a view action: nothing in the worktree is
+                    // touched, so the panel can show the files before applying it.
+                    try {
+                        const files = await this._gitService.getStashFiles(message.index);
+                        this._post({ command: 'setStashDetail', index: message.index, files });
+                    } catch (error) {
+                        logger.error('[GitCharm] Reading stash files failed:', error);
+                        this._post({
+                            command: 'setStashDetail',
+                            index: message.index,
+                            files: [],
+                            error: formatGitError(error)
+                        });
+                    }
+                    break;
+                case 'filePreview':
+                    await this._postFilePreview(message);
                     break;
                 case 'refreshBranches':
                     await this._refreshBranchesOnly();
@@ -1449,6 +1650,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'pushTag':
                     await vscode.commands.executeCommand('idea-git.pushTag', commitNode);
                     return;
+                case 'toggleFavorite': {
+                    // A mark on the tree, not on git: nothing to reload, and the
+                    // webview repaints from the list this posts back.
+                    if (!message.branch) {return;}
+                    await this._toggleFavorite(message.branch);
+                    return;
+                }
                 case 'stashSave':
                     await vscode.commands.executeCommand('idea-git.stashSave');
                     return;
@@ -1471,6 +1679,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     );
                     return;
                 }
+                case 'worktreeAdd':
+                    await vscode.commands.executeCommand('idea-git.createWorktree', branchNode);
+                    return;
+                case 'worktreeOpen':
+                    await vscode.commands.executeCommand('idea-git.openWorktree', { path: message.worktreePath });
+                    return;
+                case 'worktreeRemove':
+                    await vscode.commands.executeCommand('idea-git.removeWorktree', { path: message.worktreePath });
+                    return;
                 case 'reset':
                     await vscode.commands.executeCommand('idea-git.resetToCommit', commitNode);
                     forceReload = true;
@@ -1523,6 +1740,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'fileDiff': {
                     const relPath = message.path;
                     if (!relPath) { return; }
+                    if (typeof message.stash === 'number') {
+                        await this._openStashFileDiff(message.stash, relPath);
+                        return;
+                    }
                     const hashes = (message.hashes ?? []).filter(Boolean);
                     this._gitService.selectedCommitHash = message.hash;
                     if (hashes.length > 1) {
@@ -1530,6 +1751,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         return;
                     }
                     await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath: relPath });
+                    return;
+                }
+                case 'fileJumpToSource': {
+                    const hash = message.hash;
+                    const relPath = message.path;
+                    if (!hash || !relPath) { return; }
+                    await this._openFileAtRevision(hash, relPath);
                     return;
                 }
                 case 'fileCompareLocal': {
@@ -1616,7 +1844,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             repoName: repoPath ? path.basename(repoPath) : '',
             hasMore: this._hasMore,
             headHash,
-            inProgress
+            inProgress,
+            ...this._branchMarks(details.current)
         };
     }
 
@@ -1712,13 +1941,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const details = await this._gitService.getBranchesWithDetails(true);
             
             // Send only branch data, don't affect commits
-            this._post({
-                command: 'setBranches',
-                local: details.local.map(b => b.name),
-                remote: details.remote.map(b => b.name),
-                currentBranch: details.current
-            });
+            this._postBranchList(details);
             void this._postStashes();
+            void this._postWorktrees();
             
             // Async refresh divergence after branches are updated (non-blocking)
             setTimeout(() => {
@@ -1748,7 +1973,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             repoName,
             hasMore: false,
             headHash: '',
-            inProgress: undefined
+            inProgress: undefined,
+            favorites: [],
+            recent: []
         });
     }
 
@@ -1767,14 +1994,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             
             // Update branches immediately when ready
             const details = await detailsPromise;
-            this._post({
-                command: 'setBranches',
-                local: details.local.map(b => b.name),
-                remote: details.remote.map(b => b.name),
-                currentBranch: details.current
-            });
-            // Stashes live in the same tree, so they load alongside the branches.
+            this._postBranchList(details);
+            // Stashes and worktrees live in the same tree, so they load alongside it.
             void this._postStashes();
+            void this._postWorktrees();
 
             // Update head hash separately when ready (don't wait for it)
             const headHash = await headHashPromise;
@@ -1810,7 +2033,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 repoName: repoPath ? path.basename(repoPath) : '',
                 hasMore: false,
                 headHash,
-                inProgress
+                inProgress,
+                ...this._branchMarks(details.current)
             };
             
             return this._getHtmlForWebview(payload);
@@ -1826,7 +2050,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 repoName: '',
                 hasMore: false,
                 headHash: '',
-                inProgress: undefined
+                inProgress: undefined,
+                favorites: [],
+                recent: []
             });
         }
     }
@@ -1884,12 +2110,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (!this._view) {return;}
         try {
             const details = await this._gitService.getBranchesWithDetails(true);
-            this._post({
-                command: 'setBranches',
-                local: details.local.map(b => b.name),
-                remote: details.remote.map(b => b.name)
-            });
+            this._postBranchList(details);
             void this._postStashes();
+            void this._postWorktrees();
             // Also refresh divergence info (ahead/behind arrows)
             await this._refreshDivergence();
         } catch (error) {
@@ -2032,6 +2255,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             <div id="d-busy" class="busy"><span class="spin"></span>${t('ui.loadingCommitFiles')}</div>
             <div id="d-files"></div>
             <div class="resizer-v" id="resizer-info"></div>
+            <div id="d-preview" style="display: none;">
+                <div class="dp-head">
+                    <span class="dp-path" id="dp-path"></span>
+                    <button class="col-refresh no-spin" id="dp-editor" type="button" title="${t('preview.openInEditor')}">
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2.5h4.5V7"/><path d="M13.2 2.8 7.5 8.5"/><path d="M11 9.5v3.2a1.3 1.3 0 0 1-1.3 1.3H3.3A1.3 1.3 0 0 1 2 12.7V6.3A1.3 1.3 0 0 1 3.3 5h3.2"/></svg>
+                    </button>
+                    <button class="col-refresh no-spin" id="dp-close" type="button" title="${t('preview.close')}">&#10005;</button>
+                </div>
+                <div id="dp-body"></div>
+            </div>
+            <div class="resizer-v" id="resizer-preview" style="display: none;"></div>
             <div id="d-info"></div>
         </div>
     </div>

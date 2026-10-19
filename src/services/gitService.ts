@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runGit, splitNul, GitRunOptions } from './gitRunner';
 import { RefsReader } from './refsReader';
+import { RecentBranchReader, RECENT_BRANCH_LIMIT } from './branchMarks';
 import { GitAskpass } from './askpass';
 import { PersistedBranchCache } from './persistedBranchCache';
 import { resolveCommonDir, resolveGitDir } from './gitPaths';
@@ -22,6 +23,8 @@ import {
     parseWorkingTreeSummary,
     parseStatusEntries,
     parseStashList,
+    stashRef,
+    parseWorktreeList,
     parsePathFilter,
     parseReflogList,
     operationFromStateFiles,
@@ -47,9 +50,13 @@ import {
     InProgressOperation,
     StashEntry,
     ReflogEntry,
+    WorktreeEntry,
     StatusEntry,
     RemoteInfo,
-    WorkingTreeSummary
+    WorkingTreeSummary,
+    EMPTY_TREE_HASH,
+    parseDiffPreview,
+    DiffPreview
 } from './gitUtils';
 import { t } from '../i18n';
 
@@ -65,6 +72,7 @@ export {
     InProgressOperation,
     StashEntry,
     ReflogEntry,
+    WorktreeEntry,
     RepositoryOption
 } from './gitUtils';
 
@@ -167,6 +175,13 @@ const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir'
 export class GitService {
     /** Max cached entries per cache (branch list / commit log / per-commit files). */
     static readonly CACHE_MAX = 20; // Reduced from 30 to save memory
+
+    /**
+     * Lines of a single file's diff the panel is willing to draw. Past this the
+     * message payload and the DOM both stop being a preview; the full patch stays
+     * one double-click away in the editor.
+     */
+    static readonly DIFF_PREVIEW_LINES = 1200;
     
     private _repositoryPath: string | undefined;
     private _selectedBranch: string | undefined;
@@ -182,12 +197,17 @@ export class GitService {
     // Immutable caches: keyed by commit hash, safe until evicted
     private _filesCache = new LruCache<FileStat[]>(GitService.CACHE_MAX);
     private _detailCache = new LruCache<CommitDetail>(GitService.CACHE_MAX);
+    /** commit -> diff base. A commit's parent never moves, so this one needs no invalidation. */
+    private _diffBaseCache = new LruCache<string>(100);
 
     // Commit index cache: bounded LRU to avoid unbounded growth
     private _commitIndex = new LruCache<GraphCommit>(200); // Reduced from 500 to save memory
     
     // Refs reader: branch/tag mappings straight from .git filesystem (TTL-cached)
     private _refsReader = new RefsReader(() => this._repositoryPath);
+    // HEAD's checkout log, also read from disk: it records checkouts made outside
+    // this extension, which is the only way "recent branches" can mean anything.
+    private _recentBranches = new RecentBranchReader(() => this._repositoryPath);
     private _trackInfoCache: { at: number; map: BranchTrackMap } | undefined;
     private _trackInfoPromise: Promise<BranchTrackMap> | undefined;
     // Persistent branch cache (workspaceState Memento, versioned payload)
@@ -727,44 +747,7 @@ export class GitService {
             this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
         ]);
 
-        // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
-        const stats = new Map<string, { added: number; deleted: number }>();
-        const numTokens = splitNul(numStat);
-        for (let i = 0; i < numTokens.length; i++) {
-            const header = numTokens[i];
-            const t1 = header.indexOf('\t');
-            const t2 = t1 >= 0 ? header.indexOf('\t', t1 + 1) : -1;
-            if (t2 < 0) {continue;}
-            let path = header.slice(t2 + 1);
-            if (path === '' && i + 2 < numTokens.length + 1) {
-                // Rename entry: header path is empty, src and dst follow as tokens
-                const dst = numTokens[i + 2] ?? numTokens[i + 1] ?? '';
-                i += 2;
-                path = dst;
-            }
-            const added = header.slice(0, t1);
-            const deleted = header.slice(t1 + 1, t2);
-            stats.set(path, {
-                added: added === '-' ? 0 : parseInt(added) || 0,
-                deleted: deleted === '-' ? 0 : parseInt(deleted) || 0
-            });
-        }
-
-        // name-status -z tokens: status, path; renames: status, src, dst
-        const files: FileStat[] = [];
-        const nsTokens = splitNul(nameStatus);
-        for (let i = 0; i < nsTokens.length; i++) {
-            const statusToken = nsTokens[i];
-            const letter = (statusToken || 'M').charAt(0);
-            let path = nsTokens[++i] || '';
-            if ((letter === 'R' || letter === 'C') && i + 1 < nsTokens.length) {
-                // Display the new name for renames/copies
-                path = nsTokens[++i];
-            }
-            if (!path) {continue;}
-            const s = stats.get(path) || { added: 0, deleted: 0 };
-            files.push({ status: letter, path, added: s.added, deleted: s.deleted });
-        }
+        const files = this._mergeDiffFileStats(nameStatus, numStat);
         this._filesCache.set(key, files);
         return files;
     }
@@ -1235,6 +1218,15 @@ export class GitService {
         return this._readRefNames('refs/remotes/');
     }
 
+    /**
+     * Branches HEAD recently moved through, newest first — read from git's own
+     * checkout log, so a branch switched in a terminal or another tool counts the
+     * same as one switched from the panel. Filesystem only, no subprocess.
+     */
+    getRecentBranches(currentBranch: string, limit = RECENT_BRANCH_LIMIT): string[] {
+        return this._recentBranches.read(currentBranch, limit);
+    }
+
     private async _readRefNames(namespace: string): Promise<string[]> {
         const output = await this.executeGitArgs([
             'for-each-ref', namespace, '--format=%(refname:short)'
@@ -1338,9 +1330,17 @@ export class GitService {
      * Print a file's content at a given ref (backs the diff content provider).
      */
     async showBlob(ref: string, filePath: string): Promise<string> {
+        return (await this.readBlob(ref, filePath)).trim();
+    }
+
+    /**
+     * Exact file content at a given ref — "Jump to Source" opens this version in
+     * the editor, where trimming leading whitespace would shift every line.
+     */
+    async readBlob(ref: string, filePath: string): Promise<string> {
         assertShellSafe(ref, t('label.ref'));
         assertShellSafe(filePath, t('label.filePath'));
-        return (await this.executeGitArgs(['show', this._objectSpec(ref, filePath)])).trim();
+        return await this.executeGitArgs(['show', this._objectSpec(ref, filePath)]);
     }
 
     /**
@@ -1355,6 +1355,48 @@ export class GitService {
             return `:${Number.isNaN(stage) ? 0 : stage}:${filePath}`;
         }
         return `${ref}:${filePath}`;
+    }
+
+    /**
+     * Left side of a commit's diff: its first parent, or the empty tree for the
+     * initial commit. Resolved as a hash rather than spelled `hash^` because git
+     * rejects `<root>^` outright, and a preview that fails on the first commit of
+     * a repository is not a preview. Merge commits resolve to parent #1, which is
+     * exactly what the editor diff (`hash^ ↔ hash`) shows, so the two agree.
+     */
+    async getDiffBase(hash: string): Promise<string> {
+        assertHash(hash);
+        const key = `${this._repositoryPath ?? ''}|${hash}`;
+        const hit = this._diffBaseCache.get(key);
+        if (hit) {return hit;}
+        // --quiet: an unresolvable revision exits 1 with no output, which is this
+        // method's answer for a parentless commit, not an error to report.
+        const output = await this.executeGitArgs(
+            ['rev-parse', '--verify', '--quiet', `${hash}^`]
+        ).catch(() => '');
+        const parent = output.trim().replace(/^"|"$/g, '');
+        const base = parent || EMPTY_TREE_HASH;
+        this._diffBaseCache.set(key, base);
+        return base;
+    }
+
+    /**
+     * One file's unified diff between two revisions, already split and counted —
+     * what the panel draws under the file list. Capped by `maxLines` because it is
+     * a preview: the whole patch stays one double-click away in the editor.
+     */
+    async getFileDiffPreview(
+        baseRef: string,
+        targetRef: string,
+        filePath: string,
+        maxLines: number = GitService.DIFF_PREVIEW_LINES
+    ): Promise<DiffPreview> {
+        assertShellSafe(baseRef, t('label.ref'));
+        assertShellSafe(targetRef, t('label.ref'));
+        const patch = await this.executeGitArgs([
+            'diff', '--no-color', '--no-ext-diff', `--unified=3`, `${baseRef}..${targetRef}`, '--', filePath
+        ]);
+        return parseDiffPreview(patch, maxLines);
     }
 
     /**
@@ -1709,31 +1751,51 @@ export class GitService {
     }
 
     /**
+     * Every worktree registered for this repository, main first. `isCurrent`
+     * marks the one this panel is looking at; the tree uses it to keep the row
+     * from offering to open or remove itself.
+     */
+    async getWorktrees(): Promise<WorktreeEntry[]> {
+        const raw = await this.executeGitArgs(['worktree', 'list', '--porcelain', '-z'], { timeoutMs: 5000 });
+        const current = this._repositoryPath;
+        return parseWorktreeList(raw).map(entry => ({
+            ...entry,
+            isCurrent: !!current && repositoryKey(entry.path) === repositoryKey(current)
+        }));
+    }
+
+    /**
      * Find the filesystem path of the worktree that currently has `branchName`
      * checked out. Returns undefined if no worktree uses the branch.
      */
     async getBranchWorktreePath(branchName: string): Promise<string | undefined> {
         assertRef(branchName);
-        const output = await this.executeGitArgs(['worktree', 'list', '--porcelain']);
-        if (!output) {return undefined;}
+        return (await this.getWorktrees()).find(entry => entry.branch === branchName)?.path;
+    }
 
-        const blocks = output.split('\n\n');
-        for (const block of blocks) {
-            const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
-            let worktreePath: string | undefined;
-            let branch: string | undefined;
-            for (const line of lines) {
-                if (line.startsWith('worktree ')) {
-                    worktreePath = line.substring('worktree '.length).trim();
-                } else if (line.startsWith('branch ')) {
-                    branch = line.substring('branch '.length).trim();
-                }
-            }
-            if (worktreePath && branch === `refs/heads/${branchName}`) {
-                return worktreePath;
-            }
-        }
-        return undefined;
+    /**
+     * Check out `branchName` in a new worktree. The path is made absolute here:
+     * a relative one would otherwise resolve against the extension host's cwd
+     * rather than the repository. Checking out a large tree can take a while, so
+     * this is not bounded by the default command timeout.
+     */
+    async addWorktree(targetPath: string, branchName: string): Promise<void> {
+        assertRef(branchName);
+        await this._execMutate(['worktree', 'add', path.resolve(targetPath), branchName], { timeoutMs: 0 });
+    }
+
+    /**
+     * Remove a registered worktree. Only a path git itself lists is accepted, so
+     * a stale or hostile message cannot point the command at an arbitrary
+     * folder. `force` is the second confirmation after git refused because the
+     * worktree still holds modified or untracked files.
+     */
+    async removeWorktree(targetPath: string, force: boolean = false): Promise<void> {
+        const target = path.resolve(targetPath);
+        const known = (await this.getWorktrees()).find(entry => repositoryKey(entry.path) === repositoryKey(target));
+        if (!known) {throw new Error(t('worktree.notRegistered', { path: target }));}
+        if (known.isCurrent) {throw new Error(t('worktree.removeCurrent'));}
+        await this._execMutate(['worktree', 'remove', ...(force ? ['--force'] : []), target], { timeoutMs: 0 });
     }
 
     /**
@@ -2177,19 +2239,122 @@ export class GitService {
     }
 
     async applyStash(index: number = 0): Promise<void> {
-        await this._execMutate(['stash', 'apply', `stash@{${index}}`]);
+        await this._execMutate(['stash', 'apply', stashRef(index)]);
     }
 
     async popStash(index: number = 0): Promise<void> {
-        await this._execMutate(['stash', 'pop', `stash@{${index}}`]);
+        await this._execMutate(['stash', 'pop', stashRef(index)]);
     }
 
     async dropStash(index: number = 0): Promise<void> {
-        await this._execMutate(['stash', 'drop', `stash@{${index}}`]);
+        await this._execMutate(['stash', 'drop', stashRef(index)]);
     }
 
     async clearStashes(): Promise<void> {
         await this._execMutate(['stash', 'clear']);
+    }
+
+    /**
+     * The files a stash carries, without applying it.
+     *
+     * A stash commit's first parent is the worktree it was taken from, so that is
+     * the left side of every tracked change. Untracked files live in a third
+     * parent that exists only for `--include-untracked` stashes: they are all
+     * additions and are merged in by path.
+     */
+    async getStashFiles(index: number): Promise<FileStat[]> {
+        const ref = stashRef(index);
+        const tracked = await this._diffFilesWithStats(`${ref}^1`, ref);
+        if (!(await this._revParse(`${ref}^3`))) {return tracked;}
+        const untracked = await this._diffFilesWithStats(EMPTY_TREE_HASH, `${ref}^3`);
+        const seen = new Set(tracked.map(f => f.path));
+        return [...tracked, ...untracked.filter(f => !seen.has(f.path))];
+    }
+
+    /**
+     * The two revisions that bracket one stash file, so the inline preview and
+     * the editor diff show the same change the stash would apply.
+     */
+    async getStashDiffRefs(index: number, filePath: string): Promise<{ baseRef: string; targetRef: string }> {
+        const ref = stashRef(index);
+        if (await this._stashHasUntracked(ref, filePath)) {
+            return { baseRef: EMPTY_TREE_HASH, targetRef: `${ref}^3` };
+        }
+        return { baseRef: `${ref}^1`, targetRef: ref };
+    }
+
+    /** Is this exact path part of the stash's untracked-files commit? */
+    private async _stashHasUntracked(ref: string, filePath: string): Promise<boolean> {
+        if (!(await this._revParse(`${ref}^3`))) {return false;}
+        try {
+            // cat-file takes a literal object name, so a path containing glob
+            // characters cannot match a sibling file the way a pathspec would.
+            await this.executeGitArgs(['cat-file', '-e', this._objectSpec(`${ref}^3`, filePath)]);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private async _revParse(rev: string): Promise<string> {
+        const output = await this.executeGitArgs(['rev-parse', '--verify', '--quiet', rev]).catch(() => '');
+        return output.trim();
+    }
+
+    private async _diffFilesWithStats(baseRef: string, targetRef: string): Promise<FileStat[]> {
+        assertShellSafe(baseRef, t('label.baseRef'));
+        assertShellSafe(targetRef, t('label.targetRef'));
+        const [nameStatus, numStat] = await Promise.all([
+            this.executeGitArgs(['diff', '-M', '--name-status', '-z', `${baseRef}..${targetRef}`]).catch(() => ''),
+            this.executeGitArgs(['diff', '-M', '--numstat', '-z', `${baseRef}..${targetRef}`]).catch(() => '')
+        ]);
+        return this._mergeDiffFileStats(nameStatus, numStat);
+    }
+
+    /**
+     * Merge a NUL-delimited `--name-status -z` reply with its `--numstat -z`
+     * counterpart into the rows the panel draws.
+     */
+    private _mergeDiffFileStats(nameStatus: string, numStat: string): FileStat[] {
+        // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
+        const stats = new Map<string, { added: number; deleted: number }>();
+        const numTokens = splitNul(numStat);
+        for (let i = 0; i < numTokens.length; i++) {
+            const header = numTokens[i];
+            const t1 = header.indexOf('\t');
+            const t2 = t1 >= 0 ? header.indexOf('\t', t1 + 1) : -1;
+            if (t2 < 0) {continue;}
+            let path = header.slice(t2 + 1);
+            if (path === '' && i + 2 < numTokens.length + 1) {
+                // Rename entry: header path is empty, src and dst follow as tokens
+                const dst = numTokens[i + 2] ?? numTokens[i + 1] ?? '';
+                i += 2;
+                path = dst;
+            }
+            const added = header.slice(0, t1);
+            const deleted = header.slice(t1 + 1, t2);
+            stats.set(path, {
+                added: added === '-' ? 0 : parseInt(added) || 0,
+                deleted: deleted === '-' ? 0 : parseInt(deleted) || 0
+            });
+        }
+
+        // name-status -z tokens: status, path; renames: status, src, dst
+        const files: FileStat[] = [];
+        const nsTokens = splitNul(nameStatus);
+        for (let i = 0; i < nsTokens.length; i++) {
+            const statusToken = nsTokens[i];
+            const letter = (statusToken || 'M').charAt(0);
+            let path = nsTokens[++i] || '';
+            if ((letter === 'R' || letter === 'C') && i + 1 < nsTokens.length) {
+                // Display the new name for renames/copies
+                path = nsTokens[++i];
+            }
+            if (!path) {continue;}
+            const s = stats.get(path) || { added: 0, deleted: 0 };
+            files.push({ status: letter, path, added: s.added, deleted: s.deleted });
+        }
+        return files;
     }
 
     /**

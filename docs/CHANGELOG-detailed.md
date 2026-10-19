@@ -2,6 +2,23 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.0] - 2026-10-20
+
+本版只发布分支树与第三栏交互相关的功能。提交文件的就地 diff 预览不在本版：完整实现拆到 `feat/third-column-diff-preview`（基于拆分前的 52e9b31），本分支只保留贮藏预览复用的差异带渲染与 `filePreview` 协议。
+
+### 新增
+
+- **三栏键盘导航**：`#btree` / `#scroll` / `#d-files` 是三个可聚焦容器（`initPaneFocus` 设 `tabIndex` 与 `data-pane`），Tab 在栏间循环，方向键只在拥有焦点的栏内生效。光标按身份记录——分支名、提交 hash、文件路径（`treeRowId`、`fileCursor`）——列表重绘后 `applyTreeCursor` / `applyFileCursor` 能落回同一行，而不是按行号跳走。提交列表的 Shift+方向键沿用 Shift 点选的锚点规则；`uiOverlayIsOpen()` 在菜单、对话框、日期浮层、仓库下拉打开时不抢按键；Escape 先关右键菜单。鼠标按下时把焦点钉在所属栏上（行本身没有 tabindex，否则每行一个 tab stop）。
+- **分支树收藏与最近切换**：收藏在 `branchMarks.ts`（纯模块），按仓库存进 workspaceState 并做 schema 校验；重命名时 `withFavoriteRenamed` 把标记一起搬走，分支被删只是暂时不显示。最近切换由 `RecentBranchReader` 解析 `.git/logs/HEAD`，复用与 Reflog 相同的 `parseCheckoutTargets`；直接读 git 自己的检出日志，因此终端与内置 Git 界面里的 checkout 都算，面板自己记一份会漏掉一半用户的操作。日志增长才重读，缓存随文件大小失效；HEAD 所在分支永远排第一。收藏与最近是两个置顶分组，扁平展示（不折进目录树），空时不占位置。
+- **贮藏单击预览**：贮藏行可选中，第三栏列出该贮藏包含的文件（含 `--include-untracked` 收进的新文件）。端点与实际应用一致：已跟踪文件取 `stash^1..stash`，未跟踪文件取空树..`stash^3`（`getStashDiffRefs`），所以预览、编辑器双栏对比与实际应用看到的是同一份改动。`stash@{n}` 是栈内位置而非身份：drop 或新贮藏入栈后索引会重排，视图把消息与时间跟索引一起记住，下一次 `setStashes` 发现该位置已换成别的贮藏就收起详情并清掉预览。预览请求带 `commit:` / `stash:` 前缀（`state.preview.key`），迟到的响应不会串到另一侧。服务层把 name-status 与 numstat 的合并抽成 `_mergeDiffFileStats`，提交文件列表复用同一段解析；`stashRef` 集中拼装 `stash@{n}` 并在进入命令行前拒绝非法索引。
+- **工作树分组**：`git worktree list --porcelain -z` 由 `parseWorktreeList`（纯函数，5 例单测：换行/NUL 两种形状、带空格路径、bare/detached/locked/prunable、缺空行分隔）解析；`getWorktrees` 用 `repositoryKey` 标出当前面板所在的那个。分支树底部只在多于一个非 prunable 工作树时出现该分组；当前行只读，其余双击/Enter 走 `vscode.openFolder(..., true)` 新窗口打开。非当前本地分支的右键菜单新增"检出到新工作树…"（`worktreeCommands.ts`）：路径默认建议为仓库同级目录、分支斜杠拍平成 `-`，相对路径按仓库父目录解析，已存在则拒绝；分支已被别处检出时 `extractWorktreePath` 认出 git 的报错，直接提供"打开那个工作树"。移除前用 `getWorktrees()` 校验路径确为 git 登记的工作树（防止任意路径），并拒绝当前与主工作树；git 因未提交改动拒绝时二次确认后才 `--force`。命名/打开/移除都有中英文案，compile/lint/test 全绿。
+- **第三栏文件右键跳转到源**：`_openFileAtRevision` 打开该提交留下的版本（`idea-git-diff` 虚拟文档加 `raw=1`，保留行首空白与末尾换行，只读）；提交删除了该文件则回退到父提交版本并提示打开的是哪一版；多选提交没有唯一版本，菜单项隐藏。打开后用 `setStatusBarMessage` 说明版本，失败走 `formatGitError`。
+
+### 文档
+
+- README 中英特性清单同步：三栏键盘导航、收藏/最近、贮藏预览、工作树、跳转到源
+- 单测新增 `parseWorktreeList`、收藏存储与最近分支读取（`withFavoriteToggled` / `withFavoriteRenamed` / `parseCheckoutTargets` / `RecentBranchReader`）等用例，合计 276 例全绿
+
 ## [0.0.9] - 2026-10-19
 
 ### 新增

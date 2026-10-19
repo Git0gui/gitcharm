@@ -694,8 +694,46 @@ svg { flex: none; }
     background: var(--vscode-list-hoverBackground, #2a2d2e);
     transform: translateX(2px);
 }
+.sitem.sel {
+    background: var(--vscode-list-activeSelectionBackground, #094771);
+    color: var(--vscode-list-activeSelectionForeground, #fff);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.sitem.sel .bname { color: inherit; font-weight: 600; }
+.sitem.sel .sdate { color: inherit; opacity: .8; }
 .sitem > svg { flex: none; opacity: .75; }
 .sitem .sdate {
+    flex: none;
+    margin-left: auto;
+    padding-left: 8px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+}
+/* Worktree rows open a window, so they are their own class as well: the branch
+   double-click handler must not treat them as a checkout target. */
+.witem {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px 3px 20px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    border-radius: 6px;
+    margin: 1px 4px;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.witem:hover {
+    background: var(--vscode-list-hoverBackground, #2a2d2e);
+    transform: translateX(2px);
+}
+.witem.cur {
+    cursor: default;
+}
+.witem.cur .bname { color: var(--vscode-textLink-foreground, #4da3ff); font-weight: 600; }
+.witem.cur > svg { color: var(--vscode-textLink-foreground, #4da3ff); }
+.witem > svg { flex: none; opacity: .75; }
+.witem .sdate {
     flex: none;
     margin-left: auto;
     padding-left: 8px;
@@ -919,6 +957,70 @@ canvas.graph-canvas {
 }
 #d-files-inner { width: max-content; min-width: 100%; }
 #d-info { flex: 1; overflow: auto; min-height: 0; }
+
+/* ---- inline diff preview: one file's patch, under the third pane's file list ---- */
+#d-preview {
+    flex: none;
+    height: 260px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-top: 1px solid var(--vscode-panel-border, #333);
+    background: var(--vscode-editor-background, #1e1e1e);
+}
+.dp-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+    background: var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.08));
+}
+.dp-path {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--vscode-descriptionForeground, #888);
+}
+#dp-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    line-height: 1.45;
+    white-space: pre;
+    font-family: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
+    font-size: var(--vscode-editor-font-size, 12px);
+}
+.dp-note {
+    padding: 8px 10px;
+    font-family: var(--vscode-font-family, sans-serif);
+    font-size: 11px;
+    white-space: pre-wrap;
+    color: var(--vscode-descriptionForeground, #888);
+}
+.dp-note.err { color: var(--vscode-errorForeground, #e05252); }
+.dl { display: flex; }
+.dl .dn {
+    flex: none;
+    width: 34px;
+    padding-right: 8px;
+    text-align: right;
+    user-select: none;
+    opacity: .6;
+    color: var(--vscode-descriptionForeground, #888);
+}
+.dl .dt { flex: 1; min-width: 0; padding-right: 12px; }
+.dl.add { background: rgba(76, 175, 80, 0.10); }
+.dl.del { background: rgba(224, 82, 82, 0.10); }
+.dl.add .dt { color: #4caf50; }
+.dl.del .dt { color: #e05252; }
+.dl.hunk { background: rgba(128, 128, 128, 0.10); }
+.dl.hunk .dt { color: #4da3ff; }
+.dl.meta .dt { color: var(--vscode-descriptionForeground, #888); font-style: italic; }
 #main.no-detail #right { display: none; }
 /* Branch divergence arrows - thicker and more visible */
 .barr { 
@@ -938,6 +1040,17 @@ canvas.graph-canvas {
 }
 .barr:hover {
     transform: scale(1.2);
+}
+/* Favorite mark: the amber the tag badge already uses, so "marked" reads as one idea */
+.bmark {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    color: #d9a04a;
+    transition: transform 0.2s ease;
+}
+.bmark:hover {
+    transform: scale(1.15);
 }
 .ccard { 
     padding: 10px;
@@ -2045,4 +2158,24 @@ canvas.graph-canvas {
     justify-content: center;
     flex-wrap: wrap;
     margin-top: 4px;
+}
+
+/* ---------- keyboard navigation ---------- */
+/*
+ * The three panes are tab stops, so the ring only shows while the keyboard owns
+ * focus (:focus-visible stays off after a mouse click). .kcur marks the row the
+ * arrows are on: a border rather than a filled background, because the cursor is
+ * not a second selection and must stay readable on top of .sel.
+ */
+#btree:focus-visible,
+#scroll:focus-visible,
+#d-files:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: -1px;
+}
+.kcur {
+    box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, #007fd4);
+}
+.bitem.kcur, .bfolder.kcur, .bsec.kcur, .sitem.kcur, .witem.kcur, .frow.kcur {
+    border-radius: 6px;
 }

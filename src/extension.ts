@@ -15,6 +15,7 @@ import { registerTagCommands } from './commands/tagCommands';
 import { registerStashCommands } from './commands/stashCommands';
 import { registerReflogCommands } from './commands/reflogCommands';
 import { registerRepositoryCommands } from './commands/repositoryCommands';
+import { registerWorktreeCommands } from './commands/worktreeCommands';
 import { resolveLocale, setLocale, t } from './i18n';
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -163,13 +164,18 @@ export function activate(ctx: vscode.ExtensionContext) {
             async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
                 // `uri.path` and URLSearchParams already give the decoded value;
                 // decoding again would rewrite a name containing a percent sign.
-                const ref = new URLSearchParams(uri.query).get('ref') ?? '';
+                const params = new URLSearchParams(uri.query);
+                const ref = params.get('ref') ?? '';
                 const filePath = uri.path.replace(/^\/+/, '');
                 if (!ref || !filePath) {
                     return '';
                 }
                 try {
-                    return await gitService.showBlob(ref, filePath);
+                    // `raw=1` is the "Jump to Source" view, which must keep the file
+                    // byte-for-byte; diff documents keep their trimmed form.
+                    return params.get('raw') === '1'
+                        ? await gitService.readBlob(ref, filePath)
+                        : await gitService.showBlob(ref, filePath);
                 } catch {
                     return '';
                 }
@@ -262,6 +268,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     registerStashCommands(ctx, gitService, graphView);
     registerReflogCommands(ctx, gitService, graphView);
     registerRepositoryCommands(ctx, gitService, graphView);
+    registerWorktreeCommands(ctx, gitService, graphView);
 
     // Register cleanup callback: clear all caches when extension deactivates (project close)
     ctx.subscriptions.push({

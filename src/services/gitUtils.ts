@@ -300,6 +300,20 @@ export function parseStashList(raw: string): StashEntry[] {
 }
 
 /**
+ * `stash@{n}` for a stack position taken from the stash list.
+ *
+ * The index comes from git itself, so this only guards against a malformed
+ * message reaching a command line — an out-of-range index is still a valid ref
+ * that git will simply fail to resolve.
+ */
+export function stashRef(index: number): string {
+    if (!Number.isInteger(index) || index < 0) {
+        throw new Error(`invalid stash index: ${index}`);
+    }
+    return `stash@{${index}}`;
+}
+
+/**
  * Split the commit-list path filter into git pathspecs.
  *
  * Comma-separated so several files/directories can be tracked at once, and
@@ -321,6 +335,94 @@ export interface FileStatLike {
     path: string;
     added: number;
     deleted: number;
+}
+
+/** Git's empty tree — the left side when there is no parent commit to diff against. */
+export const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+/** One line of the inline diff preview, already classified for the renderer. */
+export type DiffLineKind = 'add' | 'del' | 'hunk' | 'meta' | 'context';
+
+export interface DiffPreviewLine {
+    kind: DiffLineKind;
+    text: string;
+    /** Line number in the left image; undefined for added lines and headers. */
+    old: number | undefined;
+    /** Line number in the right image; undefined for deleted lines and headers. */
+    next: number | undefined;
+}
+
+export interface DiffPreview {
+    lines: DiffPreviewLine[];
+    truncated: boolean;
+    binary: boolean;
+    /** The file has no textual hunk at all: nothing changed, or git declined to diff it. */
+    empty: boolean;
+}
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const BINARY_MARK = /^Binary files .* differ$/m;
+/** The block that names the two sides: the panel already shows the path above it. */
+const FILE_HEADER = /^(diff --git |index |--- |\+\+\+ )/;
+/** Mode and rename notices: facts the file row alone does not carry. */
+const CHANGE_NOTE = /^(new|deleted|renamed|copied|similarity|rename|copy) /i;
+
+/**
+ * Turn one file's unified diff into the rows the panel draws.
+ *
+ * Line numbers are counted here rather than in the renderer because only the
+ * parser sees the `@@` headers that reset them. The cap is a guard for the DOM,
+ * not for git: the full patch is one double-click away in the editor, so cutting
+ * a 20 000-line diff is a preview decision instead of a lie about the change.
+ */
+export function parseDiffPreview(patch: string, maxLines: number): DiffPreview {
+    const binary = BINARY_MARK.test(patch);
+    const lines: DiffPreviewLine[] = [];
+    let old = 0;
+    let next = 0;
+    let truncated = false;
+
+    for (const raw of patch.split('\n')) {
+        // Cosmetic blank lines between headers carry nothing; a blank line inside
+        // the file itself arrives as ' ' (context prefix + empty text), not as ''.
+        if (raw === '' || FILE_HEADER.test(raw)) {continue;}
+        if (raw.startsWith('@@')) {
+            const m = HUNK_HEADER.exec(raw);
+            if (m) {
+                // A one-line hunk omits the count entirely; a zero count means the
+                // side has no lines in this hunk at all.
+                old = Number.parseInt(m[1], 10);
+                next = Number.parseInt(m[3], 10);
+            }
+            if (lines.length < maxLines) {lines.push({ kind: 'hunk', text: raw, old: undefined, next: undefined });}
+            continue;
+        }
+        if (raw.startsWith('\\') || raw.startsWith('Binary files ') || CHANGE_NOTE.test(raw)) {
+            if (lines.length < maxLines) {lines.push({ kind: 'meta', text: raw, old: undefined, next: undefined });}
+            continue;
+        }
+        const kind: DiffLineKind = raw.startsWith('+') ? 'add' : raw.startsWith('-') ? 'del' : 'context';
+        if (lines.length < maxLines) {
+            lines.push({
+                kind,
+                text: raw.substring(1),
+                old: kind === 'add' ? undefined : old || undefined,
+                next: kind === 'del' ? undefined : next || undefined
+            });
+        } else {
+            truncated = true;
+            break;
+        }
+        if (kind !== 'add') {old++;}
+        if (kind !== 'del') {next++;}
+    }
+
+    return {
+        lines,
+        truncated,
+        binary,
+        empty: !binary && lines.some(l => l.kind !== 'meta') === false
+    };
 }
 
 /**
@@ -943,6 +1045,88 @@ export function parseRemoteList(raw: string): RemoteInfo[] {
         }
     }
     return Array.from(byName, ([name, url]) => ({ name, url }));
+}
+
+/** One worktree as reported by `git worktree list --porcelain`. */
+export interface WorktreeEntry {
+    /** Absolute path as git prints it (forward slashes on Windows). */
+    path: string;
+    /** Commit the worktree has checked out. */
+    head: string;
+    /** Short branch name; absent when the worktree is detached. */
+    branch?: string;
+    /** The first entry git lists; `git worktree remove` refuses it. */
+    main: boolean;
+    bare: boolean;
+    detached: boolean;
+    locked: boolean;
+    /** Reason passed to `git worktree lock`, when any. */
+    lockReason?: string;
+    /** The folder is gone; `git worktree prune` would drop this entry. */
+    prunable: boolean;
+    /** Set by GitService: the worktree this panel is showing. */
+    isCurrent?: boolean;
+}
+
+/**
+ * Parse `git worktree list --porcelain` output.
+ *
+ * Porcelain prints one attribute per line (`worktree <path>`, `HEAD <sha>`,
+ * `branch <ref>`, `bare`, `detached`, `locked <reason>`, `prunable <reason>`)
+ * and a blank line between entries. The service asks for `-z` so the line
+ * breaks arrive as NULs and a path containing spaces survives untouched; the
+ * newline branch keeps plain porcelain (and test input) readable.
+ */
+export function parseWorktreeList(raw: string): WorktreeEntry[] {
+    const entries: WorktreeEntry[] = [];
+    const lines = raw.includes('\0') ? raw.split('\0') : raw.split(/\r?\n/);
+    let current: WorktreeEntry | undefined;
+
+    const flush = (): void => {
+        if (!current) {return;}
+        entries.push({ ...current, main: entries.length === 0 });
+        current = undefined;
+    };
+
+    for (const line of lines) {
+        if (!line) {
+            flush();
+            continue;
+        }
+        if (line.startsWith('worktree ')) {
+            // A missing blank line still starts the next entry; flush first.
+            flush();
+            current = {
+                path: line.substring('worktree '.length),
+                head: '',
+                main: false,
+                bare: false,
+                detached: false,
+                locked: false,
+                prunable: false
+            };
+            continue;
+        }
+        if (!current) {continue;}
+        if (line.startsWith('HEAD ')) {
+            current.head = line.substring('HEAD '.length);
+        } else if (line.startsWith('branch ')) {
+            const ref = line.substring('branch '.length);
+            current.branch = ref.startsWith('refs/heads/') ? ref.substring('refs/heads/'.length) : ref;
+        } else if (line === 'bare') {
+            current.bare = true;
+        } else if (line === 'detached') {
+            current.detached = true;
+        } else if (line === 'locked' || line.startsWith('locked ')) {
+            current.locked = true;
+            const reason = line.substring('locked'.length).trim();
+            if (reason) {current.lockReason = reason;}
+        } else if (line === 'prunable' || line.startsWith('prunable ')) {
+            current.prunable = true;
+        }
+    }
+    flush();
+    return entries;
 }
 
 /**

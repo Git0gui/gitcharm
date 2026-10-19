@@ -73,6 +73,25 @@
         { index: 1, message: 'WIP on feat/system-proxy-hint: bd864ce 修复：连不上远端时把系统代理的具体地址说出口', date: '2026-10-15T19:40:22+08:00' }
     ];
 
+    // The same repository checked out twice: the panel's worktree section only
+    // appears once a second one exists.
+    var worktrees = [
+        {
+            path: 'D:/gitProject/GitCharm',
+            head: '153fcf858610d56a4daf93ef269427a52809913e',
+            branch: 'main',
+            main: true, bare: false, detached: false, locked: false, prunable: false,
+            isCurrent: true
+        },
+        {
+            path: 'D:/gitProject/GitCharm-feat-system-proxy-hint',
+            head: 'bd864ce52328c724b8506009414e9b70bf436ff4',
+            branch: 'feat/system-proxy-hint',
+            main: false, bare: false, detached: false, locked: false, prunable: false,
+            isCurrent: false
+        }
+    ];
+
     // Real `git show --numstat bd864ce`.
     var filesOfBd864ce = [
         { status: 'M', path: 'AGENTS.md', added: 1, deleted: 1 },
@@ -83,6 +102,16 @@
         { status: 'A', path: 'src/services/systemProxy.ts', added: 36, deleted: 0 },
         { status: 'M', path: 'src/test/gitParsing.test.ts', added: 98, deleted: 1 }
     ];
+
+    // What each stash carries, in the merged shape the host sends: the tracked
+    // diff against the stash's first parent plus any `--include-untracked` file.
+    var stashFiles = {
+        0: [
+            { status: 'M', path: 'src/services/gitUtils.ts', added: 34, deleted: 0 },
+            { status: 'A', path: 'docs/preview/stash-notes.md', added: 12, deleted: 0 }
+        ],
+        1: filesOfBd864ce
+    };
 
     function det(hash, shortHash, message, date, files) {
         return {
@@ -136,6 +165,16 @@
         ]
     );
 
+    /* Classified patch rows, exactly the shape the host sends in filePreviewResponse. */
+    var previews = {
+        "src/services/gitUtils.ts": {"lines":[{"kind":"hunk","text":"@@ -769,3 +769,60 @@ export function gitFailureHost(text: string): string | undefined {"},{"kind":"context","text":"    const scp = /[\\w.-]+@([\\w.-]+):/.exec(text);","old":769,"next":769},{"kind":"context","text":"    return scp ? scp[1] : undefined;","old":770,"next":770},{"kind":"context","text":"}","old":771,"next":771},{"kind":"add","text":"","next":772},{"kind":"add","text":"/**","next":773},{"kind":"add","text":" * The proxy a browser on this machine uses, read from a","next":774},{"kind":"add","text":" * `reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings`","next":775},{"kind":"add","text":" * dump. git never consults the registry — it honours `http.proxy` and its own","next":776},{"kind":"add","text":" * env vars — which is precisely why \"the site works in my browser\" and","next":777},{"kind":"add","text":" * `Failed to connect to … port 443` are both true at the same time.","next":778},{"kind":"add","text":" *","next":779},{"kind":"add","text":" * Credentials are dropped rather than redacted: WinINET keeps them in a","next":780},{"kind":"add","text":" * separate value, and the result is meant to be pasted into","next":781},{"kind":"add","text":" * `git config --global http.proxy …`, so it has to stay a runnable URL.","next":782},{"kind":"add","text":" */","next":783}],"truncated":true,"binary":false,"empty":false},
+        "src/services/systemProxy.ts": {"lines":[{"kind":"meta","text":"new file mode 100644"},{"kind":"hunk","text":"@@ -0,0 +1,36 @@"},{"kind":"add","text":"import { execFile } from 'child_process';","next":1},{"kind":"add","text":"import { parseWindowsProxySettings } from './gitUtils';","next":2},{"kind":"add","text":"import { logger } from './logger';","next":3},{"kind":"add","text":"","next":4},{"kind":"add","text":"const INTERNET_SETTINGS_KEY = 'HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Internet Settings';","next":5},{"kind":"add","text":"","next":6},{"kind":"add","text":"/**","next":7},{"kind":"add","text":" * The proxy the operating system is configured with, or undefined when there is","next":8},{"kind":"add","text":" * none / it cannot be read. Called on the failure path only, after git's own","next":9},{"kind":"add","text":" * `http.proxy` turned out to be empty.","next":10},{"kind":"add","text":" *","next":11},{"kind":"add","text":" * Windows only, deliberately: an env-var proxy (`HTTPS_PROXY` and friends) is","next":12},{"kind":"add","text":" * something git already honours, so that case cannot produce \"browser works, git","next":13},{"kind":"add","text":" * times out\". The registry value is the one git is blind to.","next":14}],"truncated":true,"binary":false,"empty":false},
+        "src/i18n/index.ts": {"lines":[{"kind":"hunk","text":"@@ -369,6 +369,7 @@ const zh: Record<string, string> = {"},{"kind":"context","text":"    'err.pathOutsideRepo': '文件路径超出仓库范围: {path}',","old":369,"next":369},{"kind":"context","text":"    'err.tlsHint': '证书校验失败。若网络做了 TLS 中间人（企业代理常见），把企业根证书交给 git：git config --global http.sslCAInfo <证书路径>；不要为此关闭 sslVerify。',","old":370,"next":370},{"kind":"context","text":"    'err.unreachableNoProxy': '无法访问 {host}：直连失败，且 git 当前没有配置代理。若你在代理/VPN 网络里，先给 git 配置代理再重试：git config --global http.proxy http://127.0.0.1:<端口>（取消：git config --global --unset http.proxy）',","old":371,"next":371},{"kind":"add","text":"    'err.unreachableSystemProxy': '无法访问 {host}：直连失败。这台机器开着系统代理 {proxy}（浏览器就是这样连上的），但 git 不读 Windows 的代理设置，只认自己的 http.proxy。给 git 配上同一个地址再重试：git config --global http.proxy {proxy}（取消：git config --global --unset http.proxy）',","next":372},{"kind":"context","text":"    'err.unreachableWithProxy': '无法访问 {host}：git 已配置代理 {proxy}，连接仍失败。请确认代理进程在运行且能访问该站点，或先取消代理：git config --global --unset http.proxy',","old":372,"next":373},{"kind":"context","text":"    'label.branch': '分支',","old":373,"next":374},{"kind":"context","text":"    'label.filePath': '文件路径',","old":374,"next":375},{"kind":"hunk","text":"@@ -902,6 +903,7 @@ const en: Record<string, string> = {"},{"kind":"context","text":"    'err.pathOutsideRepo': 'Path escapes the repository: {path}',","old":902,"next":903},{"kind":"context","text":"    'err.tlsHint': 'Certificate verification failed. If your network terminates TLS (common with corporate proxies), hand the enterprise root certificate to git: git config --global http.sslCAInfo <certificate path>. Do not switch sslVerify off for this.',","old":903,"next":904},{"kind":"context","text":"    'err.unreachableNoProxy': 'Cannot reach {host}: the direct connection failed and git has no proxy configured. If you are behind a proxy/VPN, configure git and retry: git config --global http.proxy http://127.0.0.1:<port> (to undo: git config --global --unset http.proxy)',","old":904,"next":905},{"kind":"add","text":"    'err.unreachableSystemProxy': 'Cannot reach {host}: the direct connection failed. This machine has a system proxy at {proxy} — that is how your browser reaches the site — but git does not read Windows proxy settings, it only honours its own http.proxy. Give git the same address and retry: git config --global http.proxy {proxy} (to undo: git config --global --unset http.proxy)',","next":906},{"kind":"context","text":"    'err.unreachableWithProxy': 'Cannot reach {host}: git is configured to use proxy {proxy} and the connection still failed. Check that the proxy is running and can reach this host, or drop it: git config --global --unset http.proxy',","old":905,"next":907}],"truncated":true,"binary":false,"empty":false},
+        "media/webview.js": {"lines":[{"kind":"hunk","text":"@@ -1179,17 +1179,329 @@ function showMenu(x, y, items, onPick) {"},{"kind":"context","text":"    }, 0);","old":1179,"next":1179},{"kind":"context","text":"}","old":1180,"next":1180},{"kind":"context","text":"","old":1181,"next":1181},{"kind":"add","text":"/* ---------- date range filter (calendar popover, drag to circle a period) ---------- */","next":1182},{"kind":"add","text":"// Press the first day, drag to the last one, let go. Clicking works too: the first","next":1183},{"kind":"add","text":"// click is the start, the next one closes the range — which is how a period that","next":1184},{"kind":"add","text":"// needs a month navigation stays a single action instead of two typed endpoints.","next":1185},{"kind":"add","text":"var dateRange = { from: '', to: '' };","next":1186},{"kind":"add","text":"var datePick = { year: 0, month: 0, view: 'month', anchor: '', hover: '', dragging: false, pending: false };","next":1187},{"kind":"add","text":"var dateUi = null;","next":1188},{"kind":"add","text":"","next":1189},{"kind":"add","text":"function pad2(n) { return n < 10 ? '0' + n : String(n); }","next":1190},{"kind":"add","text":"function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }","next":1191}],"truncated":true,"binary":false,"empty":false},
+        "default": {"lines":[{"kind":"hunk","text":"@@ -6,6 +6,7 @@ import { RefsReader } from './refsReader';"},{"kind":"context","text":"import { GitAskpass } from './askpass';","old":6,"next":6},{"kind":"context","text":"import { PersistedBranchCache } from './persistedBranchCache';","old":7,"next":7},{"kind":"context","text":"import { resolveCommonDir, resolveGitDir } from './gitPaths';","old":8,"next":8},{"kind":"add","text":"import { readWindowsSystemProxy } from './systemProxy';","next":9},{"kind":"context","text":"import { logger } from './logger';","old":9,"next":10},{"kind":"context","text":"import {","old":10,"next":11},{"kind":"context","text":"    GitCommit,","old":11,"next":12},{"kind":"hunk","text":"@@ -871,16 +872,23 @@ export class GitService {"},{"kind":"context","text":"    }","old":871,"next":872},{"kind":"context","text":"","old":872,"next":873},{"kind":"context","text":"    /**","old":873,"next":874}],"truncated":true,"binary":false,"empty":false},
+        "binary": {"lines":[],"truncated":false,"binary":true,"empty":false},
+        "none": {"lines":[],"truncated":false,"binary":false,"empty":true}
+    };
     var base = {
         commits: commits,
         local: local,
@@ -230,8 +269,19 @@
                     ]
                 }
             }]
-        })
+        }),
+        /** A stash picked in the tree: its files in the third pane, nothing applied. */
+        stashDetail: Object.assign({}, base, {
+            steps: [
+                { do: 'click', sel: '.sitem[data-stash="1"]' },
+                { do: 'click', sel: file('src/services/gitUtils.ts') }
+            ]
+        }),
+        /** Second checkout of the repo: the worktree section at the bottom of the tree. */
+        worktrees: base
     };
+
+    function file(p) { return '.frow.file[data-path="' + p + '"]'; }
 
     function row(hash) { return '.row[data-hash="' + hash + '"]'; }
 
@@ -278,7 +328,10 @@
         scene: scene,
         divergence: divergence,
         stashes: stashes,
+        worktrees: worktrees,
+        stashFiles: stashFiles,
         details: details,
-        pushFiles: pushFiles
+        pushFiles: pushFiles,
+        previews: previews
     };
 })();

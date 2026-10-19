@@ -8,7 +8,7 @@
 
 GitCharm provides a three-panel Git log view:
 
-- **Left · Branch tree** — hierarchical tree grouped by `HEAD / Local / Remote`, with ahead/behind arrows (▲▼) and commit-count badges
+- **Left · Branch tree** — hierarchical tree grouped by `HEAD / Favorites / Recent / Local / Remote`, plus a worktree section at the bottom, with ahead/behind arrows (▲▼) and commit-count badges
 - **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / path / date-range filters
 - **Right · Commit details** — full commit info, changed file list (added/deleted line counts) and diff entry
 
@@ -52,8 +52,9 @@ GitCharm provides a three-panel Git log view:
 - **Commits**: show diff, cherry-pick (multi-select batch + conflict-resumable), squash, drop commit, amend message, revert commit (single or several, newest first), reset to commit, copy the commit message, open the commit or a branch on the remote web page
 - **Reflog**: one click for HEAD's reflog (the only place `checkout` and `reset` are recorded), or a branch row's own movements — a dialog where any row can be diffed, branched from or reset to, so work a `reset --hard` hid is recoverable
 - **Tags**: create lightweight or annotated tags on a commit, delete local tags, push a tag to the remote; annotated tags now resolve through the tag object, so their badges show up on the right commit
-- **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes (optionally including untracked files), and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically
-- **Files**: compare file with another branch, compare with the local working copy, pick a single file from a commit, view every commit that touched a file (cross-branch), view diff introduced by a single commit
+- **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes (optionally including untracked files), and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically; click a stash to list its files (untracked included) in the right pane and preview any file's diff before applying
+- **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes
+- **Files**: compare file with another branch, compare with the local working copy, pick a single file from a commit, jump to source at the commit's version (read-only), view every commit that touched a file (cross-branch), view diff introduced by a single commit
 - **Blame**: inline annotation of last author & date per line, full commit info on hover, click to jump to the commit
 
 ### Performance
@@ -69,6 +70,8 @@ GitCharm provides a three-panel Git log view:
 
 - **Bilingual UI**: fully localized interface, follows editor language or set manually
 - **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list
+- **Keyboard navigation**: Tab moves between the branch tree, commit list and file pane; arrows walk rows, Home / End / PageUp / PageDown jump, Enter opens the diff, and Shift+arrows extend a commit range
+- **Favorites & recent**: mark branches to pin them above the tree; a Recent group is built from git's own HEAD log, so checkouts made in a terminal or another Git UI show up too
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
 - **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs; the header (count + switch) stays pinned while scrolling in any direction
 - **Theme-aware file icons**: changed files borrow the icons of the active file-icon theme — installed themes as well as the built-in one, font-based and SVG-based alike; folders use a matching two-tone glyph, and the checked-out branch gets a filled branch icon
@@ -171,7 +174,7 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 GitCharm 提供一个三栏式的 Git 日志面板：
 
-- **左栏 · 分支树**：按 `HEAD / 本地 / 远程` 分组的层级树，带超前/落后箭头（▲▼）与提交数徽标
+- **左栏 · 分支树**：按 `HEAD / 收藏 / 最近 / 本地 / 远程` 分组的层级树，底部另列工作树，带超前/落后箭头（▲▼）与提交数徽标
 - **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 路径 / 日期区间筛选
 - **右栏 · 提交详情**：选中提交的完整信息、变更文件列表（增删行数）与差异入口
 
@@ -215,8 +218,9 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **提交**：显示差异、精选提交（Cherry-Pick，支持多选批量 + 冲突持久化恢复）、压缩提交、删除提交、编辑提交信息、回退提交（可多选，按时间从新到旧逐个回退）、修补最近提交、重置到此提交、复制提交消息、在远端网页打开该提交 / 该分支
 - **Reflog（操作记录）**：工具栏一键看 `HEAD` 的操作记录（只有 `HEAD` 记录 `checkout` 与 `reset`，正是把工作"藏起来"的两个操作），分支行右键则看该分支自己的 movements；对话框里任意一行都能查看差异、新建分支或回退过去——被 `reset --hard` 藏掉的提交还能捞回来
 - **标签**：在提交上新建轻量或附注标签、删除本地标签、推送标签到远端；附注标签会穿过 tag 对象解析到真正的提交，徽章不再贴错位置
-- **贮藏（Stash）**：分支树第三分区列出贮藏栈，工具栏一键贮藏当前改动（可选择一并收走未跟踪文件），行上可应用 / 弹出 / 删除；在终端里 `git stash` 也会自动跟上
-- **文件**：与其他分支对比此文件、与当前本地文件对比、从提交中挑选单个文件、跨分支查看该文件的全部历史提交、查看单次提交引入的差异
+- **贮藏（Stash）**：分支树第三分区列出贮藏栈，工具栏一键贮藏当前改动（可选择一并收走未跟踪文件），行上可应用 / 弹出 / 删除；在终端里 `git stash` 也会自动跟上；单击贮藏即可在第三栏列出其文件（含未跟踪文件），应用或弹出前先预览差异
+- **工作树（Worktree）**：分支树底部列出同一仓库的所有检出，双击在新窗口打开、右键移除；非当前本地分支可一键检出到新工作树。移除前按 git 登记校验，工作树含未提交改动时需再次确认才强制删除
+- **文件**：与其他分支对比此文件、与当前本地文件对比、从提交中挑选单个文件、按该提交的版本跳转到源（只读打开）、跨分支查看该文件的全部历史提交、查看单次提交引入的差异
 - **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击跳转到对应提交
 
 ### 性能
@@ -232,6 +236,8 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 - **中英双语**：界面全量本地化，跟随编辑器语言或手动指定
 - **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口）
+- **三栏键盘导航**：Tab 在分支树、提交列表与文件列表之间切换；方向键选行，Home / End / PageUp / PageDown 跳转，Enter 打开差异，Shift+方向键扩展提交范围
+- **收藏与最近**：给分支打星即置顶到树上方；"最近"分组直接读 git 自己的 HEAD 日志，在终端或其他 Git 界面里切的分支也会出现
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
 - **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换；表头（数量 + 切换按钮）在任意方向滚动时保持吸附
 - **文件图标跟随主题**：变更文件直接使用当前文件图标主题的图标（已安装主题与内置主题通用，字体型与 SVG 型都支持），文件夹用配套的双色图标，当前分支则显示实心分支图标

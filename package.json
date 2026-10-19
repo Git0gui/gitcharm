@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -233,6 +233,21 @@
       {
         "command": "idea-git.selectRepository",
         "title": "%cmd.selectRepository%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.createWorktree",
+        "title": "%cmd.createWorktree%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.openWorktree",
+        "title": "%cmd.openWorktree%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.removeWorktree",
+        "title": "%cmd.removeWorktree%",
         "category": "GitCharm"
       },
       {
