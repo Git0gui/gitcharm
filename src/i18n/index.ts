@@ -429,6 +429,7 @@ const zh: Record<string, string> = {
     'view.loadCommitsFailed': '加载提交记录失败: {error}',
     'view.loadBranchesFailed': '加载分支列表失败: {error}',
     'view.refreshBranchesFailed': '刷新分支列表失败: {error}',
+    'view.branchGone': '分支「{name}」已不存在，已显示全部提交',
 
     // skeleton html (graphView template)
     'ui.filterBranches': '筛选分支',
@@ -1001,6 +1002,7 @@ const en: Record<string, string> = {
     'view.loadCommitsFailed': 'Failed to load commits: {error}',
     'view.loadBranchesFailed': 'Failed to load branches: {error}',
     'view.refreshBranchesFailed': 'Failed to refresh branches: {error}',
+    'view.branchGone': 'Branch "{name}" no longer exists; showing all commits',
 
     // skeleton html
     'ui.filterBranches': 'Filter branches',

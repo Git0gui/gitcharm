@@ -2399,6 +2399,12 @@ window.addEventListener('message', function (ev) {
         if (m.currentBranch) {
             state.current = m.currentBranch;
         }
+        // The selected row may have been deleted outside the panel; keep the
+        // highlight only while the branch is still in one of the lists.
+        if (state.selectedBranch && state.local.indexOf(state.selectedBranch) < 0 &&
+            state.remote.indexOf(state.selectedBranch) < 0) {
+            state.selectedBranch = '';
+        }
         
         // Mark branches as loaded and hide skeleton
         loadState.branchesLoaded = true;

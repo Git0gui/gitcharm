@@ -274,8 +274,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._postRepoState();
 
         if (state === 'ready') {
+            // The branch remembered in view state may have been deleted since the
+            // snapshot; `git log <gone>` would fail with "unknown revision".
+            const dropped = this._dropVanishedBranch();
             Promise.all([
-                this._loadAndDisplayBranches(),
+                this._loadAndDisplayBranches(dropped),
                 this._loadAndDisplayCommits()
             ]).catch(error => {
                 vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
@@ -739,12 +742,25 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.onDidReceiveMessage(async (message: WebviewToExtMessage) => {
             switch (message.command) {
-                case 'selectBranch':
-                    this._branch = message.branch || undefined;
+                case 'selectBranch': {
+                    const branch = message.branch || undefined;
+                    // Rows can outlive their refs (persisted branch list, external
+                    // delete); loading history for one would only produce an
+                    // "unknown revision" toast.
+                    if (branch && !this._branchExists(branch)) {
+                        logger.info(`[GitCharm] Ignoring vanished branch "${branch}"`);
+                        this._branch = undefined;
+                        vscode.window.setStatusBarMessage(t('view.branchGone', { name: branch }), 5000);
+                        await this._reload(true);
+                        break;
+                    }
+
+                    this._branch = branch;
                     // Clear cherry-pick resume state when switching branches
                     await this._gitService.clearCherryPickResume(this._memento);
                     await this._reload();
                     break;
+                }
                 case 'refresh':
                     await this._reload(true);
                     break;
@@ -1205,6 +1221,30 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Whether a branch still resolves on disk. Refs are cached for a few
+     * seconds, so a miss is re-read once before believing it — a branch created
+     * moments ago must not be mistaken for a deleted one.
+     */
+    private _branchExists(name: string): boolean {
+        if (this._gitService.getBranchTipHash(name)) {return true;}
+        this._gitService.invalidateVolatile();
+        return !!this._gitService.getBranchTipHash(name);
+    }
+
+    /**
+     * Drop a selection whose ref vanished while it was remembered (view state
+     * from an earlier session, or a delete outside the panel). Without this,
+     * `git log <gone>` answers "ambiguous argument ... unknown revision".
+     */
+    private _dropVanishedBranch(): boolean {
+        if (!this._branch || this._branchExists(this._branch)) {return false;}
+        logger.info(`[GitCharm] Selected branch "${this._branch}" no longer exists; showing all refs`);
+        vscode.window.setStatusBarMessage(t('view.branchGone', { name: this._branch }), 5000);
+        this._branch = undefined;
+        return true;
+    }
+
+    /**
      * Tip of whatever the commit list is showing: the selected branch when one is
      * picked in the tree, otherwise HEAD (the "all refs" view is anchored there too).
      */
@@ -1520,6 +1560,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async _collect(force: boolean = false): Promise<GraphPayload> {
+        // A selection can outlive its ref (deleted in a terminal or another
+        // worktree); re-resolve it before it reaches `git log`.
+        const dropped = this._dropVanishedBranch();
         logger.debug(`[GitCharm] _collect called with branch=${this._branch || 'all'}, force=${force}`);
         logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}`);
         const [graphData, details] = await Promise.all([
@@ -1529,7 +1572,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 filters: this._filters,
                 force
             }),
-            this._gitService.getBranchesWithDetails(force)
+            // A vanished branch must also disappear from the tree immediately;
+            // the cached list would keep the row that produced the error.
+            this._gitService.getBranchesWithDetails(force || dropped)
         ]);
         logger.debug(`[GitCharm] _collect got ${graphData.commits.length} commits for branch=${this._branch || 'all'}`);
         let headHash = '';
@@ -1575,6 +1620,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (this._loadingMore || !this._hasMore || !this._view) {return;}
         this._loadingMore = true;
         try {
+            if (this._dropVanishedBranch()) {
+                // The rows so far belong to a branch that is gone; restart from
+                // all refs instead of appending a mismatched page.
+                void this._reload(true);
+                return;
+            }
             const data = await this._gitService.getCommitGraphData({
                 limit: GraphViewProvider.PAGE_MORE,
                 skip: this._loaded,
@@ -1684,12 +1735,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /**
      * Load branches in background and update webview when ready.
      */
-    private async _loadAndDisplayBranches(): Promise<void> {
+    private async _loadAndDisplayBranches(force: boolean = false): Promise<void> {
         if (!this._view || this._repoState !== 'ready') {return;}
         
         try {
             // Get cached branch data (fast, no git commands if cache hit)
-            const detailsPromise = this._gitService.getBranchesWithDetails(false);
+            const detailsPromise = this._gitService.getBranchesWithDetails(force);
             
             // Get head hash in parallel (may require git command, but don't block branches)
             const headHashPromise = this._gitService.getHeadHash().catch(() => '');
