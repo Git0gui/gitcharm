@@ -300,6 +300,20 @@ export function parseStashList(raw: string): StashEntry[] {
 }
 
 /**
+ * `stash@{n}` for a stack position taken from the stash list.
+ *
+ * The index comes from git itself, so this only guards against a malformed
+ * message reaching a command line — an out-of-range index is still a valid ref
+ * that git will simply fail to resolve.
+ */
+export function stashRef(index: number): string {
+    if (!Number.isInteger(index) || index < 0) {
+        throw new Error(`invalid stash index: ${index}`);
+    }
+    return `stash@{${index}}`;
+}
+
+/**
  * Split the commit-list path filter into git pathspecs.
  *
  * Comma-separated so several files/directories can be tracked at once, and

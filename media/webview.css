@@ -694,6 +694,13 @@ svg { flex: none; }
     background: var(--vscode-list-hoverBackground, #2a2d2e);
     transform: translateX(2px);
 }
+.sitem.sel {
+    background: var(--vscode-list-activeSelectionBackground, #094771);
+    color: var(--vscode-list-activeSelectionForeground, #fff);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+.sitem.sel .bname { color: inherit; font-weight: 600; }
+.sitem.sel .sdate { color: inherit; opacity: .8; }
 .sitem > svg { flex: none; opacity: .75; }
 .sitem .sdate {
     flex: none;

@@ -257,6 +257,8 @@ const zh: Record<string, string> = {
     'stash.dropped': '已删除贮藏 {ref}',
     'stash.dropFailed': '删除贮藏失败: {error}',
     'stash.dropBtn': '删除',
+    'stash.detailEmpty': '这个贮藏没有可显示的文件改动',
+    'stash.detailFailed': '读取贮藏内容失败: {error}',
 
     // reflog viewer (rescue lost commits)
     'reflog.title': '操作记录（Reflog）',
@@ -847,6 +849,8 @@ const en: Record<string, string> = {
     'stash.dropped': 'Dropped stash {ref}',
     'stash.dropFailed': 'Failed to drop stash: {error}',
     'stash.dropBtn': 'Drop',
+    'stash.detailEmpty': 'This stash has no file changes to show',
+    'stash.detailFailed': 'Failed to read the stash contents: {error}',
 
     // reflog viewer (rescue lost commits)
     'reflog.title': 'Reflog',

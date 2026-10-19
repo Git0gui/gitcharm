@@ -84,6 +84,16 @@
         { status: 'M', path: 'src/test/gitParsing.test.ts', added: 98, deleted: 1 }
     ];
 
+    // What each stash carries, in the merged shape the host sends: the tracked
+    // diff against the stash's first parent plus any `--include-untracked` file.
+    var stashFiles = {
+        0: [
+            { status: 'M', path: 'src/services/gitUtils.ts', added: 34, deleted: 0 },
+            { status: 'A', path: 'docs/preview/stash-notes.md', added: 12, deleted: 0 }
+        ],
+        1: filesOfBd864ce
+    };
+
     function det(hash, shortHash, message, date, files) {
         return {
             commit: {
@@ -244,6 +254,13 @@
         /** One file's patch drawn under the third pane's list: a single click opens it. */
         diffPreview: Object.assign({}, base, {
             steps: [{ do: 'click', sel: file('src/services/gitUtils.ts') }]
+        }),
+        /** A stash picked in the tree: its files in the third pane, nothing applied. */
+        stashDetail: Object.assign({}, base, {
+            steps: [
+                { do: 'click', sel: '.sitem[data-stash="1"]' },
+                { do: 'click', sel: file('src/services/gitUtils.ts') }
+            ]
         })
     };
 
@@ -294,6 +311,7 @@
         scene: scene,
         divergence: divergence,
         stashes: stashes,
+        stashFiles: stashFiles,
         details: details,
         pushFiles: pushFiles,
         previews: previews

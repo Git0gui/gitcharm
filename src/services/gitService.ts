@@ -23,6 +23,7 @@ import {
     parseWorkingTreeSummary,
     parseStatusEntries,
     parseStashList,
+    stashRef,
     parsePathFilter,
     parseReflogList,
     operationFromStateFiles,
@@ -743,44 +744,7 @@ export class GitService {
             this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
         ]);
 
-        // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
-        const stats = new Map<string, { added: number; deleted: number }>();
-        const numTokens = splitNul(numStat);
-        for (let i = 0; i < numTokens.length; i++) {
-            const header = numTokens[i];
-            const t1 = header.indexOf('\t');
-            const t2 = t1 >= 0 ? header.indexOf('\t', t1 + 1) : -1;
-            if (t2 < 0) {continue;}
-            let path = header.slice(t2 + 1);
-            if (path === '' && i + 2 < numTokens.length + 1) {
-                // Rename entry: header path is empty, src and dst follow as tokens
-                const dst = numTokens[i + 2] ?? numTokens[i + 1] ?? '';
-                i += 2;
-                path = dst;
-            }
-            const added = header.slice(0, t1);
-            const deleted = header.slice(t1 + 1, t2);
-            stats.set(path, {
-                added: added === '-' ? 0 : parseInt(added) || 0,
-                deleted: deleted === '-' ? 0 : parseInt(deleted) || 0
-            });
-        }
-
-        // name-status -z tokens: status, path; renames: status, src, dst
-        const files: FileStat[] = [];
-        const nsTokens = splitNul(nameStatus);
-        for (let i = 0; i < nsTokens.length; i++) {
-            const statusToken = nsTokens[i];
-            const letter = (statusToken || 'M').charAt(0);
-            let path = nsTokens[++i] || '';
-            if ((letter === 'R' || letter === 'C') && i + 1 < nsTokens.length) {
-                // Display the new name for renames/copies
-                path = nsTokens[++i];
-            }
-            if (!path) {continue;}
-            const s = stats.get(path) || { added: 0, deleted: 0 };
-            files.push({ status: letter, path, added: s.added, deleted: s.deleted });
-        }
+        const files = this._mergeDiffFileStats(nameStatus, numStat);
         this._filesCache.set(key, files);
         return files;
     }
@@ -2252,19 +2216,122 @@ export class GitService {
     }
 
     async applyStash(index: number = 0): Promise<void> {
-        await this._execMutate(['stash', 'apply', `stash@{${index}}`]);
+        await this._execMutate(['stash', 'apply', stashRef(index)]);
     }
 
     async popStash(index: number = 0): Promise<void> {
-        await this._execMutate(['stash', 'pop', `stash@{${index}}`]);
+        await this._execMutate(['stash', 'pop', stashRef(index)]);
     }
 
     async dropStash(index: number = 0): Promise<void> {
-        await this._execMutate(['stash', 'drop', `stash@{${index}}`]);
+        await this._execMutate(['stash', 'drop', stashRef(index)]);
     }
 
     async clearStashes(): Promise<void> {
         await this._execMutate(['stash', 'clear']);
+    }
+
+    /**
+     * The files a stash carries, without applying it.
+     *
+     * A stash commit's first parent is the worktree it was taken from, so that is
+     * the left side of every tracked change. Untracked files live in a third
+     * parent that exists only for `--include-untracked` stashes: they are all
+     * additions and are merged in by path.
+     */
+    async getStashFiles(index: number): Promise<FileStat[]> {
+        const ref = stashRef(index);
+        const tracked = await this._diffFilesWithStats(`${ref}^1`, ref);
+        if (!(await this._revParse(`${ref}^3`))) {return tracked;}
+        const untracked = await this._diffFilesWithStats(EMPTY_TREE_HASH, `${ref}^3`);
+        const seen = new Set(tracked.map(f => f.path));
+        return [...tracked, ...untracked.filter(f => !seen.has(f.path))];
+    }
+
+    /**
+     * The two revisions that bracket one stash file, so the inline preview and
+     * the editor diff show the same change the stash would apply.
+     */
+    async getStashDiffRefs(index: number, filePath: string): Promise<{ baseRef: string; targetRef: string }> {
+        const ref = stashRef(index);
+        if (await this._stashHasUntracked(ref, filePath)) {
+            return { baseRef: EMPTY_TREE_HASH, targetRef: `${ref}^3` };
+        }
+        return { baseRef: `${ref}^1`, targetRef: ref };
+    }
+
+    /** Is this exact path part of the stash's untracked-files commit? */
+    private async _stashHasUntracked(ref: string, filePath: string): Promise<boolean> {
+        if (!(await this._revParse(`${ref}^3`))) {return false;}
+        try {
+            // cat-file takes a literal object name, so a path containing glob
+            // characters cannot match a sibling file the way a pathspec would.
+            await this.executeGitArgs(['cat-file', '-e', this._objectSpec(`${ref}^3`, filePath)]);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private async _revParse(rev: string): Promise<string> {
+        const output = await this.executeGitArgs(['rev-parse', '--verify', '--quiet', rev]).catch(() => '');
+        return output.trim();
+    }
+
+    private async _diffFilesWithStats(baseRef: string, targetRef: string): Promise<FileStat[]> {
+        assertShellSafe(baseRef, t('label.baseRef'));
+        assertShellSafe(targetRef, t('label.targetRef'));
+        const [nameStatus, numStat] = await Promise.all([
+            this.executeGitArgs(['diff', '-M', '--name-status', '-z', `${baseRef}..${targetRef}`]).catch(() => ''),
+            this.executeGitArgs(['diff', '-M', '--numstat', '-z', `${baseRef}..${targetRef}`]).catch(() => '')
+        ]);
+        return this._mergeDiffFileStats(nameStatus, numStat);
+    }
+
+    /**
+     * Merge a NUL-delimited `--name-status -z` reply with its `--numstat -z`
+     * counterpart into the rows the panel draws.
+     */
+    private _mergeDiffFileStats(nameStatus: string, numStat: string): FileStat[] {
+        // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
+        const stats = new Map<string, { added: number; deleted: number }>();
+        const numTokens = splitNul(numStat);
+        for (let i = 0; i < numTokens.length; i++) {
+            const header = numTokens[i];
+            const t1 = header.indexOf('\t');
+            const t2 = t1 >= 0 ? header.indexOf('\t', t1 + 1) : -1;
+            if (t2 < 0) {continue;}
+            let path = header.slice(t2 + 1);
+            if (path === '' && i + 2 < numTokens.length + 1) {
+                // Rename entry: header path is empty, src and dst follow as tokens
+                const dst = numTokens[i + 2] ?? numTokens[i + 1] ?? '';
+                i += 2;
+                path = dst;
+            }
+            const added = header.slice(0, t1);
+            const deleted = header.slice(t1 + 1, t2);
+            stats.set(path, {
+                added: added === '-' ? 0 : parseInt(added) || 0,
+                deleted: deleted === '-' ? 0 : parseInt(deleted) || 0
+            });
+        }
+
+        // name-status -z tokens: status, path; renames: status, src, dst
+        const files: FileStat[] = [];
+        const nsTokens = splitNul(nameStatus);
+        for (let i = 0; i < nsTokens.length; i++) {
+            const statusToken = nsTokens[i];
+            const letter = (statusToken || 'M').charAt(0);
+            let path = nsTokens[++i] || '';
+            if ((letter === 'R' || letter === 'C') && i + 1 < nsTokens.length) {
+                // Display the new name for renames/copies
+                path = nsTokens[++i];
+            }
+            if (!path) {continue;}
+            const s = stats.get(path) || { added: 0, deleted: 0 };
+            files.push({ status: letter, path, added: s.added, deleted: s.deleted });
+        }
+        return files;
     }
 
     /**

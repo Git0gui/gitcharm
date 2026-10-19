@@ -793,27 +793,40 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * One file's diff for the panel's inline preview. The endpoints are the pair the
-     * editor diff uses on double-click — first parent against the commit, the empty
-     * tree for the initial commit — so the preview can never disagree with the diff
-     * the user opens next.
+     * One file's diff for the panel's inline preview. For a commit the endpoints
+     * are the pair the editor diff uses on double-click — first parent against
+     * the commit, the empty tree for the initial commit — and a stash is bracketed
+     * by its own first parent, so both surfaces describe the same change.
      */
-    private async _postFilePreview(hash: string, hashes: string[] | undefined, path: string): Promise<void> {
-        if (!hash || !path) {return;}
+    private async _postFilePreview(message: {
+        hash?: string;
+        hashes?: string[];
+        stash?: number;
+        path: string;
+    }): Promise<void> {
+        const { hash, hashes, stash, path } = message;
+        if (!path) {return;}
         try {
-            let baseRef = await this._gitService.getDiffBase(hash);
-            let targetRef = hash;
-            if (hashes && hashes.length > 1) {
-                // A group is compared oldest-to-newest, so the endpoints come from
-                // history order rather than the order the rows were clicked in.
-                const ordered = await this._gitService.orderCommitsByHistory(hashes);
-                targetRef = ordered[0];
-                baseRef = await this._gitService.getDiffBase(ordered[ordered.length - 1]);
+            let baseRef: string;
+            let targetRef: string;
+            if (typeof stash === 'number') {
+                ({ baseRef, targetRef } = await this._gitService.getStashDiffRefs(stash, path));
+            } else {
+                if (!hash) {return;}
+                baseRef = await this._gitService.getDiffBase(hash);
+                targetRef = hash;
+                if (hashes && hashes.length > 1) {
+                    // A group is compared oldest-to-newest, so the endpoints come from
+                    // history order rather than the order the rows were clicked in.
+                    const ordered = await this._gitService.orderCommitsByHistory(hashes);
+                    targetRef = ordered[0];
+                    baseRef = await this._gitService.getDiffBase(ordered[ordered.length - 1]);
+                }
             }
             const diff = await this._gitService.getFileDiffPreview(baseRef, targetRef, path);
             this._post({
                 command: 'filePreviewResponse',
-                hash, path,
+                hash, stash, path,
                 lines: diff.lines,
                 truncated: diff.truncated,
                 binary: diff.binary,
@@ -823,7 +836,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             logger.error('[GitCharm] Inline diff preview failed:', error);
             this._post({
                 command: 'filePreviewResponse',
-                hash, path,
+                hash, stash, path,
                 lines: [],
                 truncated: false,
                 binary: false,
@@ -841,6 +854,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const beforeUri = this._gitBlobUri(hash + '^', path);
             const afterUri = this._gitBlobUri(hash, path);
             await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, title);
+        } catch (err) {
+            vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
+        }
+    }
+
+    /** The editor twin of a stash's inline preview: same endpoints, own title. */
+    private async _openStashFileDiff(index: number, path: string): Promise<void> {
+        try {
+            const { baseRef, targetRef } = await this._gitService.getStashDiffRefs(index, path);
+            await vscode.commands.executeCommand(
+                'vscode.diff',
+                this._gitBlobUri(baseRef, path),
+                this._gitBlobUri(targetRef, path),
+                `${path} (stash@{${index}})`
+            );
         } catch (err) {
             vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
         }
@@ -987,8 +1015,24 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         this._postLoading('multiCommits', false);
                     }
                     break;
+                case 'selectStash':
+                    // Reading a stash is a view action: nothing in the worktree is
+                    // touched, so the panel can show the files before applying it.
+                    try {
+                        const files = await this._gitService.getStashFiles(message.index);
+                        this._post({ command: 'setStashDetail', index: message.index, files });
+                    } catch (error) {
+                        logger.error('[GitCharm] Reading stash files failed:', error);
+                        this._post({
+                            command: 'setStashDetail',
+                            index: message.index,
+                            files: [],
+                            error: formatGitError(error)
+                        });
+                    }
+                    break;
                 case 'filePreview':
-                    await this._postFilePreview(message.hash, message.hashes, message.path);
+                    await this._postFilePreview(message);
                     break;
                 case 'refreshBranches':
                     await this._refreshBranchesOnly();
@@ -1666,6 +1710,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'fileDiff': {
                     const relPath = message.path;
                     if (!relPath) { return; }
+                    if (typeof message.stash === 'number') {
+                        await this._openStashFileDiff(message.stash, relPath);
+                        return;
+                    }
                     const hashes = (message.hashes ?? []).filter(Boolean);
                     this._gitService.selectedCommitHash = message.hash;
                     if (hashes.length > 1) {

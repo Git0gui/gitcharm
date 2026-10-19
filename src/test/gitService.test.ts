@@ -6,7 +6,8 @@ import {
     assertShellSafe,
     parseLogLine,
     parseGraphLine,
-    LruCache
+    LruCache,
+    stashRef
 } from '../services/gitUtils';
 
 describe('assertShellSafe', () => {
@@ -76,6 +77,19 @@ describe('assertHash', () => {
 
     it('rejects empty strings', () => {
         assert.throws(() => assertHash(''), /不合法/);
+    });
+});
+
+describe('stashRef', () => {
+    it('spells a stack position the way git does', () => {
+        assert.equal(stashRef(0), 'stash@{0}');
+        assert.equal(stashRef(12), 'stash@{12}');
+    });
+
+    it('rejects positions that cannot come from the stack', () => {
+        assert.throws(() => stashRef(-1), /invalid stash index/);
+        assert.throws(() => stashRef(1.5), /invalid stash index/);
+        assert.throws(() => stashRef(Number.NaN), /invalid stash index/);
     });
 });
 

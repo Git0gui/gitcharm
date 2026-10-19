@@ -195,6 +195,12 @@ var state = {
     /** The file whose diff is shown under the list; null hides that strip. */
     preview: null,
     detail: null,
+    /**
+     * A stash picked in the tree, shown in place of the commit detail. It carries
+     * the message/date it was taken with: the stack renumbers after a drop, so an
+     * index alone would silently start naming a different stash.
+     */
+    stashDetail: null,
     collapsed: {},
     collapsedSec: {},
     expandedFolder: {},
@@ -629,7 +635,8 @@ function renderTree() {
         var label = entry.message || ref;
         var when = fmtRelativeTime(entry.date);
         var tooltip = ref + '\n' + label + (when ? '\n' + when : '');
-        return '<div class="sitem" data-stash="' + entry.index + '" data-title="' + esc(tooltip) + '" style="padding-left:20px">' +
+        var sel = state.stashDetail && state.stashDetail.index === entry.index ? ' sel' : '';
+        return '<div class="sitem' + sel + '" data-stash="' + entry.index + '" data-title="' + esc(tooltip) + '" style="padding-left:20px">' +
             I_STASH + '<span class="bname">' + esc(label) + '</span>' +
             (when ? '<span class="sdate">' + esc(when) + '</span>' : '') + '</div>';
     }
@@ -901,6 +908,11 @@ function selectCommitIndex(index, extend) {
 
 /** Ask the host for the detail pane of the current selection (single or merged). */
 function loadSelectedDetail() {
+    if (state.stashDetail) {
+        // The tree still marks the stash row; a commit selection takes over.
+        state.stashDetail = null;
+        renderTree();
+    }
     // The file list is about to be replaced, so a diff of one of its rows would
     // describe a file that may not even be in the new commit.
     clearPreview();
@@ -1189,11 +1201,83 @@ function applyDetailVisibility() {
     tg.classList.toggle('off', !state.detailVisible);
 }
 
+/** The stash picked in the tree: its own card, then the files it carries. */
+function renderStashDetail(info, filesBox) {
+    var s = state.stashDetail;
+    var ref = 'stash@{' + s.index + '}';
+    var tip = esc(ref) + '\n' + esc(s.message || '') + (s.date ? '\n' + esc(fmtDateTime(s.date)) : '');
+    var mh = '<div class="ccard" data-title="' + tip + '">';
+    mh += '<div class="crow"><span class="hashchip">' + esc(ref) + '</span><span class="cmeta">' + esc(T('w.stashSection')) + '</span></div>';
+    mh += '<div class="crow"><span class="cmsg">' + esc(s.message || ref) + '</span></div>';
+    if (s.date) {
+        mh += '<div class="crow"><span class="cmeta">' + esc(fmtRelativeTime(s.date)) + '</span></div>';
+    }
+    mh += '</div>';
+    info.innerHTML = mh;
+
+    if (s.error) {
+        filesBox.innerHTML = '<div class="empty">' + esc(T('stash.detailFailed', { error: s.error })) + '</div>';
+        return;
+    }
+    if (!s.files) {
+        filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>';
+        return;
+    }
+    if (s.files.length === 0) {
+        filesBox.innerHTML = '<div class="empty">' + T('stash.detailEmpty') + '</div>';
+        return;
+    }
+    var mode = state.fileViewMode || FILE_MODE_TREE;
+    var fh = fileHeadHtml(s.files.length, mode);
+    fh += buildFileRows(s.files, mode, state.collapsed, detailFileRowHtml);
+    filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
+    applyFileCursor();
+}
+
+/**
+ * Show a stash's files without applying it. The host renumbers the stack after a
+ * drop, so the message and date travel with the index: a row that no longer
+ * matches is a different stash and must not keep the old file list on screen.
+ */
+function selectStash(index) {
+    var entry = null;
+    for (var i = 0; i < state.stashes.length; i++) {
+        if (state.stashes[i].index === index) {entry = state.stashes[i]; break;}
+    }
+    clearPreview();
+    state.stashDetail = {
+        index: index,
+        message: entry ? entry.message : '',
+        date: entry ? entry.date : '',
+        files: null
+    };
+    state.selectedHash = null;
+    state.selectedHashes = [];
+    state.lastClickedIndex = -1;
+    state.multiCommits = null;
+    state.multiFiles = null;
+    state.detail = null;
+    state.fileCursor = '';
+    state.detailVisible = true;
+    applyRowSelection();
+    renderTree();
+    renderDetail();
+    saveViewState();
+    vscode.postMessage({ command: 'selectStash', index: index });
+}
+
 function renderDetail() {
     applyDetailVisibility();
     document.getElementById('repo-name').textContent = state.repoName;
     var info = document.getElementById('d-info');
     var filesBox = document.getElementById('d-files');
+    
+    // A stash is not a commit in the log, so it replaces the detail pane instead
+    // of trying to fit into the selected-commits model.
+    if (state.stashDetail) {
+        renderStashDetail(info, filesBox);
+        return;
+    }
     
     // Multi-select mode (2+ commits): show merged details
     if (state.selectedHashes.length > 1 && state.multiCommits) {
@@ -1793,6 +1877,11 @@ document.getElementById('scroll').addEventListener('scroll', function () {
 
 // Click handler for folders/sections (expand/collapse) and HEAD section
 document.getElementById('btree').addEventListener('click', function (e) {
+    var stashRow = e.target.closest('.sitem');
+    if (stashRow) {
+        selectStash(parseInt(stashRow.getAttribute('data-stash'), 10));
+        return;
+    }
     var sec = e.target.closest('.bsec');
     if (sec) {
         var key = sec.getAttribute('data-sec');
@@ -1829,6 +1918,8 @@ document.getElementById('btree').addEventListener('dblclick', function (e) {
     state.selectedBranch = name;
     state.highlight = name;
     state.detail = null;
+    state.stashDetail = null;
+    clearPreview();
     renderTree();
     renderDetail();
     saveViewState();
@@ -1850,6 +1941,10 @@ document.getElementById('tg-files').addEventListener('click', function () {
 });
 
 document.getElementById('rf-files').addEventListener('click', function () {
+    if (state.stashDetail) {
+        selectStash(state.stashDetail.index);
+        return;
+    }
     if (state.selectedHash) {
         vscode.postMessage({ command: 'refreshFiles', hash: state.selectedHash });
     }
@@ -2079,7 +2174,13 @@ document.getElementById('d-files').addEventListener('click', function (e) {
 // Double-click a file in the detail panel to open its commit diff (was single-click)
 document.getElementById('d-files').addEventListener('dblclick', function (e) {
     var file = e.target.closest('.frow.file');
-    if (file && state.selectedHash) {
+    if (!file) {return;}
+    var path = file.getAttribute('data-path');
+    if (state.stashDetail) {
+        vscode.postMessage({ command: 'action', action: 'fileDiff', stash: state.stashDetail.index, path: path });
+        return;
+    }
+    if (state.selectedHash) {
         // With a group selected the host opens one patch document per commit, so it
         // needs every hash, not just the last-clicked one.
         vscode.postMessage({
@@ -2087,7 +2188,7 @@ document.getElementById('d-files').addEventListener('dblclick', function (e) {
             action: 'fileDiff',
             hash: state.selectedHash,
             hashes: state.selectedHashes,
-            path: file.getAttribute('data-path')
+            path: path
         });
     }
 });
@@ -2136,11 +2237,16 @@ function clearPreview() {
 }
 
 function requestFilePreview(path) {
-    if (!state.selectedHash || !path) {return;}
+    var stash = state.stashDetail ? state.stashDetail.index : undefined;
+    if ((!state.selectedHash && stash === undefined) || !path) {return;}
     var hashes = state.selectedHashes.length > 1 ? state.selectedHashes : undefined;
-    state.preview = { path: path, hash: state.selectedHash, loading: true };
+    // One key names the side the file list belongs to. It is a string because the
+    // commit side has no hash while a stash is shown, and undefined/null would
+    // otherwise have to compare equal across the two kinds of answer.
+    var key = stash === undefined ? 'commit:' + state.selectedHash : 'stash:' + stash;
+    state.preview = { path: path, key: key, loading: true };
     renderPreview();
-    vscode.postMessage({ command: 'filePreview', path: path, hash: state.selectedHash, hashes: hashes });
+    vscode.postMessage({ command: 'filePreview', path: path, hash: state.selectedHash || undefined, hashes: hashes, stash: stash });
 }
 
 function diffLineHtml(line) {
@@ -2193,11 +2299,13 @@ document.getElementById('dp-close').addEventListener('click', clearPreview);
 document.getElementById('dp-editor').addEventListener('click', function () {
     var p = state.preview;
     if (!p || p.loading) {return;}
+    var stash = state.stashDetail ? state.stashDetail.index : undefined;
     vscode.postMessage({
         command: 'action',
         action: 'fileDiff',
-        hash: state.selectedHash,
-        hashes: state.selectedHashes,
+        hash: stash === undefined ? state.selectedHash : undefined,
+        hashes: stash === undefined ? state.selectedHashes : undefined,
+        stash: stash,
         path: p.path
     });
 });
@@ -2351,9 +2459,9 @@ function openFileRow(row) {
         row.click();
         return;
     }
-    if (!state.selectedHash) {return;}
+    if (!state.selectedHash && !state.stashDetail) {return;}
     // Reuse the dblclick handler instead of restating the diff message it sends —
-    // it is the one that carries the multi-select hashes.
+    // it is the one that knows about the multi-select hashes and the stash stack.
     row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
 }
 
@@ -2482,6 +2590,8 @@ function handleBranchKeys(e) {
                 // Same as double-click: load that branch's commits. Checking out
                 // stays a deliberate double-click / menu action.
                 rows[at].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            } else if (rows[at].classList.contains('sitem')) {
+                selectStash(parseInt(rows[at].getAttribute('data-stash'), 10));
             } else if (!isTreeLeaf(rows[at])) {
                 rows[at].click();
             }
@@ -2842,6 +2952,7 @@ window.addEventListener('message', function (ev) {
             state.multiCommits = null;
             state.multiFiles = null;
             state.detail = null;
+            state.stashDetail = null;
             // The file list this preview belonged to is gone with the selection.
             clearPreview();
         }
@@ -2902,10 +3013,11 @@ window.addEventListener('message', function (ev) {
         // Clicking another file (or another commit) fires a new request; a patch
         // that finishes late must not paint over the selection that replaced it.
         var p = state.preview;
-        if (!p || p.loading !== true || p.path !== m.path || p.hash !== m.hash) { return; }
+        var key = m.stash !== undefined && m.stash !== null ? 'stash:' + m.stash : 'commit:' + m.hash;
+        if (!p || p.loading !== true || p.path !== m.path || p.key !== key) { return; }
         state.preview = {
             path: m.path,
-            hash: m.hash,
+            key: key,
             loading: false,
             lines: m.lines || [],
             truncated: m.truncated === true,
@@ -2927,6 +3039,10 @@ window.addEventListener('message', function (ev) {
         state.lastClickedIndex = -1;
         state.multiCommits = null;
         state.multiFiles = null;
+        if (state.stashDetail) {
+            state.stashDetail = null;
+            renderTree();
+        }
         state.detailVisible = true;
         clearPreview();
         applyRowSelection();
@@ -2972,7 +3088,24 @@ window.addEventListener('message', function (ev) {
         // The stash stack lives in the same tree but is re-sent on its own: stashing
         // never moves HEAD, so the commit list has nothing to reload.
         state.stashes = m.stashes || [];
+        // Positions shifted (a stash was dropped, or a new one landed on top):
+        // what sits at the remembered index is no longer the same stash.
+        var sd = state.stashDetail;
+        if (sd && !state.stashes.some(function (s) {
+            return s.index === sd.index && s.message === sd.message && s.date === sd.date;
+        })) {
+            state.stashDetail = null;
+            state.detail = null;
+            clearPreview();
+            renderDetail();
+        }
         renderTree();
+    } else if (m.command === 'setStashDetail') {
+        // Only the stash the user is still looking at may paint its files.
+        if (!state.stashDetail || state.stashDetail.index !== m.index) { return; }
+        state.stashDetail.files = m.files || [];
+        state.stashDetail.error = m.error;
+        renderDetail();
     } else if (m.command === 'showCherryPickResume') {
         // Show resume button on current branch node
         state.cherryPickResume = {

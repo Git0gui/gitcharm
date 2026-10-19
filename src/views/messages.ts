@@ -87,6 +87,7 @@ export type ExtToWebviewMessage =
     }
     | { command: 'setFavorites'; favorites: string[] }
     | { command: 'setStashes'; stashes: StashEntry[] }
+    | { command: 'setStashDetail'; index: number; files: FileStat[]; error?: string }
     | {
         command: 'setRepoState';
         state: RepoUiState;
@@ -115,7 +116,9 @@ export type ExtToWebviewMessage =
          * both still match: clicking through files fast must not paint an older
          * file's diff under the newest one.
          */
-        hash: string;
+        hash?: string;
+        /** Stash stack position, when the answer belongs to a stash's file list. */
+        stash?: number;
         path: string;
         lines: DiffPreviewLine[];
         truncated: boolean;
@@ -201,12 +204,15 @@ export type WebviewToExtMessage =
     | { command: 'loadMore' }
     | { command: 'selectCommit'; hash: string; force?: boolean }
     | { command: 'selectCommits'; hashes: string[] }
+    | { command: 'selectStash'; index: number }
     | {
         command: 'filePreview';
         /** Commit (or newest of the group) whose version of the file to show. */
-        hash: string;
+        hash?: string;
         /** Every hash of a multi-select group; the host orders them by history. */
         hashes?: string[];
+        /** Set instead of `hash` when the file rows belong to a stash. */
+        stash?: number;
         path: string;
     }
     | {
