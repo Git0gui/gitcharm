@@ -35,6 +35,7 @@ import {
     pickFetchRemote,
     remoteNameFromUpstream,
     matchRemoteBranch,
+    resolvePushTarget,
     collectRepositoryRoots,
     discoverRepositoryRoots,
     repositoryKey,
@@ -102,6 +103,30 @@ export interface BranchDetails {
     current: string;
     local: Array<{ name: string; upstream?: string; ahead: number; behind: number }>;
     remote: Array<{ name: string }>;
+}
+
+export interface PushPreviewCommit {
+    hash: string;
+    shortHash: string;
+    message: string;
+    author: string;
+    date: string;
+}
+
+/** Everything the push dialog needs for one target remote. */
+export interface PushPreview {
+    branch: string;
+    remote: string;
+    /** Every configured remote, so the dialog can offer another target. */
+    remotes: string[];
+    remoteExists: boolean;
+    isFirstPush: boolean;
+    hasUpstream: boolean;
+    aheadCount: number;
+    behindCount: number;
+    /** Ref the aggregate diff compares against; undefined before the first push. */
+    baseRef?: string;
+    commits: PushPreviewCommit[];
 }
 
 type BranchTrackMap = Map<string, { upstream?: string; ahead: number; behind: number }>;
@@ -1725,21 +1750,30 @@ export class GitService {
     }
 
     /**
-     * Remote a background fetch should contact, read straight from the config
-     * file (no subprocess, worktree-safe like `getRemoteWebBase`). Empty when the
-     * repository has no remote, so the scheduler can skip instead of failing on a
-     * doomed `git fetch origin` every tick.
+     * Remotes configured for this repository, read straight from the config
+     * file. Unlike remote-tracking refs this also lists a remote that was just
+     * added and not fetched yet, which is exactly when a push target matters.
      */
-    getFetchRemote(): string {
+    getRemoteNames(): string[] {
         const repoPath = this._repositoryPath;
         const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
-        if (!gitDir) {return '';}
+        if (!gitDir) {return [];}
         try {
             const config = fs.readFileSync(path.join(resolveCommonDir(gitDir), 'config'), 'utf8');
-            return pickFetchRemote(parseGitConfigRemoteNames(config));
+            return parseGitConfigRemoteNames(config);
         } catch {
-            return '';
+            return [];
         }
+    }
+
+    /**
+     * Remote a background fetch should contact (no subprocess, worktree-safe
+     * like `getRemoteWebBase`). Empty when the repository has no remote, so the
+     * scheduler can skip instead of failing on a doomed `git fetch origin`
+     * every tick.
+     */
+    getFetchRemote(): string {
+        return pickFetchRemote(this.getRemoteNames());
     }
 
     /**
@@ -1846,6 +1880,68 @@ export class GitService {
         this._persistedCache.save(this._repositoryPath || '', { local: details.local, remote: details.remote });
         
         return details;
+    }
+
+    /**
+     * What a push of `branchName` to `preferredRemote` would send: the commit
+     * list the dialog shows, the ref its aggregate diff compares against, and
+     * ahead/behind counts. Recomputed when the user switches remotes in the
+     * dialog; see resolvePushTarget for how a target is chosen.
+     */
+    async getPushPreview(branchName: string, preferredRemote?: string): Promise<PushPreview> {
+        const details = await this.getBranchesWithDetails(false);
+        const localBranch = details.local.find(b => b.name === branchName);
+        const target = resolvePushTarget(
+            details.remote.map(b => b.name),
+            branchName,
+            localBranch?.upstream,
+            preferredRemote
+        );
+        const preview: PushPreview = {
+            branch: branchName,
+            remote: target.remote,
+            remotes: this.getRemoteNames(),
+            remoteExists: target.exists,
+            isFirstPush: !target.exists,
+            hasUpstream: target.hasUpstream,
+            aheadCount: 0,
+            behindCount: 0,
+            baseRef: target.ref,
+            commits: []
+        };
+        if (!target.exists) {return preview;}
+
+        if (target.hasUpstream && localBranch) {
+            preview.aheadCount = localBranch.ahead || 0;
+            preview.behindCount = localBranch.behind || 0;
+            if (preview.aheadCount > 0) {
+                const ahead = await this.getAheadCommits(branchName, localBranch.upstream!);
+                preview.commits = ahead.map(c => ({
+                    hash: c.hash, shortHash: c.shortHash, message: c.message, author: c.author, date: c.date
+                }));
+            }
+            return preview;
+        }
+
+        // No upstream on this remote: compare directly against the remote ref.
+        const output = (await this.executeGitArgs([
+            'log', `${target.ref}..${branchName}`, '--format=%H|%h|%an|%ae|%ai|%ar|%s|%P'
+        ])).trim();
+        for (const line of output.split('\n')) {
+            if (!line.trim()) {continue;}
+            const commit = parseLogLine(line);
+            if (commit) {
+                preview.commits.push({
+                    hash: commit.hash,
+                    shortHash: commit.shortHash,
+                    message: commit.message,
+                    author: commit.author,
+                    date: commit.date
+                });
+            }
+        }
+        preview.aheadCount = preview.commits.length;
+        return preview;
     }
 
     /**

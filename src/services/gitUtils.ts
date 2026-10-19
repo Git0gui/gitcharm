@@ -559,6 +559,45 @@ export function matchRemoteBranch(
     return fallback;
 }
 
+export interface PushTarget {
+    remote: string;
+    /** Whether the remote already has a branch of this name. */
+    exists: boolean;
+    /** Remote-tracking ref carrying the branch, when it exists. */
+    ref?: string;
+    /** The local branch's configured upstream is this remote's branch. */
+    hasUpstream: boolean;
+}
+
+/**
+ * Decide where a push of `branchName` goes. An explicit `preferredRemote`
+ * (the dialog's remote picker) wins outright and must NOT fall back to another
+ * remote that happens to carry a twin branch: choosing `fork` for a branch that
+ * only exists on `origin` is a first push to `fork`, not a push to `origin`.
+ * Without a preference: the tracked remote, then any remote with the same
+ * branch (`origin` preferred), then `origin` as the conventional default.
+ */
+export function resolvePushTarget(
+    remoteRefs: readonly string[],
+    branchName: string,
+    upstream: string | undefined,
+    preferredRemote?: string
+): PushTarget {
+    const picked = (preferredRemote || '').trim()
+        || remoteNameFromUpstream(upstream)
+        || matchRemoteBranch(remoteRefs, branchName)?.remote
+        || 'origin';
+    const match = matchRemoteBranch(remoteRefs, branchName, picked);
+    const onPicked = match && match.remote === picked ? match : undefined;
+    const hasUpstream = !!upstream && remoteNameFromUpstream(upstream) === picked;
+    return {
+        remote: picked,
+        exists: hasUpstream || !!onPicked,
+        ref: hasUpstream ? upstream : onPicked?.ref,
+        hasUpstream
+    };
+}
+
 /** One repository of a multi-root workspace, as offered by the panel's switcher. */
 export interface RepositoryOption {
     path: string;

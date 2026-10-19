@@ -2488,7 +2488,7 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'showSquashMessageDialog') {
         showSquashMessageDialog(m.prompt, m.initialValue, m.placeholder);
     } else if (m.command === 'showPushDialog') {
-        showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush, m.remote || 'origin');
+        showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush, m.remote || 'origin', m.remotes || []);
     } else if (m.command === 'pushFilesResponse') {
         window._handlePushFiles(m.hash, m.files || []);
     } else if (m.command === 'showCompareDialog') {
@@ -2688,7 +2688,11 @@ function renderDialogDetail(el, commit, commits) {
 
 var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', remoteExists: true, visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
-function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote) {
+function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, remotes) {
+    // The host re-sends this message when the target remote changes; replace the
+    // open dialog instead of stacking a second overlay.
+    var existing = document.getElementById('push-dialog');
+    if (existing) { existing.remove(); }
     // '__all__' is the synthetic aggregate row ("全部提交") diffing base ref vs local tip
     pushState = { commits: commits, selectedHash: commits.length > 0 ? '__all__' : null, filesCache: {}, branchName: branchName, remoteExists: remoteExists !== false, visibleCount: 20, fileViewMode: state.fileViewMode || 'tree', collapsedDirs: {} };
     var overlay = document.createElement('div');
@@ -2741,7 +2745,21 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote) 
     }
 
     var targetRemote = remote || 'origin';
-    var remoteLabel = esc(targetRemote) + '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
+    // Multi-remote repositories get a picker; switching it reloads the preview
+    // from the host, so the commit list always describes the visible target.
+    var remoteOptions = remotes || [];
+    if (remoteOptions.length > 1 && remoteOptions.indexOf(targetRemote) < 0) {
+        remoteOptions = [targetRemote].concat(remoteOptions);
+    }
+    var remoteControl = esc(targetRemote);
+    if (remoteOptions.length > 1) {
+        var optionHtml = remoteOptions.map(function (r) {
+            return '<option value="' + esc(r) + '"' + (r === targetRemote ? ' selected' : '') + '>' + esc(r) + '</option>';
+        }).join('');
+        remoteControl = '<select class="push-remote-select" id="push-remote-select" data-title="' +
+            esc(T('pushDlg.target')) + '">' + optionHtml + '</select>';
+    }
+    var remoteLabel = remoteControl + '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
     var commitCountText = commits.length > 0 ? T('common.commitCount', { n: commits.length }) : (pushState.remoteExists ? T('pushDlg.upToDate') : T('pushDlg.firstPush'));
     var headerText = esc(branchName) + ' <span class="push-arrow">→</span> ' + remoteLabel + ' — ' + commitCountText;
 
@@ -2758,6 +2776,16 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote) 
         '</div></div>';
 
     document.body.appendChild(overlay);
+
+    // Disable the picker while the host recomputes; the replacement dialog
+    // (same id) arrives with the new commit list and an enabled picker.
+    var remoteSelect = overlay.querySelector('#push-remote-select');
+    if (remoteSelect) {
+        remoteSelect.addEventListener('change', function () {
+            remoteSelect.disabled = true;
+            vscode.postMessage({ command: 'pushDialogRemote', remote: remoteSelect.value });
+        });
+    }
 
     // Commit row click handler
     function attachCommitClickHandlers() {

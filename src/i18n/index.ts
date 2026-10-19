@@ -261,6 +261,7 @@ const zh: Record<string, string> = {
     'push.success': '已推送 "{name}" 到远程',
     'push.forceSuccess': '已强制推送 "{name}" 到远程',
     'push.failed': '推送失败: {error}',
+    'push.previewFailed': '读取推送目标失败: {error}',
     'push.pushedTo': '已推送到 {remote}{branch}',
     'push.behindRemote': '"{name}" 落后远程 {count} 个提交，仍可强制推送',
     'push.rejectedNonFastForward': '推送被拒绝：本地分支 "{name}" 落后于远程，请先拉取或强制推送',
@@ -523,6 +524,7 @@ const zh: Record<string, string> = {
     'pushDlg.firstPush': '首次推送',
     'pushDlg.pushBtn': '推送',
     'pushDlg.forcePushBtn': '强制推送',
+    'pushDlg.target': '推送目标',
 
     // compare dialog
     'compare.allDiff': '全部差异',
@@ -799,6 +801,7 @@ const en: Record<string, string> = {
     'push.success': 'Pushed "{name}" to remote',
     'push.forceSuccess': 'Force-pushed "{name}" to remote',
     'push.failed': 'Push failed: {error}',
+    'push.previewFailed': 'Could not inspect the push target: {error}',
     'push.pushedTo': 'Pushed to {remote}{branch}',
     'push.behindRemote': '"{name}" is behind remote by {count} commits; force-push available',
     'push.rejectedNonFastForward': 'Push rejected: local branch "{name}" is behind remote. Pull first or force-push.',
@@ -1061,6 +1064,7 @@ const en: Record<string, string> = {
     'pushDlg.firstPush': 'First push',
     'pushDlg.pushBtn': 'Push',
     'pushDlg.forcePushBtn': 'Force Push',
+    'pushDlg.target': 'Push to',
 
     // compare dialog
     'compare.allDiff': 'All Differences',

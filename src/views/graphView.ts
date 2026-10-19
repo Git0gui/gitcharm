@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitService, GraphCommit, LogFilters, ReflogEntry } from '../services/gitService';
+import { GitService, GraphCommit, LogFilters, ReflogEntry, PushPreview } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
@@ -481,47 +481,70 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Show a push confirmation dialog with commit list and file diffs.
-     * Returns { action: string, force?: boolean } or undefined.
-     * baseRef: ref the push is compared against (upstream or origin/<branch>);
-     * undefined for a first push (falls back to the empty tree).
+     * Show the push confirmation dialog for a computed preview. The dialog can
+     * switch the target remote; each switch recomputes the preview on the host.
+     * Resolves with the action and the preview that was on screen when the user
+     * confirmed, or undefined when dismissed.
      */
-    showPushDialog(
-        branchName: string,
-        commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }>,
-        remoteExists: boolean,
-        isFirstPush: boolean = false,
-        baseRef?: string,
-        remote: string = 'origin'
-    ): Promise<{ action: string; force?: boolean } | undefined> {
+    showPushDialog(preview: PushPreview): Promise<{ action: string; force?: boolean; preview: PushPreview } | undefined> {
         return new Promise((resolve) => {
             const view = this._view;
             if (!view) {
                 resolve(undefined);
                 return;
             }
-            const allBase = baseRef ?? EMPTY_TREE_HASH;
             const subscriptions: vscode.Disposable[] = [];
+            let current = preview;
+            let previewSeq = 0;
             let settled = false;
-            const settle = (result?: { action: string; force?: boolean }) => {
+            const settle = (result?: { action: string; force?: boolean; preview: PushPreview }) => {
                 if (settled) {return;}
                 settled = true;
                 while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
                 resolve(result);
             };
+            const postDialog = (p: PushPreview) => {
+                this._post({
+                    command: 'showPushDialog',
+                    branchName: p.branch,
+                    commits: p.commits,
+                    remoteExists: p.remoteExists,
+                    isFirstPush: p.isFirstPush,
+                    remote: p.remote,
+                    remotes: p.remotes
+                });
+            };
             subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
                 if (msg.command === 'pushDialogAction') {
-                    settle({ action: msg.action, force: msg.force });
+                    settle({ action: msg.action, force: msg.force, preview: current });
+                } else if (msg.command === 'pushDialogRemote') {
+                    const seq = ++previewSeq;
+                    void (async () => {
+                        try {
+                            const next = await this._gitService.getPushPreview(current.branch, msg.remote);
+                            if (settled || seq !== previewSeq) {return;}
+                            current = next;
+                            postDialog(next);
+                        } catch (error) {
+                            if (settled || seq !== previewSeq) {return;}
+                            // Re-render the unchanged target: its select was disabled
+                            // while this request was in flight.
+                            postDialog(current);
+                            vscode.window.showErrorMessage(t('push.previewFailed', { error: formatGitError(error) }));
+                        }
+                    })();
                 } else if (msg.command === 'pushDialogFileDiff') {
+                    const base = current.baseRef ?? EMPTY_TREE_HASH;
                     if (msg.hash === ALL_COMMITS_ROW) {
-                        void this._openRefFileDiff(allBase, branchName, msg.path);
+                        void this._openRefFileDiff(base, current.branch, msg.path);
                     } else {
                         void this._openFileDiff(msg.hash, msg.path);
                     }
                 } else if (msg.command === 'getPushAllFiles') {
+                    const p = current;
                     void (async () => {
                         try {
-                            const files = await this._gitService.getDiffFilesBetweenRefs(allBase, branchName);
+                            const files = await this._gitService.getDiffFilesBetweenRefs(p.baseRef ?? EMPTY_TREE_HASH, p.branch);
                             this._post({ command: 'pushFilesResponse', hash: ALL_COMMITS_ROW, files });
                         } catch {
                             this._post({ command: 'pushFilesResponse', hash: ALL_COMMITS_ROW, files: [] });
@@ -536,14 +559,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 if (!view.visible) {settle(undefined);}
             }));
             subscriptions.push(view.onDidDispose(() => settle(undefined)));
-            this._post({
-                command: 'showPushDialog',
-                branchName,
-                commits,
-                remoteExists,
-                isFirstPush,
-                remote
-            });
+            postDialog(preview);
         });
     }
 

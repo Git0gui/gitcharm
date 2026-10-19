@@ -110,6 +110,8 @@ export type ExtToWebviewMessage =
         isFirstPush: boolean;
         /** Remote the push will target, so the dialog does not claim "origin" blindly. */
         remote: string;
+        /** All configured remotes; more than one turns the dialog's picker on. */
+        remotes: string[];
     }
     | { command: 'pushFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
     | {
@@ -183,6 +185,7 @@ export type WebviewToExtMessage =
     | { command: 'squashMessageResponse'; message?: string }
     | { command: 'saveViewState'; state: PersistedViewState }
     | { command: 'pushDialogAction'; action: string; force?: boolean }
+    | { command: 'pushDialogRemote'; remote: string }
     | { command: 'pushDialogFileDiff'; hash: string; path: string }
     | { command: 'getCommitFilesForPush'; hash: string }
     | { command: 'getPushAllFiles' }

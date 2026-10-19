@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -620,6 +620,50 @@ describe('matchRemoteBranch', () => {
     it('returns undefined without a matching remote branch', () => {
         assert.equal(matchRemoteBranch([], 'main'), undefined);
         assert.equal(matchRemoteBranch(['origin/other'], 'main'), undefined);
+    });
+});
+
+describe('resolvePushTarget', () => {
+    it('follows the tracked remote when no target is chosen', () => {
+        assert.deepEqual(
+            resolvePushTarget(['origin/main', 'fork/main'], 'main', 'fork/main'),
+            { remote: 'fork', exists: true, ref: 'fork/main', hasUpstream: true }
+        );
+    });
+
+    it('prefers origin among twin branches when nothing is tracked', () => {
+        assert.deepEqual(
+            resolvePushTarget(['fork/main', 'origin/main'], 'main', undefined),
+            { remote: 'origin', exists: true, ref: 'origin/main', hasUpstream: false }
+        );
+    });
+
+    it('honours an explicit remote even when another remote has the branch', () => {
+        assert.deepEqual(
+            resolvePushTarget(['origin/main', 'fork/main'], 'main', 'origin/main', 'fork'),
+            { remote: 'fork', exists: true, ref: 'fork/main', hasUpstream: false }
+        );
+    });
+
+    it('treats a branch missing on the chosen remote as a first push', () => {
+        assert.deepEqual(
+            resolvePushTarget(['origin/main'], 'main', 'origin/main', 'fork'),
+            { remote: 'fork', exists: false, ref: undefined, hasUpstream: false }
+        );
+    });
+
+    it('handles nested branch names on the chosen remote', () => {
+        assert.deepEqual(
+            resolvePushTarget(['fork/dev/login'], 'dev/login', undefined, 'fork'),
+            { remote: 'fork', exists: true, ref: 'fork/dev/login', hasUpstream: false }
+        );
+    });
+
+    it('defaults to origin when nothing matches', () => {
+        assert.deepEqual(
+            resolvePushTarget([], 'main', undefined),
+            { remote: 'origin', exists: false, ref: undefined, hasUpstream: false }
+        );
     });
 });
 

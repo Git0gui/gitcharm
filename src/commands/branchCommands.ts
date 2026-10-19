@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
-import { parseLogLine, formatGitError, remoteNameFromUpstream, matchRemoteBranch } from '../services/gitUtils';
+import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
@@ -328,81 +328,19 @@ export function registerBranchCommands(
             }
 
             try {
-                // Remote-tracking branch names come from our refs cache (loose refs +
-                // packed-refs on disk), so this never waits on another extension.
-                const branchDetails = await gitService.getBranchesWithDetails(false);
-                const remoteNames = branchDetails.remote.map(b => b.name);
-                const localBranch = branchDetails.local.find(b => b.name === branchName);
-                // Push where the branch already tracks; otherwise to whichever remote
-                // carries the same name (`origin` preferred); otherwise origin, which
-                // is what a first push has always used.
-                const upstreamRemote = remoteNameFromUpstream(localBranch?.upstream);
-                const remoteMatch = matchRemoteBranch(remoteNames, branchName, upstreamRemote);
-                const remoteExists = !!localBranch?.upstream || !!remoteMatch;
-                const remoteName = upstreamRemote ?? remoteMatch?.remote ?? 'origin';
-                logger.debug(`[GitCharm] Push check: branch ${branchName} -> ${remoteName}, exists: ${remoteExists}`);
+                // Everything the dialog shows for a target remote, including the
+                // remote choice itself. The dialog can switch targets; the preview
+                // it resolved with comes back so the push uses the same one.
+                const preview = await gitService.getPushPreview(branchName);
+                logger.debug(`[GitCharm] Push check: branch ${branchName} -> ${preview.remote}, exists: ${preview.remoteExists}`);
 
-                // For existing branches, get commits for display
-                // For new branches, skip commit fetching (show empty list)
-                let commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }> = [];
-                let hasUpstream = false;
-                let aheadCount = 0;
-                let behindCount = 0;
-                let baseRef: string | undefined; // ref the "全部提交" aggregate diff compares against
-                const isFirstPush = !remoteExists; // First push if no remote branch carries this name
-
-                if (remoteExists) {
-                    baseRef = localBranch?.upstream || remoteMatch?.ref || `origin/${branchName}`;
-
-                    if (localBranch) {
-                        aheadCount = localBranch.ahead || 0;
-
-                        if (localBranch.upstream) {
-                            // Has upstream - use the same method as divergence arrows
-                            hasUpstream = true;
-                            if (aheadCount > 0) {
-                                const aheadCommits = await gitService.getAheadCommits(branchName, localBranch.upstream);
-                                commits = aheadCommits.map(c => ({
-                                    hash: c.hash, shortHash: c.shortHash, message: c.message, author: c.author, date: c.date
-                                }));
-                            }
-                        } else if (remoteMatch) {
-                            // No upstream configured, but the remote branch exists - compare directly
-                            const output = (await gitService.executeGitArgs([
-                                'log', `${remoteMatch.ref}..${branchName}`, '--format=%H|%h|%an|%ae|%ai|%ar|%s|%P'
-                            ])).trim();
-                            if (output) {
-                                for (const line of output.split('\n')) {
-                                    if (!line.trim()) {continue;}
-                                    const commit = parseLogLine(line);
-                                    if (commit) {
-                                        commits.push({
-                                            hash: commit.hash,
-                                            shortHash: commit.shortHash,
-                                            message: commit.message,
-                                            author: commit.author,
-                                            date: commit.date
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Behind remote: the dialog still opens, with the force-push option
-                    behindCount = localBranch?.behind || 0;
-                    if (behindCount > 0 && aheadCount === 0) {
-                        logger.debug(`[GitCharm] Branch ${branchName} is behind remote by ${behindCount} commits; showing push dialog with force option`);
-                    }
-                }
                 // Nothing ahead is not a reason to skip the dialog: it is where the
                 // user reviews what would be sent (and can force-push). The dialog
                 // itself labels this state "已是最新".
-
-                // Show dialog with state information
-                const result = await graphView.showPushDialog(branchName, commits, remoteExists, isFirstPush, baseRef, remoteName);
+                const result = await graphView.showPushDialog(preview);
 
                 if (!result || result.action === 'cancel') {return;}
+                const target = result.preview;
 
                 // Progress, not a silent wait: a push over our own askpass can stop for
                 // a credential box, and `_execNetwork` sets no timeout so a large
@@ -411,10 +349,11 @@ export function registerBranchCommands(
                     location: vscode.ProgressLocation.Notification,
                     title: t('push.pushing', { name: branchName }),
                     cancellable: false
-                }, () => gitService.push(remoteName, branchName, result.force === true, !hasUpstream));
+                }, () => gitService.push(target.remote, branchName, result.force === true, !target.hasUpstream));
                 // git exits 0 with "Everything up-to-date" on stderr, so without this
                 // the user would be told a push happened when nothing was sent.
-                const pushedNothing = !result.force && hasUpstream && aheadCount === 0 && behindCount === 0;
+                const pushedNothing = !result.force && target.hasUpstream
+                    && target.aheadCount === 0 && target.behindCount === 0;
                 if (pushedNothing) {
                     vscode.window.showInformationMessage(t('push.upToDate', { name: branchName }));
                 } else {

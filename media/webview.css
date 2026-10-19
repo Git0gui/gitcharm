@@ -1448,6 +1448,25 @@ canvas.graph-canvas {
     font-weight: normal;
 }
 
+.push-remote-select {
+    background: var(--vscode-dropdown-background, #3c3c3c);
+    color: var(--vscode-dropdown-foreground, #cccccc);
+    border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+}
+.push-remote-select:focus {
+    border-color: var(--vscode-focusBorder, #007fd4);
+}
+.push-remote-select:disabled {
+    opacity: .6;
+    cursor: progress;
+}
+
 .push-new-badge {
     display: inline-block;
     padding: 2px 8px;
