@@ -533,6 +533,30 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             vscode.window.showErrorMessage(t('push.previewFailed', { error: formatGitError(error) }));
                         }
                     })();
+                } else if (msg.command === 'manageRemotes') {
+                    const seq = ++previewSeq;
+                    void (async () => {
+                        await vscode.commands.executeCommand('idea-git.manageRemotes');
+                        if (settled || seq !== previewSeq) {return;}
+                        try {
+                            // The target may have just been removed or renamed; fall
+                            // back to the normal resolution instead of previewing a
+                            // remote that no longer exists.
+                            const stillThere = (await this._gitService.getRemotes())
+                                .some(remote => remote.name === current.remote);
+                            const next = await this._gitService.getPushPreview(
+                                current.branch,
+                                stillThere ? current.remote : undefined
+                            );
+                            if (settled || seq !== previewSeq) {return;}
+                            current = next;
+                            postDialog(next);
+                        } catch (error) {
+                            if (settled || seq !== previewSeq) {return;}
+                            postDialog(current);
+                            vscode.window.showErrorMessage(t('push.previewFailed', { error: formatGitError(error) }));
+                        }
+                    })();
                 } else if (msg.command === 'pushDialogFileDiff') {
                     const base = current.baseRef ?? EMPTY_TREE_HASH;
                     if (msg.hash === ALL_COMMITS_ROW) {

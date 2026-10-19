@@ -1467,6 +1467,25 @@ canvas.graph-canvas {
     cursor: progress;
 }
 
+.push-remote-manage {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--vscode-textLink-foreground, #3794ff);
+    font: inherit;
+    font-weight: normal;
+    cursor: pointer;
+}
+.push-remote-manage:hover {
+    text-decoration: underline;
+}
+.push-remote-manage:disabled {
+    opacity: .6;
+    cursor: progress;
+}
+
 .push-new-badge {
     display: inline-block;
     padding: 2px 8px;

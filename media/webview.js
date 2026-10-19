@@ -2767,7 +2767,9 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, 
         remoteControl = '<select class="push-remote-select" id="push-remote-select" data-title="' +
             esc(T('pushDlg.target')) + '">' + optionHtml + '</select>';
     }
-    var remoteLabel = remoteControl + '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
+    var remoteLabel = remoteControl + '<button class="push-remote-manage" id="push-remote-manage" data-title="' +
+        esc(T('remote.manageTitle')) + '">' + esc(T('remote.manageBtn')) + '</button>' +
+        '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
     var commitCountText = commits.length > 0 ? T('common.commitCount', { n: commits.length }) : (pushState.remoteExists ? T('pushDlg.upToDate') : T('pushDlg.firstPush'));
     var headerText = esc(branchName) + ' <span class="push-arrow">→</span> ' + remoteLabel + ' — ' + commitCountText;
 
@@ -2792,6 +2794,16 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, 
         remoteSelect.addEventListener('change', function () {
             remoteSelect.disabled = true;
             vscode.postMessage({ command: 'pushDialogRemote', remote: remoteSelect.value });
+        });
+    }
+
+    // Remote management opens the host's quick-pick flow; the host re-renders
+    // this dialog afterwards, so add/remove/rename is reflected in the picker.
+    var manageRemotes = overlay.querySelector('#push-remote-manage');
+    if (manageRemotes) {
+        manageRemotes.addEventListener('click', function () {
+            manageRemotes.disabled = true;
+            vscode.postMessage({ command: 'manageRemotes' });
         });
     }
 

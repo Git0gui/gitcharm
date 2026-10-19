@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService, StashEntry } from '../services/gitService';
-import { formatGitError } from '../services/gitUtils';
+import { formatGitError, StatusEntry } from '../services/gitUtils';
 import { GraphViewProvider } from '../views/graphView';
 import { tryHandleConflict } from './helpers';
 import { t } from '../i18n';
@@ -57,15 +57,19 @@ export function registerStashCommands(
 
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.stashSave', async () => {
-            // `git stash push` says "No local changes to save" and stores nothing when
-            // the tree only has untracked files, so ask before running it.
-            let stashable = true;
+            // Untracked files only enter the stash with `-u`, so the scope has to
+            // be decided up front: without it git says "No local changes to save"
+            // and the stack stays empty.
+            let entries: StatusEntry[] | undefined;
             try {
-                stashable = await gitService.hasStashableChanges();
+                entries = await gitService.getStatusEntries();
             } catch {
-                stashable = true; // let git report whatever went wrong
+                entries = undefined; // let git report whatever went wrong
             }
-            if (!stashable) {
+            const hasTracked = !entries || entries.some(entry => !entry.untracked && !entry.ignored
+                && (entry.indexStatus !== ' ' || entry.worktreeStatus !== ' '));
+            const hasUntracked = !!entries && entries.some(entry => entry.untracked && !entry.ignored);
+            if (entries && !hasTracked && !hasUntracked) {
                 vscode.window.showInformationMessage(t('stash.nothingToSave'));
                 return;
             }
@@ -77,13 +81,32 @@ export function registerStashCommands(
             });
             if (message === undefined) {return;}
 
+            let includeUntracked = false;
+            if (hasUntracked) {
+                if (!hasTracked) {
+                    // Tracking files have no changes — untracked ones are all
+                    // there is, so including them is the only useful outcome.
+                    includeUntracked = true;
+                } else {
+                    const scope = await vscode.window.showQuickPick(
+                        [
+                            { label: t('stash.scopeTracked'), description: t('stash.scopeTrackedDesc'), include: false },
+                            { label: t('stash.scopeWithUntracked'), description: t('stash.scopeWithUntrackedDesc'), include: true }
+                        ],
+                        { placeHolder: t('stash.scopePlaceHolder'), ignoreFocusOut: true }
+                    );
+                    if (!scope) {return;}
+                    includeUntracked = scope.include;
+                }
+            }
+
             try {
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
                     title: t('stash.saving'),
                     cancellable: false
                 }, async () => {
-                    await gitService.saveStash(message.trim() || undefined);
+                    await gitService.saveStash(message.trim() || undefined, includeUntracked);
                     vscode.window.showInformationMessage(t('stash.saved'));
                     graphView.refreshStashes();
                 });

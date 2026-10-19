@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
-import { formatGitError, redactUrlCredentials } from '../services/gitUtils';
+import { formatGitError, matchesBranchPattern, redactUrlCredentials } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
@@ -30,6 +30,15 @@ export function registerBranchCommands(
             if (choice) {void vscode.commands.executeCommand('idea-git.showLog');}
         });
     }
+
+    /**
+     * Patterns from `idea-git.protectedBranches`. They only add a confirmation
+     * step, never block the operation — a user who really means it can proceed.
+     */
+    const protectedPatterns = (): string[] => {
+        const configured = vscode.workspace.getConfiguration('idea-git').get<string[]>('protectedBranches', []);
+        return Array.isArray(configured) ? configured : [];
+    };
 
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.createBranch', async () => {
@@ -131,7 +140,9 @@ export function registerBranchCommands(
             }
 
             const confirm = await graphView.showDialog(
-                t('branch.deleteConfirm', { name: branchName }),
+                t(matchesBranchPattern(branchName, protectedPatterns())
+                    ? 'branch.deleteProtectedConfirm'
+                    : 'branch.deleteConfirm', { name: branchName }),
                 [t('branch.deleteBtn'), t('common.cancel')],
                 'warn'
             );
@@ -352,6 +363,17 @@ export function registerBranchCommands(
 
                 if (!result || result.action === 'cancel') {return;}
                 const target = result.preview;
+
+                // Force-push is the one push that rewrites history others may
+                // already have; ask again when the target is protected.
+                if (result.force === true && matchesBranchPattern(branchName, protectedPatterns())) {
+                    const proceed = await graphView.showDialog(
+                        t('push.protectedConfirm', { name: branchName }),
+                        [t('push.forceAnyway'), t('common.cancel')],
+                        'warn'
+                    );
+                    if (proceed !== t('push.forceAnyway')) {return;}
+                }
 
                 // Progress, not a silent wait: a push over our own askpass can stop for
                 // a credential box, and `_execNetwork` sets no timeout so a large

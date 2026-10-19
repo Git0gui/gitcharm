@@ -28,6 +28,8 @@ import {
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
     parseGitConfigRemoteNames,
+    parseRemoteList,
+    assertRemoteName,
     formatGitError,
     classifyGitNetworkFailure,
     redactUrlCredentials,
@@ -45,6 +47,7 @@ import {
     StashEntry,
     ReflogEntry,
     StatusEntry,
+    RemoteInfo,
     WorkingTreeSummary
 } from './gitUtils';
 import { t } from '../i18n';
@@ -1275,17 +1278,6 @@ export class GitService {
     }
 
     /**
-     * Whether `git stash push` would save anything. Only tracked changes count:
-     * untracked files are left in place (no `-u`), so a tree whose only changes
-     * are untracked would produce "No local changes to save" and an empty stack.
-     */
-    async hasStashableChanges(): Promise<boolean> {
-        const entries = await this.getStatusEntries();
-        return entries.some(entry => !entry.untracked && !entry.ignored
-            && (entry.indexStatus !== ' ' || entry.worktreeStatus !== ' '));
-    }
-
-    /**
      * Create a new branch from a specific commit (default HEAD)
      */
     async createBranch(branchName: string, startPoint: string = 'HEAD'): Promise<void> {
@@ -1776,6 +1768,51 @@ export class GitService {
         return pickFetchRemote(this.getRemoteNames());
     }
 
+    /** Name + URL of every configured remote, for the management UI. */
+    async getRemotes(): Promise<RemoteInfo[]> {
+        return parseRemoteList(await this.executeGitArgs(['remote', '-v'], { timeoutMs: 5000 }));
+    }
+
+    async addRemote(name: string, url: string): Promise<void> {
+        assertRemoteName(name);
+        await this._execMutate(['remote', 'add', '--', name, this._assertRemoteUrl(url)]);
+        this.invalidateVolatile();
+    }
+
+    async renameRemote(oldName: string, newName: string): Promise<void> {
+        assertRemoteName(oldName);
+        assertRemoteName(newName);
+        // Renaming also moves refs/remotes/<old>/*, which the refs cache
+        // would otherwise keep serving under the old name.
+        await this._execMutate(['remote', 'rename', '--', oldName, newName]);
+        this.invalidateVolatile();
+    }
+
+    async setRemoteUrl(name: string, url: string): Promise<void> {
+        assertRemoteName(name);
+        await this._execMutate(['remote', 'set-url', '--', name, this._assertRemoteUrl(url)]);
+    }
+
+    async removeRemote(name: string): Promise<void> {
+        assertRemoteName(name);
+        await this._execMutate(['remote', 'remove', '--', name]);
+        this.invalidateVolatile();
+    }
+
+    /**
+     * URLs never go through a shell, so quotes and percent-escapes are fine.
+     * Only control characters are rejected: a newline would corrupt the config
+     * entry and split the value in two.
+     */
+    private _assertRemoteUrl(url: string): string {
+        const trimmed = url.trim();
+        // eslint-disable-next-line no-control-regex
+        if (!trimmed || /[\x00-\x1f]/.test(trimmed)) {
+            throw new Error(t('err.invalidRemoteUrl', { value: url }));
+        }
+        return trimmed;
+    }
+
     /**
      * Unattended fetch for the scheduler.
      *
@@ -2098,10 +2135,14 @@ export class GitService {
     }
 
     /**
-     * Save current changes as a stash with an optional message
+     * Save current changes as a stash with an optional message.
+     * `includeUntracked` maps to `-u`: new files are stored too, which is what
+     * makes the working tree actually clean afterwards.
      */
-    async saveStash(message?: string): Promise<void> {
-        await this._execMutate(['stash', 'push', ...(message ? ['-m', assertShellSafe(message, t('label.stashMessage'))] : [])]);
+    async saveStash(message?: string, includeUntracked = false): Promise<void> {
+        const args = ['stash', 'push', ...(includeUntracked ? ['--include-untracked'] : [])];
+        if (message) {args.push('-m', assertShellSafe(message, t('label.stashMessage')));}
+        await this._execMutate(args);
     }
 
     async applyStash(index: number = 0): Promise<void> {

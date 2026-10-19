@@ -186,6 +186,11 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.manageRemotes",
+        "title": "%cmd.manageRemotes%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.createTag",
         "title": "%cmd.createTag%",
         "category": "GitCharm"
@@ -378,6 +383,17 @@
           "default": 0,
           "minimum": 0,
           "description": "%config.autoFetchMinutes%"
+        },
+        "idea-git.protectedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "main",
+            "master"
+          ],
+          "description": "%config.protectedBranches%"
         }
       }
     }

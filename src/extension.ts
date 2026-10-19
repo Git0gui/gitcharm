@@ -257,7 +257,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     registerBranchCommands(ctx, gitService, graphView);
     registerCommitCommands(ctx, gitService, graphView);
     registerOperationCommands(ctx, gitService, graphView);
-    registerRemoteCommands(ctx, gitService);
+    registerRemoteCommands(ctx, gitService, graphView);
     registerTagCommands(ctx, gitService, graphView);
     registerStashCommands(ctx, gitService, graphView);
     registerReflogCommands(ctx, gitService, graphView);

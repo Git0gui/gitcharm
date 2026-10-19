@@ -908,3 +908,56 @@ function wininetProxyToUrl(raw: string): string | undefined {
     if (!proto || !proto.startsWith('socks')) {return `http://${withoutAuth}`;}
     return `${proto === 'socks' ? 'socks5' : proto}://${withoutAuth}`;
 }
+
+/** One configured remote: `git remote -v` gives the name and its fetch URL. */
+export interface RemoteInfo {
+    name: string;
+    url: string;
+}
+
+/**
+ * `git remote -v` output → one entry per remote. Each remote prints a fetch and
+ * a push line; the fetch URL is the one every other part of the panel uses
+ * (web links, push preview), so the push line only stands in when fetch is
+ * absent. GitHub Actions-style multiline values cannot appear here: git
+ * prints one line per URL by contract.
+ */
+export function parseRemoteList(raw: string): RemoteInfo[] {
+    const byName = new Map<string, string>();
+    for (const line of raw.split(/\r?\n/)) {
+        const match = /^(\S+)\t(.+) \((fetch|push)\)$/.exec(line.trim());
+        if (!match) {continue;}
+        if (match[3] === 'fetch' || !byName.has(match[1])) {
+            byName.set(match[1], match[2]);
+        }
+    }
+    return Array.from(byName, ([name, url]) => ({ name, url }));
+}
+
+/**
+ * Remote names end up in ref names (`refs/remotes/<name>/...`) and as argv, so
+ * they follow git's conservative shape: no whitespace, no `..`, no leading
+ * dash. `--` already keeps a leading dash from being read as an option, but a
+ * name that git itself would reject should fail here with a readable message.
+ */
+export function assertRemoteName(value: string): string {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) || value.includes('..')) {
+        throw new Error(t('err.invalidRemoteName', { value }));
+    }
+    return value;
+}
+
+/**
+ * Whether a branch name matches one of the protected patterns. `*` matches any
+ * run of characters (`release/*`), everything else is literal. Branch names are
+ * case-sensitive on every platform git supports, so this is too.
+ */
+export function matchesBranchPattern(name: string, patterns: readonly string[]): boolean {
+    return patterns.some(raw => {
+        const pattern = raw.trim();
+        if (!pattern) {return false;}
+        const source = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+        return new RegExp(`^${source}$`).test(name);
+    });
+}
+

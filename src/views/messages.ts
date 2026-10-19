@@ -186,6 +186,7 @@ export type WebviewToExtMessage =
     | { command: 'saveViewState'; state: PersistedViewState }
     | { command: 'pushDialogAction'; action: string; force?: boolean }
     | { command: 'pushDialogRemote'; remote: string }
+    | { command: 'manageRemotes' }
     | { command: 'pushDialogFileDiff'; hash: string; path: string }
     | { command: 'getCommitFilesForPush'; hash: string }
     | { command: 'getPushAllFiles' }
