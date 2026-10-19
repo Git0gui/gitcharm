@@ -210,6 +210,12 @@ export class GitService {
     private _detailCache = new LruCache<CommitDetail>(GitService.DETAIL_CACHE_MAX);
     /** commit -> diff base. A commit's parent never moves, so this one needs no invalidation. */
     private _diffBaseCache = new LruCache<string>(100);
+    /**
+     * Inline diff previews keyed by (repo, base, target, path). Only full-hash
+     * endpoints are stored: those name immutable objects, while `stash@{N}` and
+     * branch names move under the same string.
+     */
+    private _previewCache = new LruCache<DiffPreview>(30);
     /** `git worktree list` output, tagged with the filesystem stamp it was read under. */
     private _worktreeCache: { signature: string; entries: WorktreeEntry[] } | null = null;
 
@@ -1090,6 +1096,7 @@ export class GitService {
     releaseHeavyCaches(): void {
         this._filesCache.clear();
         this._detailCache.clear();
+        this._previewCache.clear();
     }
 
     /**
@@ -1100,6 +1107,7 @@ export class GitService {
         this._filesCache.clear();
         this._detailCache.clear();
         this._commitIndex.clear();
+        this._previewCache.clear();
         this._worktreeCache = null;
     }
 
@@ -1476,10 +1484,20 @@ export class GitService {
     ): Promise<DiffPreview> {
         assertShellSafe(baseRef, t('label.ref'));
         assertShellSafe(targetRef, t('label.ref'));
+        const immutable = /^[0-9a-f]{40}$/.test(baseRef) && /^[0-9a-f]{40}$/.test(targetRef);
+        const key = immutable
+            ? `${this._repositoryPath ?? ''}|${baseRef}|${targetRef}|${filePath}|${maxLines}`
+            : undefined;
+        if (key) {
+            const hit = this._previewCache.get(key);
+            if (hit) {return hit;}
+        }
         const patch = await this.executeGitArgs([
             'diff', '--no-color', '--no-ext-diff', `--unified=3`, `${baseRef}..${targetRef}`, '--', filePath
         ]);
-        return parseDiffPreview(patch, maxLines);
+        const preview = parseDiffPreview(patch, maxLines);
+        if (key) {this._previewCache.set(key, preview);}
+        return preview;
     }
 
     /**
@@ -2389,23 +2407,27 @@ export class GitService {
 
     /**
      * The two revisions that bracket one stash file, so the inline preview and
-     * the editor diff show the same change the stash would apply.
+     * the editor diff show the same change the stash would apply. Both ends are
+     * resolved to hashes: `stash@{N}` shifts when another stash is pushed or
+     * dropped, and only a hash-stable pair can be cached as the preview's key.
      */
     async getStashDiffRefs(index: number, filePath: string): Promise<{ baseRef: string; targetRef: string }> {
         const ref = stashRef(index);
-        if (await this._stashHasUntracked(ref, filePath)) {
-            return { baseRef: EMPTY_TREE_HASH, targetRef: `${ref}^3` };
+        const untrackedCommit = await this._revParse(`${ref}^3`);
+        if (untrackedCommit && await this._stashPathInCommit(untrackedCommit, filePath)) {
+            return { baseRef: EMPTY_TREE_HASH, targetRef: untrackedCommit };
         }
-        return { baseRef: `${ref}^1`, targetRef: ref };
+        const stashCommit = await this._revParse(ref);
+        const base = stashCommit ? await this._revParse(`${stashCommit}^1`) : '';
+        return { baseRef: base || `${ref}^1`, targetRef: stashCommit || ref };
     }
 
     /** Is this exact path part of the stash's untracked-files commit? */
-    private async _stashHasUntracked(ref: string, filePath: string): Promise<boolean> {
-        if (!(await this._revParse(`${ref}^3`))) {return false;}
+    private async _stashPathInCommit(commitHash: string, filePath: string): Promise<boolean> {
         try {
             // cat-file takes a literal object name, so a path containing glob
             // characters cannot match a sibling file the way a pathspec would.
-            await this.executeGitArgs(['cat-file', '-e', this._objectSpec(`${ref}^3`, filePath)]);
+            await this.executeGitArgs(['cat-file', '-e', this._objectSpec(commitHash, filePath)]);
             return true;
         } catch {
             return false;
