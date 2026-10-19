@@ -491,7 +491,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }>,
         remoteExists: boolean,
         isFirstPush: boolean = false,
-        baseRef?: string
+        baseRef?: string,
+        remote: string = 'origin'
     ): Promise<{ action: string; force?: boolean } | undefined> {
         return new Promise((resolve) => {
             if (!this._view) {
@@ -525,7 +526,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 branchName,
                 commits,
                 remoteExists,
-                isFirstPush
+                isFirstPush,
+                remote
             });
             setTimeout(() => {
                 handler.dispose();

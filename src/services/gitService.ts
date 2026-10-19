@@ -1688,11 +1688,16 @@ export class GitService {
 
     /**
      * Push current branch to remote
+     *
+     * `setUpstream` is what IDEA does on a first push: `git push -u` leaves the
+     * local branch tracking the one it just created. Without it the branch has
+     * no upstream afterwards, so ahead/behind stays empty and the next push
+     * looks like another first push.
      */
-    async push(remote: string = 'origin', branchName?: string, force: boolean = false): Promise<string> {
+    async push(remote: string = 'origin', branchName?: string, force: boolean = false, setUpstream: boolean = false): Promise<string> {
         assertRef(remote, t('label.remote'));
         if (branchName) {assertRef(branchName);}
-        const args = ['push', ...(force ? ['--force-with-lease'] : []), remote, ...(branchName ? [branchName] : [])];
+        const args = ['push', ...(force ? ['--force-with-lease'] : []), ...(setUpstream ? ['--set-upstream'] : []), remote, ...(branchName ? [branchName] : [])];
         const output = await this._execNetwork(args);
         return output || t('push.pushedTo', { remote, branch: branchName ? ' ' + branchName : '' });
     }

@@ -101,7 +101,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 
 ## 8. Git 操作行为约定
 
-- **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。**网络类（push/pull/手动 fetch）尤其：`_execNetwork` 刻意不设子进程超时（大仓库不能被 30s 掐断），凭据又要等用户在自己的输入框里填，没有进度指示就等于"界面卡死"**；进度一律 `cancellable: false`（git 子进程没有取消通道，别给假按钮）。
+- **变更类操作（检出/删除/重命名/新建/提交操作）必须包 `withProgress` 加载指示**。**网络类（push/pull/手动 fetch／分支菜单的"拉取"）尤其：`_execNetwork` 刻意不设子进程超时（大仓库不能被 30s 掐断），凭据又要等用户在自己的输入框里填，没有进度指示就等于"界面卡死"**；进度一律 `cancellable: false`（git 子进程没有取消通道，别给假按钮）。面板的"拉取"走 `idea-git.updateBranch`（内部可能是 fetch + `update-ref`，也可能是 pull），同样要包；漏掉时界面只剩结束后的一句提示。
 - **作者时间不能用来判一组提交的早晚**：cherry-pick / rebase / amend 会保留原作者时间、落地顺序却相反——实测 bouncePy 里 `cfccce3`（author 13:39）是 `5f8c82d`（author 14:48）的**子**提交（committer 16:09）。按 `%ai` 排会把"最早^ ↔ 最晚"算成同一个提交跟自己比（差异恒空，看着就像视图坏了），回退/挑拣/压缩的参数顺序与 squash 的 `baseRef` 也会取错端点。判早晚统一走 `GitService.orderCommitsByHistory`（`rev-list --no-walk --topo-order`，一次子进程，与点击顺序无关）；面板列表本身的顺序就是 git log 的顺序，两者一致。
 - **多选提交的合并文件列表必须在宿主合并**（`mergeCommitFileStats`，`src/services/gitUtils.ts`），webview 只渲染。两条不变量：批次必须按**历史顺序旧→新**排好再进去（`orderCommitsByHistory`，**不是作者时间**，见上一条）（状态取净效果：选择内新建的保持 `A`、之后被删则 `D`；点击顺序进来的话同一个文件会一会儿 `A` 一会儿 `M`）；条目必须**复制后再累加行数**——`getCommitFilesWithStats` 返回 `_filesCache` 里的同一批对象，原地加数字会让下一次多选变成双倍。
 - **多选提交里双击文件 = 跨这一组提交的双栏对比**：左边取**最早**提交的父版本（`oldest^`），右边取**最晚**提交的版本，组里每个提交的改动才会都落在同一份 diff 里（只带最后点选的 `selectedHash` 就只看得到一个提交）。早/晚由 `orderCommitsByHistory` 按**历史顺序**判定（作者时间在这组数据里正好是反的，见上一条）。双栏只能放两个版本，选中项之间那些没被选的提交会一起出现在差异里——这是用户要的效果。**不要改成"逐提交补丁拼一份只读文档"**（已实现并被否掉，见 commit `6b098bf`）：用户要的一直是熟悉的左右对比，不是补丁文本。修好顺序后，用户那组选择的差异是 `+2 -1`，与第三栏合并文件行显示的数字一致。
@@ -120,6 +120,8 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 文本搜索不用 `--fixed-strings`（要模糊匹配）；hash 搜索回退必须传 `branch` 参数（避免 `--all` 带出全分支提交）。
 - **切换仓库只准走 `GraphViewProvider.switchRepository`**：面板切换器与 `idea-git.selectRepository` 命令共用这一条路径，保证重置的是同一批状态（`_branch`、选中提交、`_lastInProgress`、待落盘的视图快照，并按新 git 目录重新挂 watcher / auto-fetch）。git 允许不同项目重名分支与相同短哈希，任何一处"自己换个 root 就完事"都会把上一个项目的状态带进新仓库。文本过滤器是用户输入而非仓库状态，切换时**必须保留**，否则输入框与宿主过滤条件不一致。
 - **仓库发现是"向上 + 向下"两条路**：`_findGitRoot` 的向上探测解决"文件夹在仓库里面"，但真实工作区更常见的是**一个普通父目录并排十几个独立仓库**——向上探不到，切换器就会数出 1 个仓库、干脆不出现。向下扫（`discoverRepositoryRoots`）必须带三条护栏：命中仓库即停（不再往里 list，这是成本的主要来源）、跳过点目录与依赖/构建树、深度与目录预算上限；结果缓存在 `_discoveredRoots`，只在 `_resetRootDiscovery()`（文件夹增减、`git init`、克隆出现/消失）时失效。实测十几个仓库 5ms。
+- **推送不因"已是最新"提前返回**：ahead=0 也要打开推送对话框（对话框自己有首次推送/已是最新/待推送三态），用户点的是"查看并推送"，不是"后台替我判断"。推送目标取分支 upstream 所在的远程（`remoteNameFromUpstream`）；没有 upstream 才按同名远程分支找（`matchRemoteBranch`，origin 优先，能处理 `dev/x` 这种带斜杠的分支）；首次推送带 `--set-upstream` 建立跟踪，否则推完也没有 ahead/behind，下一次又显示成首次推送。git 对"没有可推内容"是 exit 0 + stderr `Everything up-to-date`，成功提示要按推送前的 ahead/behind 判定，不能一律报"已推送"。
+- **"当前文件夹不是仓库"的引导页必须列出已发现的仓库**：`#repo-state` 是 `position: fixed; inset: 0` 的全屏遮罩，底下的仓库切换器点不到，所以当 `listRepositories()` 已经找到仓库时要把它们作为按钮直接画进卡片（`data-repo-pick` → `selectRepository`）；只给"初始化仓库"会把用户引到一个本不该建仓库的父目录。这一状态在"一个普通父目录并排若干独立仓库"的工作区里是常态——向上探测当然找不到仓库。
 - **缓存与快照必须能识别自己属于哪个仓库**：钉住的仓库写在 `workspaceState`（`idea-git.selectedRepository`），启动时用 `_hasGitDir` 校验，目录搬走就交给自动发现；持久化视图快照由宿主盖 `repoPath`，与当前仓库不匹配即丢弃（同 `PersistedBranchCache` 的 repoPath 校验思路）。
 - **后台 / 定时任务禁止走 `_execNetwork`**：它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框。自动 fetch 用 `fetchSilent()`（绕开 askpass + `GIT_TERMINAL_PROMPT=0` + 有限超时 + 失败只记 `logger.debug`），且先用 fs 读 `.git/config` 判断有没有远端——没远端一个子进程都不 spawn。这类任务还要绑"面板可见"条件，与分支 watcher 同起同停。
 

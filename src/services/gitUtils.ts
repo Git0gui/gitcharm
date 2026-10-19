@@ -516,6 +516,49 @@ export function pickFetchRemote(names: readonly string[]): string {
     return names.includes('origin') ? 'origin' : (names[0] ?? '');
 }
 
+/**
+ * The remote half of an upstream ref: `origin/main` → `origin`, and also
+ * `fork` for the less common `fork/dev/main` (branch names carry slashes,
+ * remote names are read as the leading segment — same split `updateBranch` uses).
+ */
+export function remoteNameFromUpstream(upstream: string | undefined): string | undefined {
+    const text = (upstream || '').trim();
+    if (!text) {return undefined;}
+    const slash = text.indexOf('/');
+    return slash > 0 ? text.slice(0, slash) : undefined;
+}
+
+export interface RemoteBranchMatch {
+    remote: string;
+    /** The remote-tracking ref as listed by the repository, e.g. `fork/dev/x`. */
+    ref: string;
+}
+
+/**
+ * Find the remote branch a local branch would push to. `origin` wins because it
+ * is the remote every other tool assumes; otherwise the first listing that
+ * carries the same tail matches. Comparing tails is what makes nested branch
+ * names work — `dev/x` on `origin` is stored as the single string
+ * `origin/dev/x`, so a plain "strip the first segment" split would miss it.
+ */
+export function matchRemoteBranch(
+    remoteRefs: readonly string[],
+    branchName: string,
+    preferredRemote: string = 'origin'
+): RemoteBranchMatch | undefined {
+    if (!branchName) {return undefined;}
+    const suffix = `/${branchName}`;
+    let fallback: RemoteBranchMatch | undefined;
+    for (const ref of remoteRefs) {
+        if (!ref.endsWith(suffix)) {continue;}
+        const remote = ref.slice(0, ref.length - suffix.length);
+        if (!remote) {continue;}
+        if (remote === preferredRemote) {return { remote, ref };}
+        if (!fallback) {fallback = { remote, ref };}
+    }
+    return fallback;
+}
+
 /** One repository of a multi-root workspace, as offered by the panel's switcher. */
 export interface RepositoryOption {
     path: string;

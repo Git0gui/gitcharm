@@ -2037,6 +2037,22 @@ function repoStateCopy(repoState, folder, files) {
         };
     }
     if (repoState === 'noRepo') {
+        var found = state.repositories || [];
+        // The guidance page is an opaque overlay, so the switcher underneath it is
+        // unreachable. In a workspace that is a plain parent of several projects
+        // (the layout this panel is built for) the useful action is picking one of
+        // them — list them right here instead of only offering to `git init`.
+        if (found.length > 0) {
+            return {
+                title: T('repo.noRepoTitle'),
+                body: T('repo.noRepoFoundBody', { n: found.length }),
+                actions: [
+                    { key: 'initRepository', label: T('repo.init') },
+                    { key: 'recheckRepository', label: T('repo.recheck') }
+                ],
+                repos: found
+            };
+        }
         return {
             title: T('repo.noRepoTitle'),
             body: T('repo.noRepoBody', { folder: folder || '' }),
@@ -2175,11 +2191,18 @@ function renderRepoState() {
         return '<button type="button" class="dialog-btn ' + (a.primary ? 'primary' : 'secondary') +
             '" data-repo-action="' + a.key + '">' + esc(a.label) + '</button>';
     }).join('');
+    var picks = (copy.repos || []).map(function (r) {
+        return '<button type="button" class="rs-repo" data-repo-pick="' + esc(r.path) + '" data-title="' + esc(r.path) + '">' +
+            '<span class="rs-repo-name">' + esc(r.name) + '</span>' +
+            '<span class="rs-repo-path">' + esc(r.path) + '</span>' +
+            '</button>';
+    }).join('');
     box.className = 'on ' + state.repoState;
     box.innerHTML = '<div class="rs-card">' +
         '<div class="rs-icon">' + (REPO_ICONS[state.repoState] || '') + '</div>' +
         '<div class="rs-title">' + esc(copy.title) + '</div>' +
         '<div class="rs-body">' + esc(copy.body) + '</div>' +
+        (picks ? '<div class="rs-repos">' + picks + '</div>' : '') +
         '<div class="rs-actions">' + btns + '</div>' +
         '</div>';
 }
@@ -2187,6 +2210,11 @@ function renderRepoState() {
 var repoStateBox = document.getElementById('repo-state');
 if (repoStateBox) {
     repoStateBox.addEventListener('click', function (e) {
+        var pick = e.target.closest('[data-repo-pick]');
+        if (pick) {
+            vscode.postMessage({ command: 'selectRepository', path: pick.getAttribute('data-repo-pick') });
+            return;
+        }
         var btn = e.target.closest('[data-repo-action]');
         if (!btn) { return; }
         vscode.postMessage({ command: btn.getAttribute('data-repo-action') });
@@ -2454,7 +2482,7 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'showSquashMessageDialog') {
         showSquashMessageDialog(m.prompt, m.initialValue, m.placeholder);
     } else if (m.command === 'showPushDialog') {
-        showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush);
+        showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush, m.remote || 'origin');
     } else if (m.command === 'pushFilesResponse') {
         window._handlePushFiles(m.hash, m.files || []);
     } else if (m.command === 'showCompareDialog') {
@@ -2646,7 +2674,7 @@ function renderDialogDetail(el, commit, commits) {
 
 var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', remoteExists: true, visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
-function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
+function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote) {
     // '__all__' is the synthetic aggregate row ("全部提交") diffing base ref vs local tip
     pushState = { commits: commits, selectedHash: commits.length > 0 ? '__all__' : null, filesCache: {}, branchName: branchName, remoteExists: remoteExists !== false, visibleCount: 20, fileViewMode: state.fileViewMode || 'tree', collapsedDirs: {} };
     var overlay = document.createElement('div');
@@ -2673,12 +2701,22 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
 
     // Add placeholder when no commits (for new branches or first push)
     var emptyStateHtml = '';
-    if (commits.length === 0 && (isFirstPush || !pushState.remoteExists)) {
-        emptyStateHtml = '<div class="push-empty-state">' +
-            '<div class="push-empty-icon">📦</div>' +
-            '<div class="push-empty-text">' + T('pushDlg.firstPushText') + '</div>' +
-            '<div class="push-empty-hint">' + T('pushDlg.firstPushHint') + '</div>' +
-            '</div>';
+    if (commits.length === 0) {
+        if (isFirstPush || !pushState.remoteExists) {
+            emptyStateHtml = '<div class="push-empty-state">' +
+                '<div class="push-empty-icon">📦</div>' +
+                '<div class="push-empty-text">' + T('pushDlg.firstPushText') + '</div>' +
+                '<div class="push-empty-hint">' + T('pushDlg.firstPushHint') + '</div>' +
+                '</div>';
+        } else {
+            // The dialog opens even when nothing is ahead — say why it is empty
+            // instead of showing a blank list the user has to interpret.
+            emptyStateHtml = '<div class="push-empty-state">' +
+                '<div class="push-empty-icon">✓</div>' +
+                '<div class="push-empty-text">' + T('pushDlg.upToDateText') + '</div>' +
+                '<div class="push-empty-hint">' + T('pushDlg.upToDateHint') + '</div>' +
+                '</div>';
+        }
     }
 
     // Add "Load More" button if there are more than 20 commits
@@ -2688,7 +2726,8 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush) {
         loadMoreHtml = '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: commits.length - 20 }) + '</button></div>';
     }
 
-    var remoteLabel = pushState.remoteExists ? 'origin/' + esc(branchName) : 'origin/' + esc(branchName) + ' <span class="push-new-badge">(new)</span>';
+    var targetRemote = remote || 'origin';
+    var remoteLabel = esc(targetRemote) + '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
     var commitCountText = commits.length > 0 ? T('common.commitCount', { n: commits.length }) : (pushState.remoteExists ? T('pushDlg.upToDate') : T('pushDlg.firstPush'));
     var headerText = esc(branchName) + ' <span class="push-arrow">→</span> ' + remoteLabel + ' — ' + commitCountText;
 

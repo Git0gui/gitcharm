@@ -107,6 +107,8 @@ export type ExtToWebviewMessage =
         commits: PushDialogCommit[];
         remoteExists: boolean;
         isFirstPush: boolean;
+        /** Remote the push will target, so the dialog does not claim "origin" blindly. */
+        remote: string;
     }
     | { command: 'pushFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
     | {

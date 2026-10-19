@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -578,6 +578,48 @@ describe('pickFetchRemote', () => {
 
     it('returns an empty string for no remotes', () => {
         assert.equal(pickFetchRemote([]), '');
+    });
+});
+
+describe('remoteNameFromUpstream', () => {
+    it('takes the leading segment, keeping slashed branch names intact', () => {
+        assert.equal(remoteNameFromUpstream('origin/main'), 'origin');
+        assert.equal(remoteNameFromUpstream('fork/dev/login'), 'fork');
+    });
+
+    it('returns undefined when there is no upstream', () => {
+        assert.equal(remoteNameFromUpstream(undefined), undefined);
+        assert.equal(remoteNameFromUpstream(''), undefined);
+        assert.equal(remoteNameFromUpstream('main'), undefined);
+    });
+});
+
+describe('matchRemoteBranch', () => {
+    it('prefers origin over another remote carrying the same name', () => {
+        assert.deepEqual(
+            matchRemoteBranch(['upstream/main', 'origin/main'], 'main'),
+            { remote: 'origin', ref: 'origin/main' }
+        );
+    });
+
+    it('finds nested branch names and reports their remote', () => {
+        assert.deepEqual(
+            matchRemoteBranch(['origin/dev/login', 'origin/main'], 'dev/login'),
+            { remote: 'origin', ref: 'origin/dev/login' }
+        );
+    });
+
+    it('falls back to a non-origin remote', () => {
+        assert.deepEqual(matchRemoteBranch(['fork/feature/x'], 'feature/x'), { remote: 'fork', ref: 'fork/feature/x' });
+    });
+
+    it('does not mistake a parent branch for a nested one', () => {
+        assert.equal(matchRemoteBranch(['origin/dev'], 'dev/login'), undefined);
+    });
+
+    it('returns undefined without a matching remote branch', () => {
+        assert.equal(matchRemoteBranch([], 'main'), undefined);
+        assert.equal(matchRemoteBranch(['origin/other'], 'main'), undefined);
     });
 });
 
