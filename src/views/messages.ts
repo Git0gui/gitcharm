@@ -151,7 +151,7 @@ export type WebviewAction =
     | 'newTag' | 'deleteTag' | 'pushTag'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
     | 'reflog'
-    | 'fileDiff' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
+    | 'fileDiff' | 'fileJumpToSource' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
 export type WebviewToExtMessage =

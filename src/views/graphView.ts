@@ -673,6 +673,42 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * URI for the exact content at a ref. "Jump to Source" opens this instead of
+     * a diff side, so leading whitespace and the final newline have to survive.
+     */
+    private _gitSourceUri(ref: string, filePath: string): vscode.Uri {
+        return vscode.Uri.from({
+            scheme: 'idea-git-diff',
+            path: '/' + filePath,
+            query: 'ref=' + encodeURIComponent(ref) + '&raw=1'
+        });
+    }
+
+    /**
+     * IDEA's "Jump to Source": open the file as the selected commit left it, not
+     * the working-tree copy. A file deleted by that commit has no post-image, so
+     * the parent's content stands in and the user is told which version this is.
+     */
+    private async _openFileAtRevision(hash: string, relativePath: string): Promise<void> {
+        const fileName = relativePath.split('/').pop() || relativePath;
+        try {
+            let ref = hash;
+            if (!(await this._gitService.blobExists(ref, relativePath))) {
+                ref = `${hash}^`;
+                if (!(await this._gitService.blobExists(ref, relativePath))) {
+                    vscode.window.showWarningMessage(t('file.notInCommit', { ref: hash.substring(0, 7) }));
+                    return;
+                }
+                vscode.window.showInformationMessage(t('file.deletedOpenedParent', { file: fileName }));
+            }
+            await vscode.window.showTextDocument(this._gitSourceUri(ref, relativePath), { preview: true });
+            vscode.window.setStatusBarMessage(t('file.openedAtRevision', { file: fileName, ref: ref.substring(0, 7) }), 5000);
+        } catch (error) {
+            vscode.window.showErrorMessage(t('file.jumpToSourceFailed', { error: formatGitError(error) }));
+        }
+    }
+
+    /**
      * Diff a file across a group of selected commits: the right side is the newest
      * commit's version, the left side the state before the oldest one, so every
      * commit in the group shows up as a change instead of only the last-clicked one.
@@ -1530,6 +1566,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         return;
                     }
                     await vscode.commands.executeCommand('idea-git.openFileDiff', { relativePath: relPath });
+                    return;
+                }
+                case 'fileJumpToSource': {
+                    const hash = message.hash;
+                    const relPath = message.path;
+                    if (!hash || !relPath) { return; }
+                    await this._openFileAtRevision(hash, relPath);
                     return;
                 }
                 case 'fileCompareLocal': {

@@ -2003,11 +2003,17 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     e.preventDefault();
     if (window._hideTooltip) window._hideTooltip();
     var path = file.getAttribute('data-path');
-    var items = [
+    var items = [];
+    // "Source" is the version the selected commit left behind; with a group
+    // selected there is no single such version, so the item stays single-only.
+    if (state.selectedHashes.length <= 1) {
+        items.push(['fileJumpToSource', T('menu.fileJumpToSource')]);
+    }
+    items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],
         ['fileCherryPick', T('menu.fileCherryPick')],
         ['filterPath', T('menu.filterByPath')]
-    ];
+    );
     showMenu(e.clientX, e.clientY, items, function (action) {
         if (action === 'filterPath') {
             // Purely local: fill the toolbar path box and re-query. Keeping it here
