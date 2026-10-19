@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runGit, splitNul, GitRunOptions } from './gitRunner';
 import { RefsReader } from './refsReader';
+import { RecentBranchReader, RECENT_BRANCH_LIMIT } from './branchMarks';
 import { GitAskpass } from './askpass';
 import { PersistedBranchCache } from './persistedBranchCache';
 import { resolveCommonDir, resolveGitDir } from './gitPaths';
@@ -188,6 +189,9 @@ export class GitService {
     
     // Refs reader: branch/tag mappings straight from .git filesystem (TTL-cached)
     private _refsReader = new RefsReader(() => this._repositoryPath);
+    // HEAD's checkout log, also read from disk: it records checkouts made outside
+    // this extension, which is the only way "recent branches" can mean anything.
+    private _recentBranches = new RecentBranchReader(() => this._repositoryPath);
     private _trackInfoCache: { at: number; map: BranchTrackMap } | undefined;
     private _trackInfoPromise: Promise<BranchTrackMap> | undefined;
     // Persistent branch cache (workspaceState Memento, versioned payload)
@@ -1233,6 +1237,15 @@ export class GitService {
         const names = this._refsReader.readBranchNames();
         if (names.remote.length > 0) {return names.remote;}
         return this._readRefNames('refs/remotes/');
+    }
+
+    /**
+     * Branches HEAD recently moved through, newest first — read from git's own
+     * checkout log, so a branch switched in a terminal or another tool counts the
+     * same as one switched from the panel. Filesystem only, no subprocess.
+     */
+    getRecentBranches(currentBranch: string, limit = RECENT_BRANCH_LIMIT): string[] {
+        return this._recentBranches.read(currentBranch, limit);
     }
 
     private async _readRefNames(namespace: string): Promise<string[]> {

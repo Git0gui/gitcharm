@@ -170,6 +170,8 @@ var state = {
     commits: INITIAL.commits || [],
     local: INITIAL.local || [],
     remote: INITIAL.remote || [],
+    favorites: INITIAL.favorites || [],
+    recent: INITIAL.recent || [],
     stashes: [],
     divergence: {},
     detailVisible: false,
@@ -440,6 +442,12 @@ var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="no
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
 // Archive box: the lid, the body and the slot a stash is put through.
 var I_STASH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>';
+// Five-point star: outline means "not marked", filled is a favorite. Filled instead
+// of a different glyph keeps the mark readable at 12px in any theme.
+var I_STAR = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>';
+var I_STAR_ON = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>';
+// HEAD's own clock — the recent section is what git recorded, not what the user marked.
+var I_CLOCK = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.4 1.6"/></svg>';
 // Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
 // the stroke-based carets used across the panel. currentColor keeps it theme aware.
 var I_FOLDER = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
@@ -532,7 +540,8 @@ function renderTree() {
             }
         }
         
-        return '<div class="' + cls + '" data-branch="' + esc(n) + '" data-title="' + esc(tooltipText) + '" style="padding-left:' + (20 + depth * 12) + 'px">' + icon + '<span class="bname">' + esc(displayName) + '</span>' + arrows + '</div>';
+        return '<div class="' + cls + '" data-branch="' + esc(n) + '" data-title="' + esc(tooltipText) + '" style="padding-left:' + (20 + depth * 12) + 'px">' + icon + '<span class="bname">' + esc(displayName) + '</span>' +
+            (state.favorites.indexOf(n) >= 0 ? '<span class="bmark" data-title="' + esc(T('w.favoriteMark')) + '">' + I_STAR_ON + '</span>' : '') + arrows + '</div>';
     }
     function build(names) {
         var root = { children: {}, leaves: [] };
@@ -584,6 +593,22 @@ function renderTree() {
         }
         return s;
     }
+    // Favorites and Recent keep full names in a chosen order, so they are flat
+    // lists: folding them into the folder tree would sort them alphabetically and
+    // throw away the very order that makes them worth pinning. A name whose branch
+    // is gone drops out here — the mark stays stored (recreate the branch and it
+    // is favorite again), but a row that errors on click would not be acceptable.
+    function flatSection(key, title, names, icon) {
+        var visible = names.filter(function (n) {
+            return match(n) && (n === state.current || state.local.indexOf(n) >= 0 || state.remote.indexOf(n) >= 0);
+        });
+        if (visible.length === 0) {return '';}
+        var s = header(key, title, visible.length);
+        if (!state.collapsedSec[key]) {
+            visible.forEach(function (n) { s += item(n, icon, 0, n); });
+        }
+        return s;
+    }
     // Stash rows carry no branch, so they are not .bitem: the tree's dblclick ->
     // checkout handler must never fire on them.
     function stashItem(entry) {
@@ -618,6 +643,10 @@ function renderTree() {
     }
     document.getElementById('btree').innerHTML =
         '<div id="btree-inner">' + head +
+        flatSection('favorites', T('w.favoritesSection'), state.favorites, I_STAR_ON) +
+        // The branch HEAD is on already has its own row at the top of the tree, so
+        // repeating it as "recently checked out" would add a row and no information.
+        flatSection('recent', T('w.recentSection'), state.recent.filter(function (n) { return n !== state.current; }), I_CLOCK) +
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
         stashSection() + '</div>';
@@ -1772,6 +1801,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
     
     var isRemote = state.remote.indexOf(branch) >= 0;
     var isCurrent = branch === state.current;
+    var isFavorite = state.favorites.indexOf(branch) >= 0;
     
     var menuItems;
     if (isRemote) {
@@ -1809,7 +1839,9 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         ];
     }
     
-    showMenu(e.clientX, e.clientY, menuItems, function (action) {
+    // Marking a branch is the one action every kind of row offers, so it goes on
+    // top and the type-specific list keeps its order below it.
+    showMenu(e.clientX, e.clientY, [['toggleFavorite', T(isFavorite ? 'menu.unfavorite' : 'menu.favorite')]].concat(menuItems), function (action) {
         vscode.postMessage({ command: 'action', action: action, branch: branch });
     });
 });
@@ -2402,6 +2434,8 @@ window.addEventListener('message', function (ev) {
         // Update only branch lists without affecting commits
         state.local = m.local || [];
         state.remote = m.remote || [];
+        if (m.favorites) {state.favorites = m.favorites;}
+        if (m.recent) {state.recent = m.recent;}
         if (m.currentBranch) {
             state.current = m.currentBranch;
         }
@@ -2419,6 +2453,11 @@ window.addEventListener('message', function (ev) {
             hideInitialLoading();
         }
         
+        renderTree();
+    } else if (m.command === 'setFavorites') {
+        // Starring or unstarring is a preference, not a git change: the branch
+        // lists and the commit rows are still accurate, only the marks moved.
+        state.favorites = m.favorites || [];
         renderTree();
     } else if (m.command === 'setStashes') {
         // The stash stack lives in the same tree but is re-sent on its own: stashing

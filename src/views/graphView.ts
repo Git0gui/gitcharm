@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitService, GraphCommit, LogFilters, ReflogEntry, PushPreview } from '../services/gitService';
+import { GitService, GraphCommit, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
 import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
 import { isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
+import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -19,6 +20,8 @@ interface GraphPayload {
     hasMore: boolean;
     headHash: string;
     inProgress?: OperationKind;
+    favorites: string[];
+    recent: string[];
 }
 
 /** Well-known empty tree: diffing against it marks every file as added (first push). */
@@ -36,8 +39,8 @@ const BRANCH_POLL_MS = 2000;
  * and replaying it on the handshake is enough.
  */
 const SCREEN_COMMANDS: ReadonlySet<ExtToWebviewMessage['command']> = new Set([
-    'setData', 'setBranches', 'setCommits', 'setStashes', 'setRepoState',
-    'setHeadHash', 'setInProgress', 'setDivergence', 'setCurrentBranch',
+    'setData', 'setBranches', 'setStashes', 'setRepoState', 'setFavorites',
+    'setCommits', 'setHeadHash', 'setInProgress', 'setDivergence', 'setCurrentBranch',
     'setDetail', 'setFileIconTheme'
 ]);
 
@@ -91,6 +94,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _memento: vscode.Memento;
     private _pendingViewState: PersistedViewState | undefined;
     private _viewStateTimer: NodeJS.Timeout | undefined;
+    /** Keyed list of starred branches, one entry per repository of the workspace. */
+    private static readonly FAVORITES_KEY = 'idea-git.favoriteBranches';
+    private _favorites: FavoriteStore;
     // Theme folder currently granted to the webview (undefined = none)
     private _grantedThemeRoot: string | undefined;
 
@@ -98,6 +104,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._gitService = gitService;
         this._extensionUri = extensionUri;
         this._memento = memento;
+        this._favorites = normalizeFavoriteStore(memento.get(GraphViewProvider.FAVORITES_KEY));
     }
 
     /** Type-checked postMessage; screen messages wait for the 'ready' handshake. */
@@ -263,6 +270,48 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * The branch tree's two pinned sections. Favorites are the user's own marks;
+     * recent branches come from git's HEAD checkout log, so switching a branch in
+     * a terminal lands there too. The tree draws only the names it also has a ref
+     * for, so a deleted branch leaves the section instead of becoming a row that
+     * errors when clicked.
+     */
+    private _branchMarks(currentBranch: string): { favorites: string[]; recent: string[] } {
+        return {
+            favorites: favoritesOf(this._favorites, this._gitService.repositoryPath),
+            recent: this._gitService.getRecentBranches(currentBranch)
+        };
+    }
+
+    /**
+     * Send the branch lists together with the two pinned sections. Every refresh
+     * path must carry all four — a setBranches without them blanks the favorites
+     * the user is looking at, and the tree would appear to lose the marks.
+     */
+    private _postBranchList(details: BranchDetails): void {
+        this._post({
+            command: 'setBranches',
+            local: details.local.map(b => b.name),
+            remote: details.remote.map(b => b.name),
+            currentBranch: details.current,
+            ...this._branchMarks(details.current)
+        });
+    }
+
+    /**
+     * Star or un-star a branch. The mark outlives the branch itself: the store
+     * keeps the name (so a branch recreated with the same name is favorite again)
+     * while the tree hides it until the ref exists.
+     */
+    private async _toggleFavorite(branch: string): Promise<void> {
+        const repoPath = this._gitService.repositoryPath;
+        const next = withFavoriteToggled(this._favorites, repoPath, branch);
+        this._favorites = next.store;
+        await this._memento.update(GraphViewProvider.FAVORITES_KEY, next.store);
+        this._post({ command: 'setFavorites', favorites: next.favorites });
+    }
+
+    /**
      * Decide what the panel can actually show, then either paint the guidance
      * page or load history. Every git query is skipped while git is missing,
      * the workspace is not a repository, or the repository has no commits —
@@ -292,7 +341,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
 
         // No history to show: reset both regions so nothing stale stays on screen
-        this._post({ command: 'setBranches', local: [], remote: [], currentBranch: '' });
+        this._post({ command: 'setBranches', local: [], remote: [], currentBranch: '', favorites: [], recent: [] });
         this._post({ command: 'setStashes', stashes: [] });
         this._post({ command: 'setCommits', commits: [], hasMore: false });
         return state;
@@ -400,7 +449,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (this._branch === oldName) {
             this._branch = newName;
         }
-        
+        // The mark belongs to the branch, not to its old spelling: without this the
+        // star silently disappears and the freed name stays in the store, ready to
+        // re-mark some future branch that happens to reuse it.
+        if (favoritesOf(this._favorites, this._gitService.repositoryPath).includes(oldName)) {
+            const renamed = withFavoriteRenamed(this._favorites, this._gitService.repositoryPath, oldName, newName);
+            this._favorites = renamed.store;
+            void this._memento.update(GraphViewProvider.FAVORITES_KEY, this._favorites);
+            this._post({ command: 'setFavorites', favorites: renamed.favorites });
+        }
+
         this._post({ command: 'renameBranchOptimistic', oldName, newName });
     }
 
@@ -1485,6 +1543,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'pushTag':
                     await vscode.commands.executeCommand('idea-git.pushTag', commitNode);
                     return;
+                case 'toggleFavorite': {
+                    // A mark on the tree, not on git: nothing to reload, and the
+                    // webview repaints from the list this posts back.
+                    if (!message.branch) {return;}
+                    await this._toggleFavorite(message.branch);
+                    return;
+                }
                 case 'stashSave':
                     await vscode.commands.executeCommand('idea-git.stashSave');
                     return;
@@ -1659,7 +1724,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             repoName: repoPath ? path.basename(repoPath) : '',
             hasMore: this._hasMore,
             headHash,
-            inProgress
+            inProgress,
+            ...this._branchMarks(details.current)
         };
     }
 
@@ -1755,12 +1821,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const details = await this._gitService.getBranchesWithDetails(true);
             
             // Send only branch data, don't affect commits
-            this._post({
-                command: 'setBranches',
-                local: details.local.map(b => b.name),
-                remote: details.remote.map(b => b.name),
-                currentBranch: details.current
-            });
+            this._postBranchList(details);
             void this._postStashes();
             
             // Async refresh divergence after branches are updated (non-blocking)
@@ -1791,7 +1852,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             repoName,
             hasMore: false,
             headHash: '',
-            inProgress: undefined
+            inProgress: undefined,
+            favorites: [],
+            recent: []
         });
     }
 
@@ -1810,12 +1873,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             
             // Update branches immediately when ready
             const details = await detailsPromise;
-            this._post({
-                command: 'setBranches',
-                local: details.local.map(b => b.name),
-                remote: details.remote.map(b => b.name),
-                currentBranch: details.current
-            });
+            this._postBranchList(details);
             // Stashes live in the same tree, so they load alongside the branches.
             void this._postStashes();
 
@@ -1853,7 +1911,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 repoName: repoPath ? path.basename(repoPath) : '',
                 hasMore: false,
                 headHash,
-                inProgress
+                inProgress,
+                ...this._branchMarks(details.current)
             };
             
             return this._getHtmlForWebview(payload);
@@ -1869,7 +1928,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 repoName: '',
                 hasMore: false,
                 headHash: '',
-                inProgress: undefined
+                inProgress: undefined,
+                favorites: [],
+                recent: []
             });
         }
     }
@@ -1927,11 +1988,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (!this._view) {return;}
         try {
             const details = await this._gitService.getBranchesWithDetails(true);
-            this._post({
-                command: 'setBranches',
-                local: details.local.map(b => b.name),
-                remote: details.remote.map(b => b.name)
-            });
+            this._postBranchList(details);
             void this._postStashes();
             // Also refresh divergence info (ahead/behind arrows)
             await this._refreshDivergence();

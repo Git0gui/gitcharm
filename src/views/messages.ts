@@ -68,11 +68,23 @@ export type ExtToWebviewMessage =
         hasMore: boolean;
         headHash: string;
         inProgress?: OperationKind;
+        favorites?: string[];
+        recent?: string[];
         /** External history change: re-render rows without clearing what is selected. */
         preserveSelection?: boolean;
         searchContext?: { query?: string; resultCount?: number };
     }
-    | { command: 'setBranches'; local: string[]; remote: string[]; currentBranch?: string }
+    | {
+        command: 'setBranches';
+        local: string[];
+        remote: string[];
+        currentBranch?: string;
+        /** Branches the user starred; empty when this root has none. */
+        favorites?: string[];
+        /** Branches HEAD recently moved through, newest first — git's own record. */
+        recent?: string[];
+    }
+    | { command: 'setFavorites'; favorites: string[] }
     | { command: 'setStashes'; stashes: StashEntry[] }
     | {
         command: 'setRepoState';
@@ -149,6 +161,7 @@ export type WebviewAction =
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
     | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
     | 'newTag' | 'deleteTag' | 'pushTag'
+    | 'toggleFavorite'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
     | 'reflog'
     | 'fileDiff' | 'fileJumpToSource' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';

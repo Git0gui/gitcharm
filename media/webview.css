@@ -939,6 +939,17 @@ canvas.graph-canvas {
 .barr:hover {
     transform: scale(1.2);
 }
+/* Favorite mark: the amber the tag badge already uses, so "marked" reads as one idea */
+.bmark {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    color: #d9a04a;
+    transition: transform 0.2s ease;
+}
+.bmark:hover {
+    transform: scale(1.15);
+}
 .ccard { 
     padding: 10px;
     animation: fadeIn 0.2s ease-out;
