@@ -32,6 +32,22 @@
                 } else if (msg.command === 'selectCommit') {
                     var d = P.details[msg.hash];
                     if (d) send({ command: 'setDetail', commit: d.commit, files: d.files });
+                } else if (msg.command === 'selectCommits') {
+                    // The panel asks for the selection with this one message, whether
+                    // it holds one commit or five, so the stub answers both shapes.
+                    var hashes = msg.hashes || [];
+                    if (hashes.length === 1) {
+                        var one = P.details[hashes[0]];
+                        if (one) send({ command: 'setDetail', commit: one.commit, files: one.files });
+                    } else {
+                        send({
+                            command: 'multiCommitsResponse',
+                            commits: hashes.map(function (h) { return P.details[h] && P.details[h].commit; }).filter(Boolean),
+                            files: P.multiFiles || []
+                        });
+                    }
+                } else if (msg.command === 'saveViewState') {
+                    /* persistence lives in the host; nothing to do in a preview */
                 } else if (msg.command === 'getPushAllFiles') {
                     send({ command: 'pushFilesResponse', hash: '__all__', files: P.pushFiles['__all__'] });
                 } else if (msg.command === 'getCommitFilesForPush') {

@@ -187,6 +187,11 @@ var state = {
     selectedHash: null,
     selectedHashes: [], // Multi-select support
     lastClickedIndex: -1, // For Shift+click range selection
+    // Which row the arrow keys are on in the tree and file list. Kept as an
+    // identity (branch name / path), not an index, so a re-render can put the
+    // cursor back on the same thing instead of jumping to another row.
+    treeCursor: '',
+    fileCursor: '',
     detail: null,
     collapsed: {},
     collapsedSec: {},
@@ -650,6 +655,7 @@ function renderTree() {
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
         stashSection() + '</div>';
+    applyTreeCursor();
 }
 
 /* ---------- center commit list ---------- */
@@ -846,6 +852,69 @@ function applyRowSelection() {
     }
 }
 
+/** The rows the list currently shows, in display order — the keyboard counts these. */
+function commitRowList() {
+    return Array.from(document.querySelectorAll('#rows .row'));
+}
+
+/**
+ * Move the selection to the row at `index`; with `extend` the range from the
+ * last anchor is selected, exactly like Shift+click, so both paths obey one rule.
+ */
+function selectCommitIndex(index, extend) {
+    var rows = commitRowList();
+    if (rows.length === 0) {return false;}
+    var at = Math.max(0, Math.min(index, rows.length - 1));
+    var hash = rows[at].getAttribute('data-hash');
+    if (!hash) {return false;}
+
+    var anchor = (state.lastClickedIndex >= 0 && state.lastClickedIndex < rows.length)
+        ? state.lastClickedIndex : at;
+    if (extend) {
+        var start = Math.min(anchor, at), end = Math.max(anchor, at);
+        state.selectedHashes = [];
+        for (var i = start; i <= end; i++) {
+            var h = rows[i].getAttribute('data-hash');
+            if (h) {state.selectedHashes.push(h);}
+        }
+    } else {
+        state.selectedHashes = [hash];
+        state.lastClickedIndex = at;
+    }
+    // The row under the cursor is the "current" one even when extending upward,
+    // where the last hash in the range would be the other end of it.
+    state.selectedHash = hash;
+    state.fileCursor = '';
+    applyRowSelection();
+    rows[at].scrollIntoView({ block: 'nearest' });
+    loadSelectedDetail();
+    return true;
+}
+
+/** Ask the host for the detail pane of the current selection (single or merged). */
+function loadSelectedDetail() {
+    if (state.selectedHashes.length === 0) {
+        state.multiCommits = null;
+        state.multiFiles = null;
+        state.detail = null;
+        renderDetail();
+        saveViewState();
+        return;
+    }
+    state.detail = null;
+    state.multiCommits = null; // Clear old multi-commit data
+    state.multiFiles = null;
+    state.detailVisible = true;
+
+    var info = document.getElementById('d-info');
+    var filesBox = document.getElementById('d-files');
+    info.innerHTML = '<div class="empty">' + T('ui.loading') + '</div>';
+    filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>';
+
+    saveViewState();
+    vscode.postMessage({ command: 'selectCommits', hashes: state.selectedHashes });
+}
+
 /**
  * Render details for multiple selected commits (merged view)
  */
@@ -885,6 +954,7 @@ function renderMultiCommitDetail(info, filesBox) {
     fh += buildFileRows(mergedFiles, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
+    applyFileCursor();
 }
 
 /**
@@ -1163,6 +1233,7 @@ function renderDetail() {
     fh += buildFileRows(files, mode, state.collapsed, detailFileRowHtml);
 
     filesBox.innerHTML = '<div id="d-files-inner">' + fh + '</div>';
+    applyFileCursor();
 }
 
 /** One row of the detail panel's file list, in either display mode. */
@@ -1881,37 +1952,11 @@ document.getElementById('rows').addEventListener('click', function (e) {
     
     // Update selectedHash for backward compatibility
     state.selectedHash = state.selectedHashes.length > 0 ? state.selectedHashes[state.selectedHashes.length - 1] : null;
-    
+    state.fileCursor = '';
+
     // Update UI
     applyRowSelection();
-    
-    // Load merged files and details for multi-select or single select
-    if (state.selectedHashes.length > 0) {
-        state.detail = null;
-        state.multiCommits = null; // Clear old multi-commit data
-        state.multiFiles = null;
-        state.detailVisible = true;
-        
-        // Show loading state immediately
-        var info = document.getElementById('d-info');
-        var filesBox = document.getElementById('d-files');
-        info.innerHTML = '<div class="empty">' + T('ui.loading') + '</div>';
-        filesBox.innerHTML = '<div class="empty">' + T('common.loadingFiles') + '</div>';
-        
-        saveViewState();
-        
-        // Send to extension (works for both single and multi-select)
-        vscode.postMessage({ 
-            command: 'selectCommits', 
-            hashes: state.selectedHashes 
-        });
-    } else {
-        // No selection - clear states
-        state.multiCommits = null;
-        state.multiFiles = null;
-        state.detail = null;
-        renderDetail();
-    }
+    loadSelectedDetail();
 });
 
 document.getElementById('rows').addEventListener('contextmenu', function (e) {
@@ -2057,6 +2102,350 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
         }
         vscode.postMessage({ command: 'action', action: action, hash: state.selectedHash, path: path });
     });
+});
+
+/* ---------- keyboard navigation ---------- */
+
+/*
+ * The three panes are focusable containers, so Tab walks branches -> commits ->
+ * files instead of leaving the panel, and the arrow keys then act inside whichever
+ * pane owns focus. Rows carry no tabindex of their own: a row per tab stop would
+ * make reaching the next pane take as many presses as there are commits.
+ */
+var KEY_PANES = [
+    { id: 'btree', name: 'branches' },
+    { id: 'scroll', name: 'commits' },
+    { id: 'd-files', name: 'files' }
+];
+
+function initPaneFocus() {
+    KEY_PANES.forEach(function (p) {
+        var el = document.getElementById(p.id);
+        if (!el) {return;}
+        el.tabIndex = 0;
+        el.dataset.pane = p.name;
+        // Chrome focuses a tabbable ancestor when a click lands on a plain child,
+        // but the rows inside these panes are re-rendered constantly, so a mouse
+        // press pins the focus here instead: the arrows have to belong to the pane
+        // the user just clicked, not wherever the click happened to land.
+        el.addEventListener('mousedown', function () {
+            el.focus({ preventScroll: true });
+        });
+    });
+}
+
+function paneNameOf(el) {
+    while (el) {
+        if (el.dataset && el.dataset.pane) {return el.dataset.pane;}
+        el = el.parentElement;
+    }
+    return '';
+}
+
+function isTypingTarget(el) {
+    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+        el.tagName === 'SELECT' || el.isContentEditable);
+}
+
+/** Which pane owns the arrow keys; '' while a text field does. */
+function activeKeyPane() {
+    var el = document.activeElement;
+    if (!el || el === document.body) {return '';}
+    if (isTypingTarget(el)) {return '';}
+    return paneNameOf(el);
+}
+
+/** A dialog, menu or popover owns the keyboard: never move the selection under it. */
+function uiOverlayIsOpen() {
+    if (authorDropdownState.isOpen || repoMenu.open) {return true;}
+    if (dateUi && dateUi.isOpen) {return true;}
+    return !!document.querySelector('.context-menu, .dialog-overlay, .squash-dialog-overlay, .push-dialog-overlay');
+}
+
+function movePaneFocus(step) {
+    var names = KEY_PANES.map(function (p) {return p.name;});
+    var at = names.indexOf(activeKeyPane());
+    var next = at < 0
+        ? (step > 0 ? 0 : names.length - 1)
+        : (at + step + names.length) % names.length;
+    var el = document.getElementById(KEY_PANES[next].id);
+    if (el) {el.focus();}
+}
+
+/* --- commit list --- */
+
+function handleCommitKeys(e) {
+    var rows = commitRowList();
+    if (rows.length === 0) {return;}
+    var at = commitCursorIndex(rows);
+    var page = Math.max(3, Math.floor(document.getElementById('scroll').clientHeight /
+        (rows[0].offsetHeight || 30)));
+    var next;
+    switch (e.key) {
+        case 'ArrowDown': next = at + 1; break;
+        case 'ArrowUp': next = at - 1; break;
+        case 'Home': next = 0; break;
+        case 'End': next = rows.length - 1; break;
+        case 'PageDown': next = at + page; break;
+        case 'PageUp': next = at - page; break;
+        case 'Enter':
+            if (state.selectedHash) {
+                vscode.postMessage({
+                    command: 'action',
+                    action: 'showDiff',
+                    hash: state.selectedHash,
+                    hashes: state.selectedHashes.length > 1 ? state.selectedHashes : undefined
+                });
+            }
+            e.preventDefault();
+            return;
+        default: return;
+    }
+    next = Math.max(0, Math.min(next, rows.length - 1));
+    e.preventDefault();
+    if (next !== at) {selectCommitIndex(next, e.shiftKey);}
+}
+
+function commitCursorIndex(rows) {
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-hash') === state.selectedHash) {return i;}
+    }
+    // Nothing selected (or the selected commit scrolled out of the loaded page):
+    // start from the anchor, or from the top of the list.
+    return (state.lastClickedIndex >= 0 && state.lastClickedIndex < rows.length)
+        ? state.lastClickedIndex : 0;
+}
+
+/* --- changed files list --- */
+
+function fileRowList() {
+    return Array.from(document.querySelectorAll('#d-files .frow'));
+}
+
+/** Re-mark the cursor row after the list was rebuilt (collapse, new selection). */
+function applyFileCursor() {
+    if (!state.fileCursor) {return;}
+    fileRowList().forEach(function (row) {
+        row.classList.toggle('kcur', row.getAttribute('data-path') === state.fileCursor);
+    });
+}
+
+function selectFileRow(row) {
+    state.fileCursor = row.getAttribute('data-path');
+    applyFileCursor();
+    row.scrollIntoView({ block: 'nearest' });
+}
+
+function isDirRow(row) {
+    return row.classList.contains('dir');
+}
+
+function dirRowIsOpen(row) {
+    return !state.collapsed[row.getAttribute('data-path')];
+}
+
+/** Enter / Right on a file row: the same thing a double-click does. */
+function openFileRow(row) {
+    if (isDirRow(row)) {
+        row.click();
+        return;
+    }
+    if (!state.selectedHash) {return;}
+    // Reuse the dblclick handler instead of restating the diff message it sends —
+    // it is the one that carries the multi-select hashes.
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+}
+
+function handleFileKeys(e) {
+    var rows = fileRowList();
+    if (rows.length === 0) {return;}
+    var at = -1;
+    for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-path') === state.fileCursor) {at = i;break;}
+    }
+    var key = e.key;
+    if (at < 0 && key !== 'Enter' && key !== 'ArrowRight') {
+        selectFileRow(rows[key === 'ArrowUp' || key === 'PageUp' || key === 'End' ? rows.length - 1 : 0]);
+        e.preventDefault();
+        return;
+    }
+    var target;
+    switch (key) {
+        case 'ArrowDown': target = at + 1; break;
+        case 'ArrowUp': target = at - 1; break;
+        case 'Home': target = 0; break;
+        case 'End': target = rows.length - 1; break;
+        case 'PageDown': target = at + 10; break;
+        case 'PageUp': target = at - 10; break;
+        case 'Enter':
+        case 'ArrowRight':
+            if (at >= 0) {
+                if (isDirRow(rows[at]) && key === 'ArrowRight') {
+                    if (!dirRowIsOpen(rows[at])) {rows[at].click();}
+                } else if (isDirRow(rows[at]) && key === 'Enter') {
+                    rows[at].click();
+                } else {
+                    openFileRow(rows[at]);
+                }
+            }
+            e.preventDefault();
+            return;
+        case 'ArrowLeft':
+            if (at >= 0) {
+                if (isDirRow(rows[at]) && dirRowIsOpen(rows[at])) {
+                    rows[at].click();
+                } else {
+                    // Retreat to the folder the row sits in.
+                    var path = rows[at].getAttribute('data-path') || '';
+                    var parent = path.substring(0, path.lastIndexOf('/'));
+                    if (parent) {
+                        for (var j = 0; j < rows.length; j++) {
+                            if (rows[j].getAttribute('data-path') === parent) {
+                                selectFileRow(rows[j]);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            e.preventDefault();
+            return;
+        default: return;
+    }
+    e.preventDefault();
+    target = Math.max(0, Math.min(target, rows.length - 1));
+    if (target !== at) {selectFileRow(rows[target]);}
+}
+
+/* --- branch tree --- */
+
+function treeRowList() {
+    return Array.from(document.querySelectorAll('#btree .bsec, #btree .bfolder, #btree .bitem, #btree .sitem'));
+}
+
+/** Stable identity for a tree row: re-applying the cursor after a re-render keys on it. */
+function treeRowId(row) {
+    if (row.classList.contains('bsec')) {return 's|' + row.getAttribute('data-sec');}
+    if (row.classList.contains('bfolder')) {return 'f|' + row.getAttribute('data-folder');}
+    if (row.classList.contains('sitem')) {return 't|' + row.getAttribute('data-stash');}
+    return 'b|' + row.getAttribute('data-branch');
+}
+
+function applyTreeCursor() {
+    if (!state.treeCursor) {return;}
+    treeRowList().forEach(function (row) {
+        row.classList.toggle('kcur', treeRowId(row) === state.treeCursor);
+    });
+}
+
+function selectTreeRow(row) {
+    state.treeCursor = treeRowId(row);
+    applyTreeCursor();
+    row.scrollIntoView({ block: 'nearest' });
+}
+
+function treeRowIsOpen(row) {
+    if (row.classList.contains('bsec')) {return !state.collapsedSec[row.getAttribute('data-sec')];}
+    if (row.classList.contains('bfolder')) {
+        // A branch filter forces every folder open, so the folder state does not
+        // decide what is visible while one is typed.
+        return !!state.bfilter || !!state.expandedFolder[row.getAttribute('data-folder')];
+    }
+    return false;
+}
+
+function handleBranchKeys(e) {
+    var rows = treeRowList();
+    if (rows.length === 0) {return;}
+    var at = -1;
+    for (var i = 0; i < rows.length; i++) {
+        if (treeRowId(rows[i]) === state.treeCursor) {at = i;break;}
+    }
+    var key = e.key;
+    if (at < 0 && key !== 'Enter' && key !== 'ArrowRight' && key !== 'ArrowLeft') {
+        selectTreeRow(rows[key === 'ArrowUp' || key === 'PageUp' || key === 'End' ? rows.length - 1 : 0]);
+        e.preventDefault();
+        return;
+    }
+    var target;
+    switch (key) {
+        case 'ArrowDown': target = at + 1; break;
+        case 'ArrowUp': target = at - 1; break;
+        case 'Home': target = 0; break;
+        case 'End': target = rows.length - 1; break;
+        case 'PageDown': target = at + 8; break;
+        case 'PageUp': target = at - 8; break;
+        case 'Enter':
+            if (at < 0) {return;}
+            if (rows[at].classList.contains('bitem')) {
+                // Same as double-click: load that branch's commits. Checking out
+                // stays a deliberate double-click / menu action.
+                rows[at].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            } else if (!isTreeLeaf(rows[at])) {
+                rows[at].click();
+            }
+            e.preventDefault();
+            return;
+        case 'ArrowRight':
+            if (at >= 0 && !isTreeLeaf(rows[at]) && !treeRowIsOpen(rows[at])) {rows[at].click();}
+            e.preventDefault();
+            return;
+        case 'ArrowLeft':
+            if (at >= 0 && !isTreeLeaf(rows[at]) && treeRowIsOpen(rows[at])) {rows[at].click();}
+            e.preventDefault();
+            return;
+        default: return;
+    }
+    e.preventDefault();
+    target = Math.max(0, Math.min(target, rows.length - 1));
+    if (target !== at) {selectTreeRow(rows[target]);}
+}
+
+function isTreeLeaf(row) {
+    return row.classList.contains('bitem') || row.classList.contains('sitem');
+}
+
+var NAV_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Enter'];
+
+document.addEventListener('keydown', function (e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) {return;}
+    if (e.key === 'Escape') {
+        // The menu otherwise only goes away when the next click lands elsewhere,
+        // which is invisible to anyone reaching it from the keyboard.
+        var menu = document.querySelector('.context-menu');
+        if (menu) {
+            menu.remove();
+            if (window._hideTooltip) {window._hideTooltip();}
+            e.preventDefault();
+        }
+        return;
+    }
+    if (uiOverlayIsOpen()) {return;}
+
+    var pane = activeKeyPane();
+    if (!pane) {
+        if (e.key === 'Tab') {return;}
+        // Right after the panel opens nothing inside it has focus. The arrows then
+        // belong to the commit list — the one pane the panel is about — instead of
+        // doing nothing until the user clicks. Body-level scrolling is not a thing
+        // here: every scrollable region is a pane.
+        var focusedBody = !document.activeElement || document.activeElement === document.body ||
+            document.activeElement === document.documentElement;
+        if (!focusedBody || NAV_KEYS.indexOf(e.key) < 0) {return;}
+        pane = 'commits';
+        var scrollEl = document.getElementById('scroll');
+        if (scrollEl) {scrollEl.focus();}
+    }
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        movePaneFocus(e.shiftKey ? -1 : 1);
+        return;
+    }
+    // Shift only extends a commit range, as it does with the mouse.
+    if (e.shiftKey && pane !== 'commits') {return;}
+    if (pane === 'commits') {handleCommitKeys(e);}
+    else if (pane === 'files') {handleFileKeys(e);}
+    else {handleBranchKeys(e);}
 });
 
 /* ---------- repository guidance page (no git / no repo / no commits) ---------- */
@@ -3450,6 +3839,7 @@ function renderOperationStatus() {
     });
 })();
 
+initPaneFocus();
 renderOperationStatus();
 renderTree();
 renderRows();
