@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern, parseDiffPreview, EMPTY_TREE_HASH } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parseWorktreeList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern, parseDiffPreview, EMPTY_TREE_HASH } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -1244,5 +1244,79 @@ describe('parseDiffPreview', () => {
 
     it('uses git\'s well-known empty tree as the root-commit base', () => {
         assert.equal(EMPTY_TREE_HASH, '4b825dc642cb6eb9a060e54bf8d69288fbee4904');
+    });
+});
+
+describe('parseWorktreeList', () => {
+    it('parses main and linked worktrees, stripping refs/heads/', () => {
+        const out = parseWorktreeList([
+            'worktree D:/code/repo',
+            'HEAD 1111111111111111111111111111111111111111',
+            'branch refs/heads/main',
+            '',
+            'worktree D:/code/repo-feat',
+            'HEAD 2222222222222222222222222222222222222222',
+            'branch refs/heads/feat/x',
+            ''
+        ].join('\n'));
+        assert.equal(out.length, 2);
+        assert.deepEqual(out[0], {
+            path: 'D:/code/repo',
+            head: '1111111111111111111111111111111111111111',
+            branch: 'main',
+            main: true,
+            bare: false,
+            detached: false,
+            locked: false,
+            prunable: false
+        });
+        assert.equal(out[1].branch, 'feat/x');
+        assert.equal(out[1].main, false);
+    });
+
+    it('parses the NUL-separated shape produced by --porcelain -z', () => {
+        const out = parseWorktreeList(
+            'worktree C:/code/my repo\0HEAD abc123\0branch refs/heads/main\0\0' +
+            'worktree C:/code/other\0HEAD def456\0branch refs/heads/feat/y\0'
+        );
+        assert.equal(out.length, 2);
+        assert.equal(out[0].path, 'C:/code/my repo');
+        assert.equal(out[1].branch, 'feat/y');
+    });
+
+    it('keeps detached, bare, locked and prunable flags', () => {
+        const out = parseWorktreeList([
+            'worktree /srv/repo.git',
+            'HEAD 1111111',
+            'bare',
+            '',
+            'worktree /srv/wt-a',
+            'HEAD 2222222',
+            'detached',
+            '',
+            'worktree /srv/wt-b',
+            'HEAD 3333333',
+            'branch refs/heads/topic',
+            'locked on a USB drive',
+            'prunable gitdir file points to non-existent location',
+            ''
+        ].join('\n'));
+        assert.equal(out[0].bare, true);
+        assert.equal(out[1].detached, true);
+        assert.equal(out[1].branch, undefined);
+        assert.equal(out[2].locked, true);
+        assert.equal(out[2].lockReason, 'on a USB drive');
+        assert.equal(out[2].prunable, true);
+    });
+
+    it('starts a new entry even when git omits the blank separator', () => {
+        const out = parseWorktreeList('worktree /a\nHEAD 1\nworktree /b\nHEAD 2\n');
+        assert.deepEqual(out.map(w => w.path), ['/a', '/b']);
+        assert.equal(out[1].main, false);
+    });
+
+    it('returns nothing for empty output', () => {
+        assert.deepEqual(parseWorktreeList(''), []);
+        assert.deepEqual(parseWorktreeList('\n\n'), []);
     });
 });

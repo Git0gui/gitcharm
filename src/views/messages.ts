@@ -1,4 +1,4 @@
-import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry, RepositoryOption } from '../services/gitService';
+import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry, RepositoryOption, WorktreeEntry } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 import { DiffPreviewLine } from '../services/gitUtils';
 
@@ -88,6 +88,7 @@ export type ExtToWebviewMessage =
     | { command: 'setFavorites'; favorites: string[] }
     | { command: 'setStashes'; stashes: StashEntry[] }
     | { command: 'setStashDetail'; index: number; files: FileStat[]; error?: string }
+    | { command: 'setWorktrees'; worktrees: WorktreeEntry[] }
     | {
         command: 'setRepoState';
         state: RepoUiState;
@@ -184,6 +185,7 @@ export type WebviewAction =
     | 'newTag' | 'deleteTag' | 'pushTag'
     | 'toggleFavorite'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
+    | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove'
     | 'reflog'
     | 'fileDiff' | 'fileJumpToSource' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
@@ -225,6 +227,8 @@ export type WebviewToExtMessage =
         remainingHashes?: string[];
         /** Stash stack position (`stash@{n}`), for the stash tree section's actions. */
         stash?: number;
+        /** Filesystem path of a worktree row, for worktree actions. */
+        worktreePath?: string;
     }
     | { command: 'dialogAction'; action: string }
     | { command: 'squashMessageResponse'; message?: string }

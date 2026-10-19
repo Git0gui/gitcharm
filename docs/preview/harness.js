@@ -26,6 +26,7 @@
                     send({ command: 'setRepoState', state: 'ready', repositories: s.repositories, currentRepository: s.currentRepository });
                     send({ command: 'setDivergence', divergence: P.divergence });
                     send({ command: 'setStashes', stashes: P.stashes });
+                    send({ command: 'setWorktrees', worktrees: P.worktrees || [] });
                     if (s.select) send({ command: 'revealCommit', hash: s.select });
                     runSteps(s.steps);
                     flush();

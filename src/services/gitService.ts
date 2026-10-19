@@ -24,6 +24,7 @@ import {
     parseStatusEntries,
     parseStashList,
     stashRef,
+    parseWorktreeList,
     parsePathFilter,
     parseReflogList,
     operationFromStateFiles,
@@ -49,6 +50,7 @@ import {
     InProgressOperation,
     StashEntry,
     ReflogEntry,
+    WorktreeEntry,
     StatusEntry,
     RemoteInfo,
     WorkingTreeSummary,
@@ -70,6 +72,7 @@ export {
     InProgressOperation,
     StashEntry,
     ReflogEntry,
+    WorktreeEntry,
     RepositoryOption
 } from './gitUtils';
 
@@ -1748,31 +1751,51 @@ export class GitService {
     }
 
     /**
+     * Every worktree registered for this repository, main first. `isCurrent`
+     * marks the one this panel is looking at; the tree uses it to keep the row
+     * from offering to open or remove itself.
+     */
+    async getWorktrees(): Promise<WorktreeEntry[]> {
+        const raw = await this.executeGitArgs(['worktree', 'list', '--porcelain', '-z'], { timeoutMs: 5000 });
+        const current = this._repositoryPath;
+        return parseWorktreeList(raw).map(entry => ({
+            ...entry,
+            isCurrent: !!current && repositoryKey(entry.path) === repositoryKey(current)
+        }));
+    }
+
+    /**
      * Find the filesystem path of the worktree that currently has `branchName`
      * checked out. Returns undefined if no worktree uses the branch.
      */
     async getBranchWorktreePath(branchName: string): Promise<string | undefined> {
         assertRef(branchName);
-        const output = await this.executeGitArgs(['worktree', 'list', '--porcelain']);
-        if (!output) {return undefined;}
+        return (await this.getWorktrees()).find(entry => entry.branch === branchName)?.path;
+    }
 
-        const blocks = output.split('\n\n');
-        for (const block of blocks) {
-            const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
-            let worktreePath: string | undefined;
-            let branch: string | undefined;
-            for (const line of lines) {
-                if (line.startsWith('worktree ')) {
-                    worktreePath = line.substring('worktree '.length).trim();
-                } else if (line.startsWith('branch ')) {
-                    branch = line.substring('branch '.length).trim();
-                }
-            }
-            if (worktreePath && branch === `refs/heads/${branchName}`) {
-                return worktreePath;
-            }
-        }
-        return undefined;
+    /**
+     * Check out `branchName` in a new worktree. The path is made absolute here:
+     * a relative one would otherwise resolve against the extension host's cwd
+     * rather than the repository. Checking out a large tree can take a while, so
+     * this is not bounded by the default command timeout.
+     */
+    async addWorktree(targetPath: string, branchName: string): Promise<void> {
+        assertRef(branchName);
+        await this._execMutate(['worktree', 'add', path.resolve(targetPath), branchName], { timeoutMs: 0 });
+    }
+
+    /**
+     * Remove a registered worktree. Only a path git itself lists is accepted, so
+     * a stale or hostile message cannot point the command at an arbitrary
+     * folder. `force` is the second confirmation after git refused because the
+     * worktree still holds modified or untracked files.
+     */
+    async removeWorktree(targetPath: string, force: boolean = false): Promise<void> {
+        const target = path.resolve(targetPath);
+        const known = (await this.getWorktrees()).find(entry => repositoryKey(entry.path) === repositoryKey(target));
+        if (!known) {throw new Error(t('worktree.notRegistered', { path: target }));}
+        if (known.isCurrent) {throw new Error(t('worktree.removeCurrent'));}
+        await this._execMutate(['worktree', 'remove', ...(force ? ['--force'] : []), target], { timeoutMs: 0 });
     }
 
     /**

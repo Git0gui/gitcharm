@@ -37,7 +37,7 @@ const BRANCH_POLL_MS = 2000;
  * and replaying it on the handshake is enough.
  */
 const SCREEN_COMMANDS: ReadonlySet<ExtToWebviewMessage['command']> = new Set([
-    'setData', 'setBranches', 'setStashes', 'setRepoState', 'setFavorites',
+    'setData', 'setBranches', 'setStashes', 'setWorktrees', 'setRepoState', 'setFavorites',
     'setCommits', 'setHeadHash', 'setInProgress', 'setDivergence', 'setCurrentBranch',
     'setDetail', 'setFileIconTheme'
 ]);
@@ -268,6 +268,26 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Re-send the worktree list after this extension created or removed one.
+     * Worktrees change far less often than refs, so they are re-read whenever
+     * the branch tree is refreshed instead of on the 2s poll.
+     */
+    refreshWorktrees(): void {
+        void this._postWorktrees();
+    }
+
+    private async _postWorktrees(): Promise<void> {
+        if (!this._view) {return;}
+        try {
+            this._post({ command: 'setWorktrees', worktrees: await this._gitService.getWorktrees() });
+        } catch (error) {
+            // The branch list already reports repository failures; repeating the
+            // same toast for a section most repositories do not even show is noise.
+            logger.debug('[GitCharm] Reading worktrees failed:', error);
+        }
+    }
+
+    /**
      * The branch tree's two pinned sections. Favorites are the user's own marks;
      * recent branches come from git's HEAD checkout log, so switching a branch in
      * a terminal lands there too. The tree draws only the names it also has a ref
@@ -341,6 +361,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // No history to show: reset both regions so nothing stale stays on screen
         this._post({ command: 'setBranches', local: [], remote: [], currentBranch: '', favorites: [], recent: [] });
         this._post({ command: 'setStashes', stashes: [] });
+        this._post({ command: 'setWorktrees', worktrees: [] });
         this._post({ command: 'setCommits', commits: [], hasMore: false });
         return state;
     }
@@ -1658,6 +1679,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     );
                     return;
                 }
+                case 'worktreeAdd':
+                    await vscode.commands.executeCommand('idea-git.createWorktree', branchNode);
+                    return;
+                case 'worktreeOpen':
+                    await vscode.commands.executeCommand('idea-git.openWorktree', { path: message.worktreePath });
+                    return;
+                case 'worktreeRemove':
+                    await vscode.commands.executeCommand('idea-git.removeWorktree', { path: message.worktreePath });
+                    return;
                 case 'reset':
                     await vscode.commands.executeCommand('idea-git.resetToCommit', commitNode);
                     forceReload = true;
@@ -1913,6 +1943,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             // Send only branch data, don't affect commits
             this._postBranchList(details);
             void this._postStashes();
+            void this._postWorktrees();
             
             // Async refresh divergence after branches are updated (non-blocking)
             setTimeout(() => {
@@ -1964,8 +1995,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             // Update branches immediately when ready
             const details = await detailsPromise;
             this._postBranchList(details);
-            // Stashes live in the same tree, so they load alongside the branches.
+            // Stashes and worktrees live in the same tree, so they load alongside it.
             void this._postStashes();
+            void this._postWorktrees();
 
             // Update head hash separately when ready (don't wait for it)
             const headHash = await headHashPromise;
@@ -2080,6 +2112,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const details = await this._gitService.getBranchesWithDetails(true);
             this._postBranchList(details);
             void this._postStashes();
+            void this._postWorktrees();
             // Also refresh divergence info (ahead/behind arrows)
             await this._refreshDivergence();
         } catch (error) {

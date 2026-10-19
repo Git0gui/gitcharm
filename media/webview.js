@@ -173,6 +173,7 @@ var state = {
     favorites: INITIAL.favorites || [],
     recent: INITIAL.recent || [],
     stashes: [],
+    worktrees: [],
     divergence: {},
     detailVisible: false,
     current: INITIAL.currentBranch || '',
@@ -461,6 +462,8 @@ var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="no
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
 // Archive box: the lid, the body and the slot a stash is put through.
 var I_STASH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>';
+// Two overlapping folders: the same repository checked out in several places.
+var I_WORKTREE = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 4.2h4l1 1.3h3.6v6.3H2z"/><path d="M5 2.5h4l1 1.3h3.6v6.4"/></svg>';
 // Five-point star: outline means "not marked", filled is a favorite. Filled instead
 // of a different glyph keeps the mark readable at 12px in any theme.
 var I_STAR = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>';
@@ -649,6 +652,32 @@ function renderTree() {
         }
         return s;
     }
+    // Worktrees are branches checked out elsewhere. The section stays out of the
+    // way until there is something to compare: a lone current worktree tells the
+    // user nothing. Rows open on double-click; a single click opening a whole
+    // window would be too easy to trigger while browsing.
+    function worktreeItem(entry) {
+        var name = entry.path.split(/[\\/]/).filter(Boolean).pop() || entry.path;
+        var branch = entry.branch || T('w.worktreeDetached');
+        var tip = entry.path + '\n' + branch;
+        if (entry.head) {tip += '\n' + entry.head.substring(0, 7);}
+        if (entry.isCurrent) {tip += '\n' + T('w.worktreeCurrent');}
+        else {tip += '\n' + T('w.worktreeOpenHint');}
+        if (entry.lockReason) {tip += '\n' + entry.lockReason;}
+        var cls = 'witem' + (entry.isCurrent ? ' cur' : '') + (entry.main ? ' main' : '');
+        return '<div class="' + cls + '" data-worktree="' + esc(entry.path) + '" data-title="' + esc(tip) + '" style="padding-left:20px">' +
+            I_WORKTREE + '<span class="bname">' + esc(name) + '</span>' +
+            '<span class="sdate">' + esc(entry.isCurrent ? T('w.worktreeCurrent') : branch) + '</span></div>';
+    }
+    function worktreeSection() {
+        var visible = state.worktrees.filter(function (w) { return !w.prunable; });
+        if (visible.length <= 1) {return '';}
+        var s = header('worktree', T('w.worktreeSection'), visible.length);
+        if (!state.collapsedSec['worktree']) {
+            visible.forEach(function (entry) { s += worktreeItem(entry); });
+        }
+        return s;
+    }
     var head = '';
     if (state.current) {
         var resumeHtml = '';
@@ -669,7 +698,7 @@ function renderTree() {
         flatSection('recent', T('w.recentSection'), state.recent.filter(function (n) { return n !== state.current; }), I_CLOCK) +
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
-        stashSection() + '</div>';
+        stashSection() + worktreeSection() + '</div>';
     applyTreeCursor();
 }
 
@@ -1912,6 +1941,18 @@ document.getElementById('btree').addEventListener('click', function (e) {
 
 // Double-click handler for branch items only (switch branch)
 document.getElementById('btree').addEventListener('dblclick', function (e) {
+    var worktree = e.target.closest('.witem');
+    if (worktree) {
+        // The worktree this window already shows has nowhere to go.
+        if (worktree.classList.contains('cur')) {return;}
+        e.preventDefault();
+        vscode.postMessage({
+            command: 'action',
+            action: 'worktreeOpen',
+            worktreePath: worktree.getAttribute('data-worktree')
+        });
+        return;
+    }
     var item = e.target.closest('.bitem');
     if (!item) return;
     var name = item.getAttribute('data-branch');
@@ -1951,6 +1992,29 @@ document.getElementById('rf-files').addEventListener('click', function () {
 });
 
 document.getElementById('btree').addEventListener('contextmenu', function (e) {
+    var worktreeRow = e.target.closest('.witem');
+    if (worktreeRow) {
+        // This window already shows that worktree, so it has no actions — but the
+        // click still must not fall through to the native context menu.
+        if (worktreeRow.classList.contains('cur')) {
+            e.preventDefault();
+            return;
+        }
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+
+        var worktreePath = worktreeRow.getAttribute('data-worktree');
+        // Git refuses to remove the main worktree, so that row only offers to open.
+        var worktreeMenu = [['worktreeOpen', T('menu.worktreeOpen')]];
+        if (!worktreeRow.classList.contains('main')) {
+            worktreeMenu.push(['worktreeRemove', T('menu.worktreeRemove')]);
+        }
+        showMenu(e.clientX, e.clientY, worktreeMenu, function (action) {
+            vscode.postMessage({ command: 'action', action: action, worktreePath: worktreePath });
+        });
+        return;
+    }
+
     var stashRow = e.target.closest('.sitem');
     if (stashRow) {
         e.preventDefault();
@@ -2008,6 +2072,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['merge', T('menu.merge')],
             ['rebase', T('menu.rebase')],
             ['newBranchFrom', T('menu.newBranchFrom')],
+            ['worktreeAdd', T('menu.worktreeAdd')],
             ['compareBranch', T('menu.compareWithCurrent')],
             ['rename', T('menu.rename')],
             ['deleteBranch', T('menu.deleteBranch')],
@@ -2529,7 +2594,7 @@ function handleFileKeys(e) {
 /* --- branch tree --- */
 
 function treeRowList() {
-    return Array.from(document.querySelectorAll('#btree .bsec, #btree .bfolder, #btree .bitem, #btree .sitem'));
+    return Array.from(document.querySelectorAll('#btree .bsec, #btree .bfolder, #btree .bitem, #btree .sitem, #btree .witem'));
 }
 
 /** Stable identity for a tree row: re-applying the cursor after a re-render keys on it. */
@@ -2537,6 +2602,7 @@ function treeRowId(row) {
     if (row.classList.contains('bsec')) {return 's|' + row.getAttribute('data-sec');}
     if (row.classList.contains('bfolder')) {return 'f|' + row.getAttribute('data-folder');}
     if (row.classList.contains('sitem')) {return 't|' + row.getAttribute('data-stash');}
+    if (row.classList.contains('witem')) {return 'w|' + row.getAttribute('data-worktree');}
     return 'b|' + row.getAttribute('data-branch');
 }
 
@@ -2592,6 +2658,10 @@ function handleBranchKeys(e) {
                 rows[at].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
             } else if (rows[at].classList.contains('sitem')) {
                 selectStash(parseInt(rows[at].getAttribute('data-stash'), 10));
+            } else if (rows[at].classList.contains('witem')) {
+                // Same as a double-click: open that worktree in a new window,
+                // unless it is the one this window already shows.
+                rows[at].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
             } else if (!isTreeLeaf(rows[at])) {
                 rows[at].click();
             }
@@ -2613,7 +2683,7 @@ function handleBranchKeys(e) {
 }
 
 function isTreeLeaf(row) {
-    return row.classList.contains('bitem') || row.classList.contains('sitem');
+    return row.classList.contains('bitem') || row.classList.contains('sitem') || row.classList.contains('witem');
 }
 
 var NAV_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Enter'];
@@ -3106,6 +3176,11 @@ window.addEventListener('message', function (ev) {
         state.stashDetail.files = m.files || [];
         state.stashDetail.error = m.error;
         renderDetail();
+    } else if (m.command === 'setWorktrees') {
+        // Worktrees are another checkout of the same repository. They sit in the
+        // tree on their own schedule: adding or removing one never moves HEAD.
+        state.worktrees = m.worktrees || [];
+        renderTree();
     } else if (m.command === 'showCherryPickResume') {
         // Show resume button on current branch node
         state.cherryPickResume = {

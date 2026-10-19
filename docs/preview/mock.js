@@ -73,6 +73,25 @@
         { index: 1, message: 'WIP on feat/system-proxy-hint: bd864ce 修复：连不上远端时把系统代理的具体地址说出口', date: '2026-10-15T19:40:22+08:00' }
     ];
 
+    // The same repository checked out twice: the panel's worktree section only
+    // appears once a second one exists.
+    var worktrees = [
+        {
+            path: 'D:/gitProject/GitCharm',
+            head: '153fcf858610d56a4daf93ef269427a52809913e',
+            branch: 'main',
+            main: true, bare: false, detached: false, locked: false, prunable: false,
+            isCurrent: true
+        },
+        {
+            path: 'D:/gitProject/GitCharm-feat-system-proxy-hint',
+            head: 'bd864ce52328c724b8506009414e9b70bf436ff4',
+            branch: 'feat/system-proxy-hint',
+            main: false, bare: false, detached: false, locked: false, prunable: false,
+            isCurrent: false
+        }
+    ];
+
     // Real `git show --numstat bd864ce`.
     var filesOfBd864ce = [
         { status: 'M', path: 'AGENTS.md', added: 1, deleted: 1 },
@@ -261,7 +280,9 @@
                 { do: 'click', sel: '.sitem[data-stash="1"]' },
                 { do: 'click', sel: file('src/services/gitUtils.ts') }
             ]
-        })
+        }),
+        /** Second checkout of the repo: the worktree section at the bottom of the tree. */
+        worktrees: base
     };
 
     function file(p) { return '.frow.file[data-path="' + p + '"]'; }
@@ -311,6 +332,7 @@
         scene: scene,
         divergence: divergence,
         stashes: stashes,
+        worktrees: worktrees,
         stashFiles: stashFiles,
         details: details,
         pushFiles: pushFiles,

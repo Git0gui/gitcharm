@@ -1047,6 +1047,88 @@ export function parseRemoteList(raw: string): RemoteInfo[] {
     return Array.from(byName, ([name, url]) => ({ name, url }));
 }
 
+/** One worktree as reported by `git worktree list --porcelain`. */
+export interface WorktreeEntry {
+    /** Absolute path as git prints it (forward slashes on Windows). */
+    path: string;
+    /** Commit the worktree has checked out. */
+    head: string;
+    /** Short branch name; absent when the worktree is detached. */
+    branch?: string;
+    /** The first entry git lists; `git worktree remove` refuses it. */
+    main: boolean;
+    bare: boolean;
+    detached: boolean;
+    locked: boolean;
+    /** Reason passed to `git worktree lock`, when any. */
+    lockReason?: string;
+    /** The folder is gone; `git worktree prune` would drop this entry. */
+    prunable: boolean;
+    /** Set by GitService: the worktree this panel is showing. */
+    isCurrent?: boolean;
+}
+
+/**
+ * Parse `git worktree list --porcelain` output.
+ *
+ * Porcelain prints one attribute per line (`worktree <path>`, `HEAD <sha>`,
+ * `branch <ref>`, `bare`, `detached`, `locked <reason>`, `prunable <reason>`)
+ * and a blank line between entries. The service asks for `-z` so the line
+ * breaks arrive as NULs and a path containing spaces survives untouched; the
+ * newline branch keeps plain porcelain (and test input) readable.
+ */
+export function parseWorktreeList(raw: string): WorktreeEntry[] {
+    const entries: WorktreeEntry[] = [];
+    const lines = raw.includes('\0') ? raw.split('\0') : raw.split(/\r?\n/);
+    let current: WorktreeEntry | undefined;
+
+    const flush = (): void => {
+        if (!current) {return;}
+        entries.push({ ...current, main: entries.length === 0 });
+        current = undefined;
+    };
+
+    for (const line of lines) {
+        if (!line) {
+            flush();
+            continue;
+        }
+        if (line.startsWith('worktree ')) {
+            // A missing blank line still starts the next entry; flush first.
+            flush();
+            current = {
+                path: line.substring('worktree '.length),
+                head: '',
+                main: false,
+                bare: false,
+                detached: false,
+                locked: false,
+                prunable: false
+            };
+            continue;
+        }
+        if (!current) {continue;}
+        if (line.startsWith('HEAD ')) {
+            current.head = line.substring('HEAD '.length);
+        } else if (line.startsWith('branch ')) {
+            const ref = line.substring('branch '.length);
+            current.branch = ref.startsWith('refs/heads/') ? ref.substring('refs/heads/'.length) : ref;
+        } else if (line === 'bare') {
+            current.bare = true;
+        } else if (line === 'detached') {
+            current.detached = true;
+        } else if (line === 'locked' || line.startsWith('locked ')) {
+            current.locked = true;
+            const reason = line.substring('locked'.length).trim();
+            if (reason) {current.lockReason = reason;}
+        } else if (line === 'prunable' || line.startsWith('prunable ')) {
+            current.prunable = true;
+        }
+    }
+    flush();
+    return entries;
+}
+
 /**
  * Remote names end up in ref names (`refs/remotes/<name>/...`) and as argv, so
  * they follow git's conservative shape: no whitespace, no `..`, no leading

@@ -15,6 +15,7 @@ import { registerTagCommands } from './commands/tagCommands';
 import { registerStashCommands } from './commands/stashCommands';
 import { registerReflogCommands } from './commands/reflogCommands';
 import { registerRepositoryCommands } from './commands/repositoryCommands';
+import { registerWorktreeCommands } from './commands/worktreeCommands';
 import { resolveLocale, setLocale, t } from './i18n';
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -267,6 +268,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     registerStashCommands(ctx, gitService, graphView);
     registerReflogCommands(ctx, gitService, graphView);
     registerRepositoryCommands(ctx, gitService, graphView);
+    registerWorktreeCommands(ctx, gitService, graphView);
 
     // Register cleanup callback: clear all caches when extension deactivates (project close)
     ctx.subscriptions.push({

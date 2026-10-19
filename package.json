@@ -236,6 +236,21 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.createWorktree",
+        "title": "%cmd.createWorktree%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.openWorktree",
+        "title": "%cmd.openWorktree%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.removeWorktree",
+        "title": "%cmd.removeWorktree%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.showLog",
         "title": "%cmd.showLog%",
         "category": "GitCharm"
