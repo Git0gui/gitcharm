@@ -12,11 +12,14 @@ import { peeledCommitFromTagObject } from './gitUtils';
  */
 export class RefsReader {
     private static readonly TTL_MS = 5000;
+    private static readonly PEEL_CACHE_LIMIT = 500;
 
     private _branchCache: Map<string, string> | null = null;
     private _branchNames: { local: string[]; remote: string[] } | null = null;
     private _tagCache: Map<string, string> | null = null;
     private _timestamp = 0;
+    /** tag-object hash -> peeled commit, or null when the loose object is not a tag. */
+    private readonly _peelCache = new Map<string, string | null>();
 
     constructor(private readonly _getRepoPath: () => string | undefined) {}
 
@@ -107,11 +110,22 @@ export class RefsReader {
      */
     private _peelTagObject(objectsDir: string, hash: string): string | undefined {
         if (!/^[0-9a-f]{40}$/.test(hash)) {return undefined;}
+        const cached = this._peelCache.get(hash);
+        if (cached !== undefined) {return cached ?? undefined;}
         try {
             const file = path.join(objectsDir, hash.substring(0, 2), hash.substring(2));
             if (!fs.existsSync(file)) {return undefined;}
             const raw = zlib.inflateSync(fs.readFileSync(file)).toString('utf8');
-            return peeledCommitFromTagObject(raw);
+            const peeled = peeledCommitFromTagObject(raw) ?? null;
+            // A missing loose file is not cached: the object may still be packed
+            // and become readable later. Everything read from the file itself is
+            // immutable under this hash.
+            if (this._peelCache.size >= RefsReader.PEEL_CACHE_LIMIT) {
+                const oldest = this._peelCache.keys().next().value;
+                if (oldest !== undefined) {this._peelCache.delete(oldest);}
+            }
+            this._peelCache.set(hash, peeled);
+            return peeled ?? undefined;
         } catch {
             return undefined;
         }
