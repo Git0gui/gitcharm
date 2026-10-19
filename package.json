@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.0.9",
+  "version": "0.1.0",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
