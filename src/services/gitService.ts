@@ -36,6 +36,7 @@ import {
     formatGitError,
     classifyGitNetworkFailure,
     isMissingGitBinary,
+    parseDiffTreeRawNumstat,
     redactUrlCredentials,
     gitFailureHost,
     pickFetchRemote,
@@ -759,22 +760,69 @@ export class GitService {
      */
     async getCommitFilesWithStats(hash: string, force: boolean = false): Promise<FileStat[]> {
         assertHash(hash);
-        const key = `${this._repositoryPath ?? ''}|${hash}`;
+        const key = this._filesKey(hash);
         const hit = force ? undefined : this._filesCache.get(key);
         if (hit) {return hit;}
 
-        // NUL-delimited plumbing output: stable across versions and safe for
-        // paths containing spaces or newlines.
+        // One process carries both the raw status block and the numstat block.
+        // NUL-delimited plumbing output is stable across versions and safe for
+        // paths containing spaces, tabs or newlines. It has to be one process:
+        // this is the critical path when a commit row is selected, and the two
+        // queries used to run in parallel purely to hide each other's spawn.
         // --root is required for the initial commit: diff-tree diffs against the
         // first parent, so a parentless commit would otherwise report no files.
-        const [nameStatus, numStat] = await Promise.all([
-            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--name-status', '-z', hash]).catch(() => ''),
-            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
-        ]);
+        const output = await this.executeGitArgs([
+            'diff-tree', '--root', '--no-commit-id', '-r', '-M', '--raw', '--numstat', '-z', hash
+        ]).catch(() => '');
 
-        const files = this._mergeDiffFileStats(nameStatus, numStat);
+        const files = parseDiffTreeRawNumstat(output)[0]?.files ?? [];
         this._filesCache.set(key, files);
         return files;
+    }
+
+    /**
+     * File lists for several commits in one process (`diff-tree --stdin`).
+     * Multi-select used to cost three spawns per commit (detail, name-status,
+     * numstat); detail now rides along in the log, and this folds the rest.
+     * `--stdin` accepts only full hashes, so abbreviated input falls back to
+     * the per-commit path (callers pass rev-list output, always full).
+     */
+    async getCommitFilesWithStatsBatch(hashes: readonly string[]): Promise<Map<string, FileStat[]>> {
+        const unique = [...new Set(hashes)];
+        unique.forEach(assertHash);
+        const result = new Map<string, FileStat[]>();
+        const missing: string[] = [];
+        for (const hash of unique) {
+            const cached = this._filesCache.get(this._filesKey(hash));
+            if (cached) {result.set(hash, cached);} else {missing.push(hash);}
+        }
+        if (missing.length === 0) {return result;}
+
+        if (!missing.every(hash => /^[0-9a-f]{40}$/i.test(hash))) {
+            const lists = await Promise.all(missing.map(hash => this.getCommitFilesWithStats(hash)));
+            missing.forEach((hash, i) => result.set(hash, lists[i]));
+            return result;
+        }
+
+        const output = await this.executeGitArgs(
+            ['diff-tree', '--stdin', '--root', '-r', '-M', '--raw', '--numstat', '-z'],
+            { input: missing.join('\n') + '\n' }
+        ).catch(() => '');
+        for (const group of parseDiffTreeRawNumstat(output)) {
+            if (!group.hash) {continue;}
+            this._filesCache.set(this._filesKey(group.hash), group.files);
+            result.set(group.hash, group.files);
+        }
+        // An empty commit yields a hash with no files; a failed batch yields
+        // nothing. Callers still merge a list per selected commit.
+        for (const hash of missing) {
+            if (!result.has(hash)) {result.set(hash, []);}
+        }
+        return result;
+    }
+
+    private _filesKey(hash: string): string {
+        return `${this._repositoryPath ?? ''}|${hash}`;
     }
 
     /**
@@ -2329,57 +2377,12 @@ export class GitService {
     private async _diffFilesWithStats(baseRef: string, targetRef: string): Promise<FileStat[]> {
         assertShellSafe(baseRef, t('label.baseRef'));
         assertShellSafe(targetRef, t('label.targetRef'));
-        const [nameStatus, numStat] = await Promise.all([
-            this.executeGitArgs(['diff', '-M', '--name-status', '-z', `${baseRef}..${targetRef}`]).catch(() => ''),
-            this.executeGitArgs(['diff', '-M', '--numstat', '-z', `${baseRef}..${targetRef}`]).catch(() => '')
-        ]);
-        return this._mergeDiffFileStats(nameStatus, numStat);
-    }
-
-    /**
-     * Merge a NUL-delimited `--name-status -z` reply with its `--numstat -z`
-     * counterpart into the rows the panel draws.
-     */
-    private _mergeDiffFileStats(nameStatus: string, numStat: string): FileStat[] {
-        // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
-        const stats = new Map<string, { added: number; deleted: number }>();
-        const numTokens = splitNul(numStat);
-        for (let i = 0; i < numTokens.length; i++) {
-            const header = numTokens[i];
-            const t1 = header.indexOf('\t');
-            const t2 = t1 >= 0 ? header.indexOf('\t', t1 + 1) : -1;
-            if (t2 < 0) {continue;}
-            let path = header.slice(t2 + 1);
-            if (path === '' && i + 2 < numTokens.length + 1) {
-                // Rename entry: header path is empty, src and dst follow as tokens
-                const dst = numTokens[i + 2] ?? numTokens[i + 1] ?? '';
-                i += 2;
-                path = dst;
-            }
-            const added = header.slice(0, t1);
-            const deleted = header.slice(t1 + 1, t2);
-            stats.set(path, {
-                added: added === '-' ? 0 : parseInt(added) || 0,
-                deleted: deleted === '-' ? 0 : parseInt(deleted) || 0
-            });
-        }
-
-        // name-status -z tokens: status, path; renames: status, src, dst
-        const files: FileStat[] = [];
-        const nsTokens = splitNul(nameStatus);
-        for (let i = 0; i < nsTokens.length; i++) {
-            const statusToken = nsTokens[i];
-            const letter = (statusToken || 'M').charAt(0);
-            let path = nsTokens[++i] || '';
-            if ((letter === 'R' || letter === 'C') && i + 1 < nsTokens.length) {
-                // Display the new name for renames/copies
-                path = nsTokens[++i];
-            }
-            if (!path) {continue;}
-            const s = stats.get(path) || { added: 0, deleted: 0 };
-            files.push({ status: letter, path, added: s.added, deleted: s.deleted });
-        }
-        return files;
+        // Same single-process shape as getCommitFilesWithStats: raw statuses
+        // first, then the numstat block, one NUL-delimited stream.
+        const output = await this.executeGitArgs([
+            'diff', '-M', '--raw', '--numstat', '-z', `${baseRef}..${targetRef}`
+        ]).catch(() => '');
+        return parseDiffTreeRawNumstat(output)[0]?.files ?? [];
     }
 
     /**

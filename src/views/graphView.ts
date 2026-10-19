@@ -1016,19 +1016,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         // GitService.orderCommitsByHistory for the case where the two
                         // disagree. The order the user clicked rows in decides neither.
                         const ordered = (await this._gitService.orderCommitsByHistory(hashes)).reverse();
-                        const results = await Promise.all(
-                            ordered.map(hash =>
-                                Promise.all([
-                                    this._gitService.getCommitDetail(hash),
-                                    this._gitService.getCommitFilesWithStats(hash)
-                                ])
-                            )
-                        );
+                        // One process for all file lists; details come from the
+                        // log rows already in the commit index, not one `show`
+                        // per hash. This used to be three spawns per commit.
+                        const [commits, filesByHash] = await Promise.all([
+                            Promise.all(ordered.map(hash => this._gitService.getCommitDetail(hash))),
+                            this._gitService.getCommitFilesWithStatsBatch(ordered)
+                        ]);
 
                         this._post({
                             command: 'multiCommitsResponse',
-                            commits: results.map(([commit]) => commit),
-                            files: mergeCommitFileStats(results.map(([, files]) => files))
+                            commits,
+                            files: mergeCommitFileStats(ordered.map(hash => filesByHash.get(hash) ?? []))
                         });
                     } catch (error) {
                         vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
