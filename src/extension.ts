@@ -25,6 +25,18 @@ export function activate(ctx: vscode.ExtensionContext) {
     ));
     applyLocale();
 
+    // Full-fidelity diagnostics: notifications show a capped, friendly message,
+    // so long git stderr (auth/proxy/conflict dumps) needs somewhere it can be
+    // read and copied. The sink keeps the service layer free of vscode imports.
+    const logChannel = vscode.window.createOutputChannel('GitCharm');
+    ctx.subscriptions.push(logChannel);
+    logger.setSink((level, message) => {
+        logChannel.appendLine(`${new Date().toISOString()} [${level}] ${message}`);
+    });
+    ctx.subscriptions.push(
+        vscode.commands.registerCommand('idea-git.showLog', () => logChannel.show(true))
+    );
+
     // Credential prompts for push/pull/fetch: git's GIT_ASKPASS points at a
     // script in this extension which talks back to a loopback-only server here.
     const askpass = new GitAskpass(ctx.extensionPath);

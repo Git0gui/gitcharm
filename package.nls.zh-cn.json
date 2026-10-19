@@ -11,6 +11,7 @@
     "cmd.rebaseOnto": "变基到...",
     "cmd.pushBranch": "推送",
     "cmd.pullBranch": "拉取",
+    "cmd.showLog": "显示日志",
     "cmd.fetch": "获取远程更新",
     "cmd.compareBranch": "与当前分支比较",
     "cmd.newBranchFrom": "从此处新建分支",

@@ -126,6 +126,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **"当前文件夹不是仓库"的引导页必须列出已发现的仓库**：`#repo-state` 是 `position: fixed; inset: 0` 的全屏遮罩，底下的仓库切换器点不到，所以当 `listRepositories()` 已经找到仓库时要把它们作为按钮直接画进卡片（`data-repo-pick` → `selectRepository`）；只给"初始化仓库"会把用户引到一个本不该建仓库的父目录。这一状态在"一个普通父目录并排若干独立仓库"的工作区里是常态——向上探测当然找不到仓库。
 - **缓存与快照必须能识别自己属于哪个仓库**：钉住的仓库写在 `workspaceState`（`idea-git.selectedRepository`），启动时用 `_hasGitDir` 校验，目录搬走就交给自动发现；持久化视图快照由宿主盖 `repoPath`，与当前仓库不匹配即丢弃（同 `PersistedBranchCache` 的 repoPath 校验思路）。
 - **后台 / 定时任务禁止走 `_execNetwork`**：它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框。自动 fetch 用 `fetchSilent()`（绕开 askpass + `GIT_TERMINAL_PROMPT=0` + 有限超时 + 失败只记 `logger.debug`），且先用 fs 读 `.git/config` 判断有没有远端——没远端一个子进程都不 spawn。这类任务还要绑"面板可见"条件，与分支 watcher 同起同停。
+- **完整 stderr 必须落到输出通道**：通知条按 `formatGitError` 截断（4 行/400 字），排障需要的原文在 `GitCharm` OutputChannel 里。`logger` 的 sink 由 `extension.ts` 注入（服务层不 import vscode），命令 `idea-git.showLog` 打开；push/pull/fetch/update 的 catch 用 `logger.error` 记录**经 `redactUrlCredentials` 清洗**的原文，错误通知带"显示日志"按钮。
 
 ## 9. Git 工作流约束（AI 协作红线）
 

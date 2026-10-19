@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
-import { formatGitError } from '../services/gitUtils';
+import { formatGitError, redactUrlCredentials } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
@@ -20,6 +20,17 @@ export function registerBranchCommands(
     gitService: GitService,
     graphView: GraphViewProvider
 ): void {
+    /**
+     * Network failures hide long stderr behind a capped, friendly message; the
+     * output channel carries the full text. Offer it right where the failure is
+     * reported instead of making the user find the command on their own.
+     */
+    function showNetworkError(message: string): void {
+        void vscode.window.showErrorMessage(message, t('log.showEntry')).then(choice => {
+            if (choice) {void vscode.commands.executeCommand('idea-git.showLog');}
+        });
+    }
+
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.createBranch', async () => {
             const branchName = await vscode.window.showInputBox({
@@ -376,6 +387,7 @@ export function registerBranchCommands(
                 // Detect on git's raw output (a long dump can push the keyword past
                 // the display cap), show the formatted one.
                 const rawText = combineErrorText(error);
+                logger.error(`[GitCharm] push failed: ${redactUrlCredentials(rawText)}`);
                 // Parse common git push errors into user-friendly messages
                 let friendlyMsg: string;
                 if (rawText.includes('non-fast-forward') || rawText.includes('[rejected]')) {
@@ -389,7 +401,7 @@ export function registerBranchCommands(
                 } else {
                     friendlyMsg = t('push.failed', { error: formatGitError(error) });
                 }
-                vscode.window.showErrorMessage(friendlyMsg);
+                showNetworkError(friendlyMsg);
             }
         }),
 
@@ -441,6 +453,7 @@ export function registerBranchCommands(
                 if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 // Check for pull-specific conflict errors first
                 const errorText = combineErrorText(error);
+                logger.error(`[GitCharm] pull failed: ${redactUrlCredentials(errorText)}`);
                 const lowerError = errorText.toLowerCase();
                 const isPullConflict = lowerError.includes('pulling is not possible') ||
                                        lowerError.includes('unmerged files') ||
@@ -470,7 +483,7 @@ export function registerBranchCommands(
                 );
 
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('pull.failed', { error: formatGitError(error) }));
+                    showNetworkError(t('pull.failed', { error: formatGitError(error) }));
                 }
             }
         }),
@@ -485,7 +498,9 @@ export function registerBranchCommands(
                 vscode.window.showInformationMessage(t('fetch.success'));
                 graphView.refresh();
             } catch (error) {
-                vscode.window.showErrorMessage(t('fetch.failed', { error: formatGitError(error) }));
+                const fetchErrorText = combineErrorText(error);
+                logger.error(`[GitCharm] fetch failed: ${redactUrlCredentials(fetchErrorText)}`);
+                showNetworkError(t('fetch.failed', { error: formatGitError(error) }));
             }
         }),
 
@@ -546,6 +561,7 @@ export function registerBranchCommands(
                 if (await tryHandleEmptyCommitStop(error, gitService, graphView)) {return;}
                 // Check for pull-specific conflict errors first
                 const errorText = combineErrorText(error);
+                logger.error(`[GitCharm] update failed: ${redactUrlCredentials(errorText)}`);
                 const lowerError = errorText.toLowerCase();
                 const isPullConflict = lowerError.includes('pulling is not possible') ||
                                        lowerError.includes('unmerged files') ||
@@ -575,7 +591,7 @@ export function registerBranchCommands(
                 );
 
                 if (!handled) {
-                    vscode.window.showErrorMessage(t('branch.updateFailed', { error: formatGitError(error) }));
+                    showNetworkError(t('branch.updateFailed', { error: formatGitError(error) }));
                 }
             }
         }),

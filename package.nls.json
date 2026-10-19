@@ -11,6 +11,7 @@
     "cmd.rebaseOnto": "Rebase onto...",
     "cmd.pushBranch": "Push",
     "cmd.pullBranch": "Pull",
+    "cmd.showLog": "Show Log",
     "cmd.fetch": "Fetch Remote Updates",
     "cmd.compareBranch": "Compare with Current Branch",
     "cmd.newBranchFrom": "New Branch from Here",
