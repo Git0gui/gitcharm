@@ -204,6 +204,8 @@ export class GitService {
     private _detailCache = new LruCache<CommitDetail>(GitService.CACHE_MAX);
     /** commit -> diff base. A commit's parent never moves, so this one needs no invalidation. */
     private _diffBaseCache = new LruCache<string>(100);
+    /** `git worktree list` output, tagged with the filesystem stamp it was read under. */
+    private _worktreeCache: { signature: string; entries: WorktreeEntry[] } | null = null;
 
     // Commit index cache: bounded LRU to avoid unbounded growth
     private _commitIndex = new LruCache<GraphCommit>(200); // Reduced from 500 to save memory
@@ -1091,6 +1093,7 @@ export class GitService {
         this._filesCache.clear();
         this._detailCache.clear();
         this._commitIndex.clear();
+        this._worktreeCache = null;
     }
 
     /**
@@ -1829,12 +1832,43 @@ export class GitService {
      * from offering to open or remove itself.
      */
     async getWorktrees(): Promise<WorktreeEntry[]> {
-        const raw = await this.executeGitArgs(['worktree', 'list', '--porcelain', '-z'], { timeoutMs: 5000 });
+        const signature = this._worktreeSignature();
+        if (!this._worktreeCache || this._worktreeCache.signature !== signature) {
+            const raw = await this.executeGitArgs(['worktree', 'list', '--porcelain', '-z'], { timeoutMs: 5000 });
+            this._worktreeCache = { signature, entries: parseWorktreeList(raw) };
+        }
         const current = this._repositoryPath;
-        return parseWorktreeList(raw).map(entry => ({
+        const entries = this._worktreeCache.entries;
+        return entries.map(entry => ({
             ...entry,
             isCurrent: !!current && repositoryKey(entry.path) === repositoryKey(current)
         }));
+    }
+
+    /**
+     * Filesystem stamp for the registered-worktree set: each registration's HEAD
+     * and lock file plus the main HEAD. `git worktree list` is a spawn, and the
+     * panel asks for it on every show and branch context menu; any worktree
+     * add/remove or checkout elsewhere moves this stamp, so a match is enough.
+     */
+    private _worktreeSignature(): string {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (!gitDir) {return '';}
+        const stamp = (file: string): string => {
+            try {return fs.statSync(file).mtimeMs.toFixed(3);} catch {return '-';}
+        };
+        const parts = [`main:${stamp(path.join(gitDir, 'HEAD'))}`];
+        const worktreesDir = path.join(resolveCommonDir(gitDir), 'worktrees');
+        try {
+            for (const name of fs.readdirSync(worktreesDir).sort()) {
+                const dir = path.join(worktreesDir, name);
+                parts.push(`${name}:${stamp(path.join(dir, 'HEAD'))}:${stamp(path.join(dir, 'locked'))}`);
+            }
+        } catch {
+            // No linked worktrees registered.
+        }
+        return parts.join('|');
     }
 
     /**
@@ -1855,6 +1889,7 @@ export class GitService {
     async addWorktree(targetPath: string, branchName: string): Promise<void> {
         assertRef(branchName);
         await this._execMutate(['worktree', 'add', path.resolve(targetPath), branchName], { timeoutMs: 0 });
+        this._worktreeCache = null;
     }
 
     /**
@@ -1869,6 +1904,7 @@ export class GitService {
         if (!known) {throw new Error(t('worktree.notRegistered', { path: target }));}
         if (known.isCurrent) {throw new Error(t('worktree.removeCurrent'));}
         await this._execMutate(['worktree', 'remove', ...(force ? ['--force'] : []), target], { timeoutMs: 0 });
+        this._worktreeCache = null;
     }
 
     /**
