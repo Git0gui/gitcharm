@@ -44,8 +44,18 @@ const BASE_ENV: Record<string, string> = {
     EDITOR: 'true'
 };
 
-/** Fixed leading git flags: quoted paths stay readable, queries never trigger gc. */
-const BASE_ARGS = ['-c', 'core.quotePath=false', '-c', 'gc.auto=0'];
+/**
+ * Fixed leading git flags: quoted paths stay readable, queries never trigger
+ * gc, and history walks never verify commit signatures. A user-level
+ * `log.showSignature=true` makes `git log`/`git show` GPG-verify every commit,
+ * which can turn a millisecond query into a multi-second one; the graph never
+ * renders signatures, so the setting has no value here.
+ */
+const BASE_ARGS = [
+    '-c', 'core.quotePath=false',
+    '-c', 'gc.auto=0',
+    '-c', 'log.showSignature=false'
+];
 
 let _active = 0;
 const _waiters: Array<() => void> = [];
