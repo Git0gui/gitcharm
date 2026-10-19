@@ -45,6 +45,13 @@ const SCREEN_COMMANDS: ReadonlySet<ExtToWebviewMessage['command']> = new Set([
 export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly PAGE_FIRST = 20;
     private static readonly PAGE_MORE = 10;
+    /**
+     * One spawn serves this many rows; the panel still reveals PAGE_MORE per
+     * scroll, so the four follow-up pages come from memory. `git log --skip`
+     * re-walks history from the tip, which is why a shallow page-per-request
+     * walk costs more the deeper the user scrolls.
+     */
+    private static readonly LOAD_WINDOW = 50;
     /** Session-restore window: reopen within this period restores the last view; later opens start fresh. */
     private static readonly SESSION_RESTORE_TTL_MS = 2 * 60 * 60 * 1000;
     /** Short pause after the panel opens before the first background fetch. */
@@ -62,6 +69,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _loaded = 0;
     private _hasMore = false;
     private _loadingMore = false;
+    /** Rows fetched but not yet handed to the webview; served oldest first. */
+    private _pendingCommits: GraphCommit[] = [];
+    /** The last window came back short, so the stream end is in the buffer. */
+    private _streamExhausted = false;
     private _loadedHashes = new Set<string>();
     private _branchCheckTimer: NodeJS.Timeout | undefined;
     private _autoFetchTimer: NodeJS.Timeout | undefined;
@@ -1832,6 +1843,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         
         this._loaded = graphData.commits.length;
         this._hasMore = graphData.commits.length >= GraphViewProvider.PAGE_FIRST;
+        this._pendingCommits = [];
+        this._streamExhausted = false;
         this._loadedHashes = new Set(graphData.commits.map(c => c.hash));
         const repoPath = this._gitService.repositoryPath;
         return {
@@ -1849,7 +1862,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Fetch the next page of commits and report whether more remain.
+     * Serve the next page of commits. A page normally comes out of the window
+     * fetched by an earlier call; only an empty buffer spawns `git log`, and
+     * that one fetch fills a whole window's worth of pages.
      */
     private async _loadMore(): Promise<void> {
         if (this._loadingMore || !this._hasMore || !this._view) {return;}
@@ -1861,16 +1876,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 void this._reload(true);
                 return;
             }
-            const data = await this._gitService.getCommitGraphData({
-                limit: GraphViewProvider.PAGE_MORE,
-                skip: this._loaded,
-                branch: this._branch,
-                filters: this._filters
-            });
-            this._loaded += data.commits.length;
-            this._hasMore = data.commits.length >= GraphViewProvider.PAGE_MORE;
-            for (const c of data.commits) {this._loadedHashes.add(c.hash);}
-            this._post({ command: 'appendCommits', commits: data.commits, hasMore: this._hasMore });
+            if (this._pendingCommits.length === 0) {
+                const data = await this._gitService.getCommitGraphData({
+                    limit: GraphViewProvider.LOAD_WINDOW,
+                    skip: this._loaded,
+                    branch: this._branch,
+                    filters: this._filters
+                });
+                this._pendingCommits = data.commits;
+                this._loaded += data.commits.length;
+                this._streamExhausted = data.commits.length < GraphViewProvider.LOAD_WINDOW;
+            }
+            const page = this._pendingCommits.splice(0, GraphViewProvider.PAGE_MORE);
+            for (const c of page) {this._loadedHashes.add(c.hash);}
+            this._hasMore = !this._streamExhausted || this._pendingCommits.length > 0;
+            this._post({ command: 'appendCommits', commits: page, hasMore: this._hasMore });
         } catch (error) {
             // The spinner is driven by the webview; without this it stays on and
             // its scroll handler never asks again (state.loadingMore stays true).
@@ -2081,6 +2101,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             
             this._loaded = graphData.commits.length;
             this._hasMore = graphData.commits.length >= GraphViewProvider.PAGE_FIRST;
+            this._pendingCommits = [];
+            this._streamExhausted = false;
             this._loadedHashes = new Set(graphData.commits.map(c => c.hash));
             
             // Update webview with commits
