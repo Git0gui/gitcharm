@@ -26,7 +26,7 @@ GitCharm provides a three-panel Git log view:
 
 ![Branch context menu](resources/screenshots/branch-context-menu.png)
 
-**Push dialog** — review outgoing commits and their changed files before pushing: files on top, commit info below, both scrollable; switch flat / tree view in the header (force-push available when behind)
+**Push dialog** — review outgoing commits and their changed files before pushing: files on top, commit info below, both scrollable; switch flat / tree view in the header (force-push available when behind). All four dialogs (push, compare, reflog, file history) can be resized by dragging their edges, and the push / compare dialogs have draggable splitters between panes; sizes last for the current session only
 
 ![Push dialog](resources/screenshots/push-dialog.png)
 
@@ -192,7 +192,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ![分支右键菜单](resources/screenshots/branch-context-menu.png)
 
-**推送对话框**：推送前查看待推送提交及其变更文件——上为文件列表、下为提交信息，两块均可上下左右滚动，表头可切换平铺/目录结构（落后远程时可强制推送）
+**推送对话框**：推送前查看待推送提交及其变更文件——上为文件列表、下为提交信息，两块均可上下左右滚动，表头可切换平铺/目录结构（落后远程时可强制推送）。推送、对比、Reflog 与文件历史对话框都可以拖拽边框或内部分隔条调整大小，尺寸只在本次会话生效
 
 ![推送对话框](resources/screenshots/push-dialog.png)
 
