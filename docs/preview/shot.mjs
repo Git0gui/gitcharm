@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, statSync, renameSync } from 'node:fs';
+import { mkdirSync, rmSync, statSync, renameSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import path from 'node:path';
 
 /**
@@ -13,31 +14,47 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const out = path.join(dir, 'out');
 mkdirSync(out, { recursive: true });
 
-const browsers = [
+const candidates = [
     'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
+    'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+    'C:/Program Files/Microsoft/Edge/Application/msedge.exe'
 ];
-const browser = browsers.find((b) => spawnSync(b, ['--version']).status === 0);
+// Probing with `--version` was the original choice, but on Windows a chrome.exe
+// launched without its own profile hands the request to the already-running
+// browser and never exits — so the script hung whenever Chrome happened to be
+// open. Existence is all we actually need to know.
+const browser = candidates.find((b) => existsSync(b));
 if (!browser) throw new Error('no Chrome/Edge found');
+
+// Same reason: without a private profile every screenshot would be a request
+// posted to the user's live browser instead of a headless render.
+const profile = path.join(os.tmpdir(), `gitcharm-preview-${process.pid}`);
+mkdirSync(profile, { recursive: true });
 
 const scenes = process.argv.slice(2);
 const list = scenes.length ? scenes : ['main', 'conflict', 'multiRepo'];
 
-for (const scene of list) {
-    const args = [
-        '--headless=new',
-        '--disable-gpu',
-        '--hide-scrollbars',
-        '--force-device-scale-factor=2',
-        '--window-size=1400,780',
-        '--virtual-time-budget=4000',
-        `--screenshot=${path.join(out, `${scene}.png`)}`,
-        `file:///${dir.replace(/\\/g, '/')}/preview.html?scene=${scene}`
-    ];
-    const r = spawnSync(browser, args, { encoding: 'utf8' });
-    const ok = r.status === 0 && /bytes written/.test(r.stderr + r.stdout);
-    console.log(`${ok ? 'ok  ' : 'FAIL'} ${scene}.png`);
-    if (!ok) console.log((r.stderr || r.stdout).split('\n').filter(l => /error|failed/i.test(l)).slice(0, 3).join('\n'));
+try {
+    for (const scene of list) {
+        const args = [
+            '--headless=new',
+            '--disable-gpu',
+            '--hide-scrollbars',
+            '--force-device-scale-factor=2',
+            '--window-size=1400,780',
+            '--virtual-time-budget=4000',
+            `--user-data-dir=${profile}`,
+            `--screenshot=${path.join(out, `${scene}.png`)}`,
+            `file:///${dir.replace(/\\/g, '/')}/preview.html?scene=${scene}`
+        ];
+        const r = spawnSync(browser, args, { encoding: 'utf8', timeout: 120_000 });
+        const ok = r.status === 0 && /bytes written/.test(r.stderr + r.stdout);
+        console.log(`${ok ? 'ok  ' : 'FAIL'} ${scene}.png`);
+        if (!ok) console.log((r.stderr || r.stdout || '').split('\n').filter(l => /error|failed/i.test(l)).slice(0, 3).join('\n'));
+    }
+} finally {
+    try { rmSync(profile, { recursive: true, force: true }); } catch { /* Windows keeps the dir locked briefly */ }
 }
 
 /**
