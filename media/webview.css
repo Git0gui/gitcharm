@@ -1551,6 +1551,68 @@ canvas.graph-canvas {
     box-shadow: 0 8px 32px rgba(0,0,0,.5);
     color: var(--vscode-foreground, #cccccc);
     animation: dialogSlideIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Containing block for the edge grips, and a clip so a shrunk box never lets
+       the panes spill past the rounded corners. */
+    position: relative;
+    overflow: hidden;
+}
+/* Drag grips. They sit on the border itself, so the box must not be clipped away
+   from them — hence absolute children inside the padded edge rather than outside. */
+.push-rz {
+    position: absolute;
+    z-index: 2;
+}
+.push-rz-e {
+    right: 0;
+    top: 12px;
+    bottom: 12px;
+    width: 6px;
+    cursor: ew-resize;
+}
+.push-rz-s {
+    left: 12px;
+    right: 12px;
+    bottom: 0;
+    height: 6px;
+    cursor: ns-resize;
+}
+.push-rz-se {
+    right: 0;
+    bottom: 0;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+}
+.push-rz-e:hover, .push-rz-s:hover, .push-rz-se:hover {
+    background: var(--vscode-sash-hoverBorder, rgba(0, 122, 204, .55));
+}
+/* Column / row dividers. The negative margins make the 7px hit area overlap the
+   existing 1px border instead of stealing layout width from either pane. */
+.push-split {
+    flex: none;
+    position: relative;
+    z-index: 2;
+}
+.push-split-v {
+    width: 7px;
+    margin: 0 -3px;
+    cursor: col-resize;
+}
+.push-split-h {
+    height: 7px;
+    margin: -3px 0 -2px;
+    cursor: row-resize;
+}
+.push-split-v:hover, .push-split-h:hover {
+    background: var(--vscode-sash-hoverBorder, rgba(0, 122, 204, .55));
+}
+/* Mid-drag the pointer is over rows and buttons that would otherwise repaint the
+   cursor and select text; the grip's own cursor is set inline on <body>. */
+body.dialog-resizing {
+    user-select: none;
+}
+body.dialog-resizing * {
+    cursor: inherit !important;
 }
 .push-dialog-header {
     padding: 14px 20px;

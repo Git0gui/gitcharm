@@ -3488,6 +3488,121 @@ function renderDialogDetail(el, commit, commits) {
 
 var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', remoteExists: true, visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
+/* ---------- drag-to-resize dialog ---------- */
+
+// Deliberately plain module state: the webview DOM is destroyed when the panel is
+// hidden, and this object dies with it, so the next session starts from the
+// stylesheet defaults. Nothing here is reported to the host or written to Memento.
+var dialogLayout = { box: null, list: null, files: null };
+var BOX_MIN_W = 560, BOX_MIN_H = 340;
+var LIST_MIN_W = 220, PANE_MIN_W = 260;
+var FILES_MIN_H = 90, DETAIL_MIN_H = 110;
+
+function clampPx(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+}
+
+/**
+ * A single grip drag. Pointer capture is what makes it survive: the grips are a
+ * few pixels wide, so the cursor leaves them almost immediately, and without
+ * capture the drag would read as "released outside" and be dropped.
+ */
+function startDialogDrag(e, cursor, move) {
+    if (e.button !== 0) {return;}
+    var grip = e.currentTarget;
+    e.preventDefault();
+    e.stopPropagation();
+    var startX = e.clientX, startY = e.clientY;
+    document.body.classList.add('dialog-resizing');
+    document.body.style.cursor = cursor;
+    try { grip.setPointerCapture(e.pointerId); } catch (err) {/* unsynthesised pointers have nothing to capture */}
+    function onMove(ev) { move(ev.clientX - startX, ev.clientY - startY); }
+    function onUp() {
+        grip.removeEventListener('pointermove', onMove);
+        grip.removeEventListener('pointerup', onUp);
+        grip.removeEventListener('pointercancel', onUp);
+        document.body.classList.remove('dialog-resizing');
+        document.body.style.cursor = '';
+    }
+    grip.addEventListener('pointermove', onMove);
+    grip.addEventListener('pointerup', onUp);
+    grip.addEventListener('pointercancel', onUp);
+}
+
+/** Free the column from its percentage cap and pin the file/commit split height. */
+function setDialogRowSplit(top, bottom, h) {
+    /* flex-shrink stays 1 so a later box-height drag can still take the pane down;
+       only the grow is switched off, otherwise the basis is ignored. */
+    top.style.flex = '0 1 ' + Math.round(h) + 'px';
+    bottom.style.flex = '1 1 auto';
+}
+
+function attachDialogResize(overlay) {
+    var box = overlay.querySelector('.push-dialog-box');
+    var body = overlay.querySelector('.push-dialog-body');
+    var list = overlay.querySelector('.push-commits-list');
+    var panel = overlay.querySelector('.push-files-panel');
+    if (!box || !body || !list) {return;}
+    if (dialogLayout.box) {
+        box.style.width = dialogLayout.box.w + 'px';
+        box.style.height = dialogLayout.box.h + 'px';
+        box.style.maxHeight = 'none';
+    }
+    if (dialogLayout.list) {
+        list.style.maxWidth = 'none';
+        list.style.width = dialogLayout.list + 'px';
+    }
+
+    ['e', 's', 'se'].forEach(function (dir) {
+        var grip = document.createElement('div');
+        grip.className = 'push-rz push-rz-' + dir;
+        box.appendChild(grip);
+        grip.addEventListener('pointerdown', function (e) {
+            var startW = box.offsetWidth, startH = box.offsetHeight;
+            startDialogDrag(e, dir === 'e' ? 'ew-resize' : dir === 's' ? 'ns-resize' : 'nwse-resize', function (dx, dy) {
+                var next = { w: startW, h: startH };
+                // The overlay centres the box, so a grabbed edge only travels half the
+                // pointer distance; doubling the delta makes the edge follow the cursor.
+                if (dir !== 's') {next.w = clampPx(startW + dx * 2, BOX_MIN_W, window.innerWidth - 24);}
+                if (dir !== 'e') {next.h = clampPx(startH + dy * 2, BOX_MIN_H, window.innerHeight - 24);}
+                dialogLayout.box = next;
+                box.style.maxHeight = 'none';
+                box.style.width = next.w + 'px';
+                box.style.height = next.h + 'px';
+            });
+        });
+    });
+
+    var split = document.createElement('div');
+    split.className = 'push-split push-split-v';
+    body.insertBefore(split, list.nextSibling);
+    split.addEventListener('pointerdown', function (e) {
+        var startW = list.offsetWidth;
+        var room = body.offsetWidth - split.offsetWidth;
+        startDialogDrag(e, 'col-resize', function (dx) {
+            dialogLayout.list = clampPx(startW + dx, LIST_MIN_W, room - PANE_MIN_W);
+            list.style.maxWidth = 'none';
+            list.style.width = dialogLayout.list + 'px';
+        });
+    });
+
+    var filesSec = panel && panel.querySelector('.push-files-section');
+    var detailSec = panel && panel.querySelector('.push-detail-section');
+    if (!filesSec || !detailSec) {return;}
+    if (dialogLayout.files) {setDialogRowSplit(filesSec, detailSec, dialogLayout.files);}
+    var hsplit = document.createElement('div');
+    hsplit.className = 'push-split push-split-h';
+    panel.insertBefore(hsplit, detailSec);
+    hsplit.addEventListener('pointerdown', function (e) {
+        var startH = filesSec.offsetHeight;
+        var room = panel.offsetHeight - hsplit.offsetHeight;
+        startDialogDrag(e, 'row-resize', function (dy) {
+            dialogLayout.files = clampPx(startH + dy, FILES_MIN_H, room - DETAIL_MIN_H);
+            setDialogRowSplit(filesSec, detailSec, dialogLayout.files);
+        });
+    });
+}
+
 function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, remotes) {
     // The host re-sends this message when the target remote changes; replace the
     // open dialog instead of stacking a second overlay.
@@ -3587,6 +3702,7 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, 
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay);
 
     // Disable the picker while the host recomputes; the replacement dialog
     // (same id) arrives with the new commit list and an enabled picker.
