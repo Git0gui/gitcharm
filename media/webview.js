@@ -3493,19 +3493,40 @@ var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '
 // Deliberately plain module state: the webview DOM is destroyed when the panel is
 // hidden, and this object dies with it, so the next session starts from the
 // stylesheet defaults. Nothing here is reported to the host or written to Memento.
-var dialogLayout = { box: null, list: null, files: null };
+// One slot per dialog: the reflog is naturally a third of the push dialog's
+// height, so a shared frame would inflate whichever dialog the user did not just
+// drag. The size still survives a rebuild (switching the push remote re-renders
+// the whole overlay) and reopening the same dialog.
+var dialogLayout = {};
+function layoutSlot(key) {
+    var l = dialogLayout[key];
+    if (!l) {dialogLayout[key] = l = { box: null, list: null, files: null };}
+    return l;
+}
 var BOX_MIN_W = 560, BOX_MIN_H = 340;
 var LIST_MIN_W = 220, PANE_MIN_W = 260;
-var FILES_MIN_H = 90, DETAIL_MIN_H = 110;
+var FILES_MIN_H = 90, DETAIL_MIN_H = 96;
 
 function clampPx(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v));
 }
 
 /**
+ * Drag bounds as "how far each way from where it started", never as absolute
+ * floors: a pane already past an absolute floor makes the first pointermove snap
+ * it back, which reads as the divider moving the wrong way.
+ */
+function dragRange(start, back, fwd) {
+    var lo = start - Math.max(0, back), hi = start + Math.max(0, fwd);
+    return function (d) { return clampPx(start + d, lo, hi); };
+}
+
+/**
  * A single grip drag. Pointer capture is what makes it survive: the grips are a
  * few pixels wide, so the cursor leaves them almost immediately, and without
  * capture the drag would read as "released outside" and be dropped.
+ * The callback gets a named `{dx, dy}` — two of these handlers only care about
+ * one axis, and positional arguments let that quietly bind to the wrong one.
  */
 function startDialogDrag(e, cursor, move) {
     if (e.button !== 0) {return;}
@@ -3516,7 +3537,7 @@ function startDialogDrag(e, cursor, move) {
     document.body.classList.add('dialog-resizing');
     document.body.style.cursor = cursor;
     try { grip.setPointerCapture(e.pointerId); } catch (err) {/* unsynthesised pointers have nothing to capture */}
-    function onMove(ev) { move(ev.clientX - startX, ev.clientY - startY); }
+    function onMove(ev) { move({ dx: ev.clientX - startX, dy: ev.clientY - startY }); }
     function onUp() {
         grip.removeEventListener('pointermove', onMove);
         grip.removeEventListener('pointerup', onUp);
@@ -3537,20 +3558,34 @@ function setDialogRowSplit(top, bottom, h) {
     bottom.style.flex = '1 1 auto';
 }
 
-function attachDialogResize(overlay) {
+/**
+ * Freeze the frame before an inner divider moves. The box has no height of its
+ * own — it is content-sized and the overlay centres it — so taking a pane down
+ * shrinks the whole dialog, which then re-centres and the divider jumps the way
+ * the cursor did not. Pinned sizes use offset*, not getBoundingClientRect: the
+ * opening animation is a transform and would be baked in as a real size.
+ */
+function pinDialogBox(lay, box) {
+    if (box.style.height) {return;}
+    lay.box = { w: box.offsetWidth, h: box.offsetHeight };
+    box.style.maxHeight = 'none';
+    box.style.width = lay.box.w + 'px';
+    box.style.height = lay.box.h + 'px';
+}
+
+function attachDialogResize(overlay, key) {
     var box = overlay.querySelector('.push-dialog-box');
     var body = overlay.querySelector('.push-dialog-body');
     var list = overlay.querySelector('.push-commits-list');
     var panel = overlay.querySelector('.push-files-panel');
     if (!box || !body || !list) {return;}
-    if (dialogLayout.box) {
-        box.style.width = dialogLayout.box.w + 'px';
-        box.style.height = dialogLayout.box.h + 'px';
+    var lay = layoutSlot(key);
+    var filesSec = panel && panel.querySelector('.push-files-section');
+    var detailSec = panel && panel.querySelector('.push-detail-section');
+    if (lay.box) {
+        box.style.width = lay.box.w + 'px';
+        box.style.height = lay.box.h + 'px';
         box.style.maxHeight = 'none';
-    }
-    if (dialogLayout.list) {
-        list.style.maxWidth = 'none';
-        list.style.width = dialogLayout.list + 'px';
     }
 
     ['e', 's', 'se'].forEach(function (dir) {
@@ -3559,13 +3594,25 @@ function attachDialogResize(overlay) {
         box.appendChild(grip);
         grip.addEventListener('pointerdown', function (e) {
             var startW = box.offsetWidth, startH = box.offsetHeight;
-            startDialogDrag(e, dir === 'e' ? 'ew-resize' : dir === 's' ? 'ns-resize' : 'nwse-resize', function (dx, dy) {
+            var startFiles = lay.files;
+            var spanW = dragRange(startW, startW - BOX_MIN_W, window.innerWidth - 24 - startW);
+            var spanH = dragRange(startH, startH - BOX_MIN_H, window.innerHeight - 24 - startH);
+            startDialogDrag(e, dir === 'e' ? 'ew-resize' : dir === 's' ? 'ns-resize' : 'nwse-resize', function (d) {
                 var next = { w: startW, h: startH };
                 // The overlay centres the box, so a grabbed edge only travels half the
                 // pointer distance; doubling the delta makes the edge follow the cursor.
-                if (dir !== 's') {next.w = clampPx(startW + dx * 2, BOX_MIN_W, window.innerWidth - 24);}
-                if (dir !== 'e') {next.h = clampPx(startH + dy * 2, BOX_MIN_H, window.innerHeight - 24);}
-                dialogLayout.box = next;
+                if (dir !== 's') {next.w = spanW(d.dx * 2);}
+                if (dir !== 'e') {
+                    next.h = spanH(d.dy * 2);
+                    // Once the split has been dragged it is a fixed height, and the
+                    // bottom pane absorbs everything the frame gains. Scale it with the
+                    // frame instead, or growing the dialog only ever grows the commit card.
+                    if (startFiles && filesSec) {
+                        lay.files = startFiles * next.h / startH;
+                        setDialogRowSplit(filesSec, detailSec, lay.files);
+                    }
+                }
+                lay.box = next;
                 box.style.maxHeight = 'none';
                 box.style.width = next.w + 'px';
                 box.style.height = next.h + 'px';
@@ -3573,32 +3620,38 @@ function attachDialogResize(overlay) {
         });
     });
 
+    // Reflog and file history are single-column: the frame grips are all they get.
+    if (!panel) {return;}
+    if (lay.list) {
+        list.style.maxWidth = 'none';
+        list.style.width = lay.list + 'px';
+    }
     var split = document.createElement('div');
     split.className = 'push-split push-split-v';
     body.insertBefore(split, list.nextSibling);
     split.addEventListener('pointerdown', function (e) {
+        pinDialogBox(lay, box);
         var startW = list.offsetWidth;
-        var room = body.offsetWidth - split.offsetWidth;
-        startDialogDrag(e, 'col-resize', function (dx) {
-            dialogLayout.list = clampPx(startW + dx, LIST_MIN_W, room - PANE_MIN_W);
+        var span = dragRange(startW, startW - LIST_MIN_W, panel.offsetWidth - PANE_MIN_W);
+        startDialogDrag(e, 'col-resize', function (d) {
+            lay.list = span(d.dx);
             list.style.maxWidth = 'none';
-            list.style.width = dialogLayout.list + 'px';
+            list.style.width = lay.list + 'px';
         });
     });
 
-    var filesSec = panel && panel.querySelector('.push-files-section');
-    var detailSec = panel && panel.querySelector('.push-detail-section');
     if (!filesSec || !detailSec) {return;}
-    if (dialogLayout.files) {setDialogRowSplit(filesSec, detailSec, dialogLayout.files);}
+    if (lay.files) {setDialogRowSplit(filesSec, detailSec, lay.files);}
     var hsplit = document.createElement('div');
     hsplit.className = 'push-split push-split-h';
     panel.insertBefore(hsplit, detailSec);
     hsplit.addEventListener('pointerdown', function (e) {
+        pinDialogBox(lay, box);
         var startH = filesSec.offsetHeight;
-        var room = panel.offsetHeight - hsplit.offsetHeight;
-        startDialogDrag(e, 'row-resize', function (dy) {
-            dialogLayout.files = clampPx(startH + dy, FILES_MIN_H, room - DETAIL_MIN_H);
-            setDialogRowSplit(filesSec, detailSec, dialogLayout.files);
+        var span = dragRange(startH, startH - FILES_MIN_H, detailSec.offsetHeight - DETAIL_MIN_H);
+        startDialogDrag(e, 'row-resize', function (d) {
+            lay.files = span(d.dy);
+            setDialogRowSplit(filesSec, detailSec, lay.files);
         });
     });
 }
@@ -3702,7 +3755,7 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, 
         '</div></div>';
 
     document.body.appendChild(overlay);
-    attachDialogResize(overlay);
+    attachDialogResize(overlay, 'push');
 
     // Disable the picker while the host recomputes; the replacement dialog
     // (same id) arrives with the new commit list and an enabled picker.
@@ -3910,6 +3963,7 @@ function showCompareDialog(branchName, currentBranch, commits) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'compare');
 
     function attachCommitClickHandlers() {
         overlay.querySelectorAll('.push-commit-row').forEach(function (row) {
@@ -4038,6 +4092,7 @@ function showFileHistoryDialog(filePath, history) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'fileHistory');
 
     // Event delegation so dynamically added (load-more) rows work without duplicate handlers
     var scroll = overlay.querySelector('#file-history-scroll');
@@ -4123,6 +4178,7 @@ function showReflogDialog(scope, entries) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'reflog');
 
     var scroll = overlay.querySelector('#reflog-scroll');
     // Delegation: appended batches need handlers too, and the picked row must be
