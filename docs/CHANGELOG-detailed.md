@@ -2,6 +2,44 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.2] - 2026-10-21
+
+本版是界面批次（四个对话框的尺寸与排版）加一道安全加固。没有新增 git 子进程路径，首屏逻辑未动。
+
+### 新增
+
+- **四个对话框可拖拽调整**（`media/webview.js` 的 `attachDialogResize`）：整框右缘/下缘/右下角三个把手；推送与对比框另有提交列竖分隔条、文件/详情横分隔条。分隔条 7px 命中区用负 margin 压在原有 1px 边框上，不额外吃栏宽。尺寸存模块级 `dialogLayout`，**按对话框各存一份**（`push` / `compare` / `fileHistory` / `reflog`）——reflog 自然高度只有推送框三分之一，共用外框会把用户没拖的那个撑大。尺寸只活在本轮会话：面板隐藏即 DOM 销毁，对象随帧消失，不进 Memento、不发宿主；同一对话框重建（切换推送远端）与重新打开仍保留。
+- **单栏对话框只给外框把手**：reflog 与文件历史没有文件侧栏，`attachDialogResize` 在 `!panel` 时提前返回，不插列分隔条、不套用提交列宽度。
+- **外框拉高时按帧等比缩放分栏**：横分隔条拖过之后分栏已是固定高度，外框再放大时按 `startFiles * next.h / startH` 重算，否则新增高度会全部落进提交卡片。
+
+### 修复
+
+- **横分隔条拖动方向相反**，三个独立原因叠加：（1）`startDialogDrag` 按位置把 `(dx, dy)` 传给回调，横分隔条的回调只声明一个形参 `dy`，实际拿到横向距离——竖拖不动、横拖才动；改成具名 `{dx, dy}`，三个调用点各取所需轴。（2）钳位用绝对下限 `clamp(起点+位移, 下限, 空间-下限)`，而 `DETAIL_MIN_H`(110) 比详情栏实际高度(107) 还大，上限低于起点，第一次 `pointermove` 就把整栏顶回去；改为 `dragRange(起点, 能往回多少, 能往前多少)`，下限只在越界时生效，`DETAIL_MIN_H` 降到 96 与 `.push-detail-section` 的 `min-height` 对齐。（3）外框没有自己的高度、又被遮罩居中，压短一栏会整框变矮再重新居中，分隔条于是往光标反方向跳；内部分隔条按下前 `pinDialogBox` 冻住外框，量 `offsetWidth/offsetHeight` 而不是 `getBoundingClientRect`——入场动画是 transform，用 rect 会把动画缩放钉成真实尺寸。
+- **推送对话框排版**（`graphView.ts` 模板 + `webview.css`）：宽度 700 → `min(980px, 92vw)`，提交列 380 → 440px 并加 56% 上限；单栏对话框补 `max-width: none`，否则继承上限后右侧留死白。表头从一整串扁平文本改成分段 flex：源分支、远端+路径、管理、状态各占一段，长分支名只省略号截断并保留 `data-title`，"管理"不再被挤成竖排，并归到右侧与提交数同组。
+
+### 安全
+
+- **CSP + nonce**（`graphView.ts`）：策略为 `default-src 'none'; script-src 'nonce-…'; img-src/font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'`——行内 `style=` 与运行时注入的 `@font-face` 依赖 `'unsafe-inline'`，不能省。nonce 由 `crypto.randomBytes(16)` 生成；注入的 `window.__INITIAL__` / `I18N_STRINGS` 已把 `<` 转义成 `\u003c`。预览 harness 显式传空策略，否则相对 `file://` 资源会被策略自己锁死。回归测试 `webviewHardening.test.ts` 扫模板守住策略、nonce 来源与两处 script 标签。
+- **`esc()` 改为属性安全**（`media/webview.js`）：原实现走 `div.innerHTML`，只转义 `& < >`；引号在文本节点无需转义，于是原样保留，而几乎每个调用点都把结果拼进 `data-title="…"`。git 分支名允许双引号，提交消息完全由仓库控制，一个引号就能闭合属性注入标签；CSP 挡得住脚本执行，`style-src 'unsafe-inline'` 却允许注入 `<style>`，足以覆盖、伪装界面。改成一次字符串替换 `& < > " '`，顺带省掉每次转义都 `createElement` 的开销（列表每行要转义十来个字段）。tooltip 仍通过 `getAttribute` 读回、`textContent` 显示，实体在属性解析时还原；预览页实测转义串与读回值往返一致。加固测试新增两条静态断言：覆盖五种实体、不依赖 DOM。
+
+### 性能
+
+- **加载更多不再重画整张列表**（`media/webview.js` 的 `appendCommits` → `renderRows(true)`）：旧行节点原地保留，只把新页 `insertAdjacentHTML` 到尾部；新页撑开泳道（`graphW` 变化）才退回全量重画，两条路径都在真实 Chrome 里验过。同一轮渲染里逐行 `scrollWidth > clientWidth` 读后立刻写 class，会让一行一次同步 reflow；改为 `markRefsOverflow()` 先批量读宽度、再统一写 class。预览 harness 同帧实测：126 行时全量 18ms、追加一页 2–5ms；246 行时 32ms 对 3.8ms。
+
+### 清理
+
+- **BlameProvider 与 GitService 的监听归还**：BlameProvider 实现 `Disposable`，构造里注册的编辑器/文档/选区/配置/hover 监听与 decoration 类型收进 `_disposables`，实例随 `ctx.subscriptions` 释放；GitService 补收 `onDidChangeWorkspaceFolders` 返回值，并在 `extension.ts` 把服务本身 push 进 subscriptions。顺手去掉 `gitService.ts` 里遗留的 `require('vscode')`，typed 调用后暴露出 `config.get('pullStrategy', 'merge')` 被推断成字面量、与 `"rebase"` 比较触发 TS2367，补显式 `<string>`。
+- **blame 宽度测量改纯字符估算**（`blameProvider.ts`）：extension host 是 Node，没有 `document`，原 `canvas.measureText` 每次都抛 ReferenceError 被 catch 吞掉、恒返回 0，标签宽度一直走固定兜底值。改为拉丁 0.6em / CJK 与全角 1em × `fontSize`；全项目唯一的 DOM 用法消失后，`tsconfig.json` 的 `lib` 从 `["ES2020","dom"]` 收回 `["ES2020"]`，宿主里误用 `window`/`document` 会直接编译失败。
+
+### 文档
+
+- `AGENTS.md`：CSP 与 `esc()` 写成两道缺一不可的 XSS 防线；删掉"appendCommits 全量 renderRows"的旧规则，改为增量追加 + 先读宽度再写 class 的硬要求。
+- README 中英特性清单同步：四个对话框可拖拽调整大小、仅本次会话生效。
+
+### 验证
+
+- compile / lint（0 error）/ test 全绿，289 例。
+
 ## [0.1.1] - 2026-10-20
 
 本版是 git 层的性能批次（10 个子进程层面的改动）加一次第一栏交互收敛。原则是**不得减缓启动**：首屏仍取 `PAGE_FIRST = 20` 条，新增的缓存全部是内存或 fs-stat 判定，没有任何一处给冷启动加子进程。

@@ -35,8 +35,10 @@ for (let i = 0; i < body.length; i++) {
 }
 if (end < 0) throw new Error('unterminated webview template literal');
 
+// Any new ${...} in the template must be added to this signature as well,
+// otherwise the generated function throws ReferenceError at build time.
 const render = new Function(
-    'cssUri', 'jsUri', 'nonce', 'payloadJson', 'i18nJson', 'htmlLang', 't',
+    'cssUri', 'jsUri', 'nonce', 'payloadJson', 'i18nJson', 'htmlLang', 't', 'csp',
     'return `' + body.slice(0, end) + '`'
 );
 
@@ -49,7 +51,10 @@ const html = render(
     '(window.__PREVIEW__&&window.__PREVIEW__.initial())||{}',
     JSON.stringify(i18n.webviewStrings()).replace(/</g, '\\u003c'),
     locale === 'zh-cn' ? 'zh-CN' : 'en',
-    i18n.t
+    i18n.t,
+    // No Content-Security-Policy here: this page loads media/ over relative file
+    // URLs, which a strict policy would block. The real webview gets the policy.
+    ''
 );
 
 const out = html

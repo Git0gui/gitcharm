@@ -51,28 +51,24 @@ function fmtRelativeTimeFromEpoch(epoch: number): string {
     }
 }
 
-function measureTextPixels(text: string, fontFamily: string, fontSize: number): number {
-    try {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {return 0;}
-        ctx.font = `${fontSize}px ${fontFamily}`;
-        return ctx.measureText(text).width;
-    } catch {
-        return 0;
+/**
+ * Approximate rendered width. The extension host is Node — there is no document —
+ * so a canvas measurement can only throw and fall back to a constant. The editor's
+ * monospace font averages ~0.6em per Latin glyph; CJK and full-width glyphs ~1em.
+ */
+function measureTextPixels(text: string, fontSize: number): number {
+    let em = 0;
+    for (const ch of text) {
+        em += /[\u1100-\u115f\u2e80-\u9fff\ua960-\ua97f\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 1 : 0.6;
     }
+    return em * fontSize;
 }
 
-function readEditorFontFamily(): string {
-    const cfg = vscode.workspace.getConfiguration('editor');
-    const raw = cfg.get<string>('fontFamily', '');
-    return raw || "'Consolas', 'Courier New', monospace";
-}
-
-export class BlameProvider {
+export class BlameProvider implements vscode.Disposable {
     private _decoration: vscode.TextEditorDecorationType;
     private readonly _cache = new Map<string, BlameInfo[]>();
     private readonly _active = new Set<string>();
+    private readonly _disposables: vscode.Disposable[] = [];
 
     constructor(
         private readonly _git: GitService,
@@ -80,21 +76,21 @@ export class BlameProvider {
     ) {
         this._decoration = this._createDecorationType();
 
-        vscode.window.onDidChangeVisibleTextEditors(editors => {
+        this._disposables.push(vscode.window.onDidChangeVisibleTextEditors(editors => {
             for (const ed of editors) {
                 if (this._active.has(ed.document.uri.toString())) {this._apply(ed);}
             }
-        });
+        }));
 
-        vscode.workspace.onDidChangeTextDocument(e => {
+        this._disposables.push(vscode.workspace.onDidChangeTextDocument(e => {
             const key = e.document.uri.toString();
             this._cache.delete(key);
             for (const ed of vscode.window.visibleTextEditors) {
                 if (ed.document === e.document && this._active.has(key)) {this._apply(ed);}
             }
-        });
+        }));
 
-        vscode.window.onDidChangeTextEditorSelection(e => {
+        this._disposables.push(vscode.window.onDidChangeTextEditorSelection(e => {
             const key = e.textEditor.document.uri.toString();
             if (!this._active.has(key)) {return;}
             if (e.kind !== vscode.TextEditorSelectionChangeKind.Mouse) {return;}
@@ -102,9 +98,9 @@ export class BlameProvider {
             if (!sel || sel.active.character !== 0) {return;}
             const info = this._cache.get(key)?.[sel.active.line];
             if (info && !ZERO_HASH.test(info.hash)) {this._onReveal(info.hash);}
-        });
+        }));
 
-        vscode.workspace.onDidChangeConfiguration(e => {
+        this._disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('editor.fontFamily') ||
                 e.affectsConfiguration('editor.fontSize') ||
                 e.affectsConfiguration('editor.letterSpacing')) {
@@ -115,9 +111,9 @@ export class BlameProvider {
                     if (editor) {this._apply(editor);}
                 }
             }
-        });
+        }));
 
-        vscode.languages.registerHoverProvider({ scheme: 'file' }, {
+        this._disposables.push(vscode.languages.registerHoverProvider({ scheme: 'file' }, {
             provideHover: (doc, pos) => {
                 const key = doc.uri.toString();
                 if (!this._active.has(key)) {return undefined;}
@@ -139,7 +135,15 @@ export class BlameProvider {
                 md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${encodeURIComponent(JSON.stringify([info.hash]))})`);
                 return new vscode.Hover(md);
             }
-        });
+        }));
+    }
+
+    /** The listeners and the decoration type were created for us, so they have to
+     *  be handed back — nothing else in the extension owns them. */
+    dispose(): void {
+        for (const d of this._disposables) {d.dispose();}
+        this._disposables.length = 0;
+        this._decoration.dispose();
     }
 
     private _createDecorationType(): vscode.TextEditorDecorationType {
@@ -216,7 +220,6 @@ export class BlameProvider {
         const blame = this._cache.get(editor.document.uri.toString());
         if (!blame) {return;}
 
-        const fontFamily = readEditorFontFamily();
         const fontSize = vscode.workspace.getConfiguration('editor').get<number>('fontSize', 14);
         const lineCount = editor.document.lineCount;
 
@@ -252,7 +255,7 @@ export class BlameProvider {
         let maxPixelWidth = 0;
         for (let i = 0; i < lineCount; i++) {
             if (!styles[i]) {continue;}
-            const w = measureTextPixels(` ${texts[i]} `, fontFamily, fontSize);
+            const w = measureTextPixels(` ${texts[i]} `, fontSize);
             if (w > maxPixelWidth) {maxPixelWidth = w;}
         }
         if (maxPixelWidth === 0) {

@@ -45,6 +45,9 @@ export function activate(ctx: vscode.ExtensionContext) {
 
     // Single shared GitService for the webview and all commands
     const gitService = new GitService(ctx.workspaceState, askpass);
+    // Owns a workspace-folders listener and the .git watchers; without this they
+    // outlive the service when the extension deactivates.
+    ctx.subscriptions.push(gitService);
 
     // Check if current workspace has a git repository
     const hasGitRepo = gitService.repositoryPath !== undefined;
@@ -152,6 +155,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     // Git-blame annotations in the editor gutter
     const blameProvider = new BlameProvider(gitService, hash => graphView.revealCommit(hash));
     ctx.subscriptions.push(
+        blameProvider,
         vscode.commands.registerCommand('idea-git.toggleBlame', () => blameProvider.toggle()),
         vscode.commands.registerCommand('idea-git.revealCommit', (hash: string) => {
             if (hash) {graphView.revealCommit(hash);}

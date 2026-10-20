@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
@@ -2185,6 +2186,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             ? webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'media', 'webview.js'))
             : 'media/webview.js';
         const nonce = this._nonce();
+        // No policy is emitted for the headless screenshot harness, which loads
+        // media/ through relative file URLs that `default-src 'none'` would block.
+        // In the panel every asset — script, stylesheet, theme icon font, icon
+        // image — is produced by asWebviewUri and therefore lives under cspSource.
+        const csp = webview
+            ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource}; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">`
+            : '';
         const payloadJson = JSON.stringify(payload).replace(/</g, '\\u003c');
         const i18nJson = JSON.stringify(webviewStrings()).replace(/</g, '\\u003c');
         const htmlLang = getLocale() === 'zh-cn' ? 'zh-CN' : 'en';
@@ -2194,6 +2202,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    ${csp}
     <title>Git Log</title>
     <link rel="stylesheet" href="${cssUri}">
 </head>
@@ -2309,11 +2318,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     private _nonce(): string {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        let result = '';
-        for (let i = 0; i < 32; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return result;
+        return crypto.randomBytes(16).toString('hex');
     }
 }

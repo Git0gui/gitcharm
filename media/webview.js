@@ -393,10 +393,13 @@ function avatarColor(name) {
     for (var i = 0; i < name.length; i++) { h = (h * 31 + name.charCodeAt(i)) >>> 0; }
     return 'hsl(' + (h % 360) + ',45%,42%)';
 }
+// Escapes for both text nodes and quoted attributes. The DOM round-trip this
+// replaced left quotes alone — text nodes do not need them escaped — but almost
+// every caller interpolates into data-*="…", where a commit message or branch
+// name containing a double quote would close the attribute early.
+var ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function esc(t) {
-    var d = document.createElement('div');
-    d.textContent = t == null ? '' : String(t);
-    return d.innerHTML;
+    return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return ESC_MAP[c]; });
 }
 function fmtDate(s) {
     if (!s) return '';
@@ -709,9 +712,28 @@ function renderTree() {
 }
 
 /* ---------- center commit list ---------- */
-function renderRows() {
+
+/** What #rows holds right now. An appended page extends it instead of painting
+ *  every loaded row again — see renderRows(appendOnly). */
+var rowsPainted = { count: 0, graphW: -1 };
+
+/** Mark the refs cells whose badges run past the column, so the CSS fades them out.
+ *  All widths are read before the first class is written: interleaving a read with a
+ *  write invalidates the layout and forces one synchronous reflow per row. */
+function markRefsOverflow(refsList) {
+    var flags = [];
+    for (var i = 0; i < refsList.length; i++) {
+        flags.push(refsList[i].scrollWidth > refsList[i].clientWidth);
+    }
+    for (var j = 0; j < refsList.length; j++) {
+        if (flags[j]) {refsList[j].classList.add('has-overflow');}
+    }
+}
+
+function renderRows(appendOnly) {
     var list = state.commits;
     if (list.length === 0) {
+        rowsPainted = { count: 0, graphW: -1 };
         // Show skeleton loading on initial load, empty message otherwise
         if (loadState.initialLoad && !loadState.commitsLoaded) {
             document.getElementById('rows').innerHTML = renderCommitSkeleton(5);
@@ -786,9 +808,14 @@ function renderRows() {
     var graphW = state.graphVisible === false ? 0 : Math.max(lanes.length, 1) * laneW + 8;
     var totalH = list.length * ROW_H;
 
-    // Build HTML rows (without dots)
-    var html = '';
+    // Build HTML rows (without dots). In append mode the already-painted rows are
+    // not even turned into markup again: only the incoming page touches the DOM.
+    var append = appendOnly === true && rowsPainted.count > 0 && rowsPainted.graphW === graphW;
+    var from = append ? rowsPainted.count : 0;
+    var parts = [];
     list.forEach(function (c, i) {
+        if (i < from) {parts.push(''); return;}
+        var html = '';
         var chips = '';
         (c.refs || []).forEach(function (r) {
             if (r === 'HEAD') return;
@@ -864,20 +891,27 @@ function renderRows() {
         html += '<div class="rdate" data-title="' + commitTooltip + '">' + esc(fmtRelativeTime(c.date)) + '</div>';
         html += '<div class="avatar" style="background:' + avatarColor(c.author || '?') + '">' + esc((c.author || '?').charAt(0).toUpperCase()) + '</div>';
         html += '</div>';
+        parts.push(html);
     });
 
     var wrap = document.getElementById('rows');
-    wrap.innerHTML = html;
-    wrap.style.minWidth = (graphW + 500) + 'px';
-
-    // Detect overflow in .refs containers and add fade-out gradient
-    var refsContainers = wrap.querySelectorAll('.refs');
-    for (var i = 0; i < refsContainers.length; i++) {
-        var refs = refsContainers[i];
-        if (refs.scrollWidth > refs.clientWidth) {
-            refs.classList.add('has-overflow');
+    if (from > 0) {
+        // The canvas sits at index 0, so the appended rows are always the tail.
+        var kids = wrap.children;
+        var before = kids.length;
+        wrap.insertAdjacentHTML('beforeend', parts.slice(from).join(''));
+        var fresh = [];
+        for (var k = before; k < kids.length; k++) {
+            var cell = kids[k].querySelector('.refs');
+            if (cell) {fresh.push(cell);}
         }
+        markRefsOverflow(fresh);
+    } else {
+        wrap.innerHTML = parts.join('');
+        wrap.style.minWidth = (graphW + 500) + 'px';
+        markRefsOverflow(wrap.querySelectorAll('.refs'));
     }
+    rowsPainted = { count: list.length, graphW: graphW };
 
     // Draw graph on canvas overlay
     drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, totalH, rowOf);
@@ -3093,7 +3127,7 @@ window.addEventListener('message', function (ev) {
         state.commits = state.commits.concat(m.commits || []);
         state.hasMore = !!m.hasMore;
         setLoader(false);
-        renderRows();
+        renderRows(true);
     } else if (m.command === 'loadMoreFailed') {
         // Keep hasMore: the next scroll retries instead of silently ending the list.
         setLoader(false);
@@ -3488,6 +3522,174 @@ function renderDialogDetail(el, commit, commits) {
 
 var pushState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', remoteExists: true, visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
+/* ---------- drag-to-resize dialog ---------- */
+
+// Deliberately plain module state: the webview DOM is destroyed when the panel is
+// hidden, and this object dies with it, so the next session starts from the
+// stylesheet defaults. Nothing here is reported to the host or written to Memento.
+// One slot per dialog: the reflog is naturally a third of the push dialog's
+// height, so a shared frame would inflate whichever dialog the user did not just
+// drag. The size still survives a rebuild (switching the push remote re-renders
+// the whole overlay) and reopening the same dialog.
+var dialogLayout = {};
+function layoutSlot(key) {
+    var l = dialogLayout[key];
+    if (!l) {dialogLayout[key] = l = { box: null, list: null, files: null };}
+    return l;
+}
+var BOX_MIN_W = 560, BOX_MIN_H = 340;
+var LIST_MIN_W = 220, PANE_MIN_W = 260;
+var FILES_MIN_H = 90, DETAIL_MIN_H = 96;
+
+function clampPx(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+}
+
+/**
+ * Drag bounds as "how far each way from where it started", never as absolute
+ * floors: a pane already past an absolute floor makes the first pointermove snap
+ * it back, which reads as the divider moving the wrong way.
+ */
+function dragRange(start, back, fwd) {
+    var lo = start - Math.max(0, back), hi = start + Math.max(0, fwd);
+    return function (d) { return clampPx(start + d, lo, hi); };
+}
+
+/**
+ * A single grip drag. Pointer capture is what makes it survive: the grips are a
+ * few pixels wide, so the cursor leaves them almost immediately, and without
+ * capture the drag would read as "released outside" and be dropped.
+ * The callback gets a named `{dx, dy}` — two of these handlers only care about
+ * one axis, and positional arguments let that quietly bind to the wrong one.
+ */
+function startDialogDrag(e, cursor, move) {
+    if (e.button !== 0) {return;}
+    var grip = e.currentTarget;
+    e.preventDefault();
+    e.stopPropagation();
+    var startX = e.clientX, startY = e.clientY;
+    document.body.classList.add('dialog-resizing');
+    document.body.style.cursor = cursor;
+    try { grip.setPointerCapture(e.pointerId); } catch (err) {/* unsynthesised pointers have nothing to capture */}
+    function onMove(ev) { move({ dx: ev.clientX - startX, dy: ev.clientY - startY }); }
+    function onUp() {
+        grip.removeEventListener('pointermove', onMove);
+        grip.removeEventListener('pointerup', onUp);
+        grip.removeEventListener('pointercancel', onUp);
+        document.body.classList.remove('dialog-resizing');
+        document.body.style.cursor = '';
+    }
+    grip.addEventListener('pointermove', onMove);
+    grip.addEventListener('pointerup', onUp);
+    grip.addEventListener('pointercancel', onUp);
+}
+
+/** Free the column from its percentage cap and pin the file/commit split height. */
+function setDialogRowSplit(top, bottom, h) {
+    /* flex-shrink stays 1 so a later box-height drag can still take the pane down;
+       only the grow is switched off, otherwise the basis is ignored. */
+    top.style.flex = '0 1 ' + Math.round(h) + 'px';
+    bottom.style.flex = '1 1 auto';
+}
+
+/**
+ * Freeze the frame before an inner divider moves. The box has no height of its
+ * own — it is content-sized and the overlay centres it — so taking a pane down
+ * shrinks the whole dialog, which then re-centres and the divider jumps the way
+ * the cursor did not. Pinned sizes use offset*, not getBoundingClientRect: the
+ * opening animation is a transform and would be baked in as a real size.
+ */
+function pinDialogBox(lay, box) {
+    if (box.style.height) {return;}
+    lay.box = { w: box.offsetWidth, h: box.offsetHeight };
+    box.style.maxHeight = 'none';
+    box.style.width = lay.box.w + 'px';
+    box.style.height = lay.box.h + 'px';
+}
+
+function attachDialogResize(overlay, key) {
+    var box = overlay.querySelector('.push-dialog-box');
+    var body = overlay.querySelector('.push-dialog-body');
+    var list = overlay.querySelector('.push-commits-list');
+    var panel = overlay.querySelector('.push-files-panel');
+    if (!box || !body || !list) {return;}
+    var lay = layoutSlot(key);
+    var filesSec = panel && panel.querySelector('.push-files-section');
+    var detailSec = panel && panel.querySelector('.push-detail-section');
+    if (lay.box) {
+        box.style.width = lay.box.w + 'px';
+        box.style.height = lay.box.h + 'px';
+        box.style.maxHeight = 'none';
+    }
+
+    ['e', 's', 'se'].forEach(function (dir) {
+        var grip = document.createElement('div');
+        grip.className = 'push-rz push-rz-' + dir;
+        box.appendChild(grip);
+        grip.addEventListener('pointerdown', function (e) {
+            var startW = box.offsetWidth, startH = box.offsetHeight;
+            var startFiles = lay.files;
+            var spanW = dragRange(startW, startW - BOX_MIN_W, window.innerWidth - 24 - startW);
+            var spanH = dragRange(startH, startH - BOX_MIN_H, window.innerHeight - 24 - startH);
+            startDialogDrag(e, dir === 'e' ? 'ew-resize' : dir === 's' ? 'ns-resize' : 'nwse-resize', function (d) {
+                var next = { w: startW, h: startH };
+                // The overlay centres the box, so a grabbed edge only travels half the
+                // pointer distance; doubling the delta makes the edge follow the cursor.
+                if (dir !== 's') {next.w = spanW(d.dx * 2);}
+                if (dir !== 'e') {
+                    next.h = spanH(d.dy * 2);
+                    // Once the split has been dragged it is a fixed height, and the
+                    // bottom pane absorbs everything the frame gains. Scale it with the
+                    // frame instead, or growing the dialog only ever grows the commit card.
+                    if (startFiles && filesSec) {
+                        lay.files = startFiles * next.h / startH;
+                        setDialogRowSplit(filesSec, detailSec, lay.files);
+                    }
+                }
+                lay.box = next;
+                box.style.maxHeight = 'none';
+                box.style.width = next.w + 'px';
+                box.style.height = next.h + 'px';
+            });
+        });
+    });
+
+    // Reflog and file history are single-column: the frame grips are all they get.
+    if (!panel) {return;}
+    if (lay.list) {
+        list.style.maxWidth = 'none';
+        list.style.width = lay.list + 'px';
+    }
+    var split = document.createElement('div');
+    split.className = 'push-split push-split-v';
+    body.insertBefore(split, list.nextSibling);
+    split.addEventListener('pointerdown', function (e) {
+        pinDialogBox(lay, box);
+        var startW = list.offsetWidth;
+        var span = dragRange(startW, startW - LIST_MIN_W, panel.offsetWidth - PANE_MIN_W);
+        startDialogDrag(e, 'col-resize', function (d) {
+            lay.list = span(d.dx);
+            list.style.maxWidth = 'none';
+            list.style.width = lay.list + 'px';
+        });
+    });
+
+    if (!filesSec || !detailSec) {return;}
+    if (lay.files) {setDialogRowSplit(filesSec, detailSec, lay.files);}
+    var hsplit = document.createElement('div');
+    hsplit.className = 'push-split push-split-h';
+    panel.insertBefore(hsplit, detailSec);
+    hsplit.addEventListener('pointerdown', function (e) {
+        pinDialogBox(lay, box);
+        var startH = filesSec.offsetHeight;
+        var span = dragRange(startH, startH - FILES_MIN_H, detailSec.offsetHeight - DETAIL_MIN_H);
+        startDialogDrag(e, 'row-resize', function (d) {
+            lay.files = span(d.dy);
+            setDialogRowSplit(filesSec, detailSec, lay.files);
+        });
+    });
+}
+
 function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, remotes) {
     // The host re-sends this message when the target remote changes; replace the
     // open dialog instead of stacking a second overlay.
@@ -3559,11 +3761,20 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, 
         remoteControl = '<select class="push-remote-select" id="push-remote-select" data-title="' +
             esc(T('pushDlg.target')) + '">' + optionHtml + '</select>';
     }
-    var remoteLabel = remoteControl + '<button class="push-remote-manage" id="push-remote-manage" data-title="' +
-        esc(T('remote.manageTitle')) + '">' + esc(T('remote.manageBtn')) + '</button>' +
-        '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
+    var remoteLabel = remoteControl + '<span class="push-target-path" data-title="' +
+        esc(targetRemote + '/' + branchName) + '">/' + esc(branchName) + '</span>' +
+        (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
     var commitCountText = commits.length > 0 ? T('common.commitCount', { n: commits.length }) : (pushState.remoteExists ? T('pushDlg.upToDate') : T('pushDlg.firstPush'));
-    var headerText = esc(branchName) + ' <span class="push-arrow">→</span> ' + remoteLabel + ' — ' + commitCountText;
+    // Each segment is its own flex item with a stable identity: the source branch,
+    // the target (remote + path, never split by the manage button), the manage
+    // link, and the count pushed to the right. Flattening them into one text run
+    // let the header wrap mid-branch-name and stack 管理 vertically.
+    var headerText = '<span class="push-head-branch" data-title="' + esc(branchName) + '">' + esc(branchName) + '</span>' +
+        '<span class="push-arrow">→</span>' +
+        '<span class="push-head-target">' + remoteLabel + '</span>' +
+        '<button class="push-remote-manage" id="push-remote-manage" data-title="' + esc(T('remote.manageTitle')) + '">' +
+        esc(T('remote.manageBtn')) + '</button>' +
+        '<span class="push-head-count">' + esc(commitCountText) + '</span>';
 
     overlay.innerHTML = '<div class="push-dialog-box">' +
         '<div class="push-dialog-header">' + headerText + '</div>' +
@@ -3578,6 +3789,7 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, 
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'push');
 
     // Disable the picker while the host recomputes; the replacement dialog
     // (same id) arrives with the new commit list and an enabled picker.
@@ -3785,6 +3997,7 @@ function showCompareDialog(branchName, currentBranch, commits) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'compare');
 
     function attachCommitClickHandlers() {
         overlay.querySelectorAll('.push-commit-row').forEach(function (row) {
@@ -3913,6 +4126,7 @@ function showFileHistoryDialog(filePath, history) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'fileHistory');
 
     // Event delegation so dynamically added (load-more) rows work without duplicate handlers
     var scroll = overlay.querySelector('#file-history-scroll');
@@ -3998,6 +4212,7 @@ function showReflogDialog(scope, entries) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'reflog');
 
     var scroll = overlay.querySelector('#reflog-scroll');
     // Delegation: appended batches need handlers too, and the picked row must be
