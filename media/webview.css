@@ -1543,8 +1543,8 @@ canvas.graph-canvas {
     background: var(--vscode-editorWidget-background, #252526);
     border: 1px solid var(--vscode-widget-border, #454545);
     border-radius: 12px;
-    width: 700px;
-    max-width: 90vw;
+    /* min() keeps the box inside a narrow webview without a separate max-width. */
+    width: min(980px, 92vw);
     max-height: 80vh;
     display: flex;
     flex-direction: column;
@@ -1594,7 +1594,6 @@ canvas.graph-canvas {
     text-overflow: ellipsis;
 }
 .push-head-count {
-    margin-left: auto;
     flex: none;
     white-space: nowrap;
     font-weight: normal;
@@ -1622,8 +1621,9 @@ canvas.graph-canvas {
 }
 
 .push-remote-manage {
-    /* The header row already gaps its items; an extra left margin just widened it. */
-    margin-left: 0;
+    /* The link manages the remote, so it sits with the right-hand status group
+       instead of wedged between the target path and its (new) badge. */
+    margin-left: auto;
     padding: 1px 6px;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -1686,7 +1686,10 @@ canvas.graph-canvas {
     overflow: hidden;
 }
 .push-commits-list {
-    width: 380px;
+    /* The percentage cap keeps both columns inside the box on a narrow webview;
+       a fixed width alone would push the file panel out entirely. */
+    width: 440px;
+    max-width: 56%;
     flex: none;
     min-width: 0;
     border-right: 1px solid var(--vscode-panel-border, #333);
@@ -1697,6 +1700,9 @@ canvas.graph-canvas {
 /* Single-column variant used by the file history dialog (no side file panel) */
 .push-commits-list.full {
     width: auto;
+    /* Single-column dialogs (reflog, file history) own the whole body, so the
+       two-column cap above must not apply here. */
+    max-width: none;
     flex: 1;
     border-right: none;
 }
