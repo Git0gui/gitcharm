@@ -709,9 +709,28 @@ function renderTree() {
 }
 
 /* ---------- center commit list ---------- */
-function renderRows() {
+
+/** What #rows holds right now. An appended page extends it instead of painting
+ *  every loaded row again — see renderRows(appendOnly). */
+var rowsPainted = { count: 0, graphW: -1 };
+
+/** Mark the refs cells whose badges run past the column, so the CSS fades them out.
+ *  All widths are read before the first class is written: interleaving a read with a
+ *  write invalidates the layout and forces one synchronous reflow per row. */
+function markRefsOverflow(refsList) {
+    var flags = [];
+    for (var i = 0; i < refsList.length; i++) {
+        flags.push(refsList[i].scrollWidth > refsList[i].clientWidth);
+    }
+    for (var j = 0; j < refsList.length; j++) {
+        if (flags[j]) {refsList[j].classList.add('has-overflow');}
+    }
+}
+
+function renderRows(appendOnly) {
     var list = state.commits;
     if (list.length === 0) {
+        rowsPainted = { count: 0, graphW: -1 };
         // Show skeleton loading on initial load, empty message otherwise
         if (loadState.initialLoad && !loadState.commitsLoaded) {
             document.getElementById('rows').innerHTML = renderCommitSkeleton(5);
@@ -786,9 +805,14 @@ function renderRows() {
     var graphW = state.graphVisible === false ? 0 : Math.max(lanes.length, 1) * laneW + 8;
     var totalH = list.length * ROW_H;
 
-    // Build HTML rows (without dots)
-    var html = '';
+    // Build HTML rows (without dots). In append mode the already-painted rows are
+    // not even turned into markup again: only the incoming page touches the DOM.
+    var append = appendOnly === true && rowsPainted.count > 0 && rowsPainted.graphW === graphW;
+    var from = append ? rowsPainted.count : 0;
+    var parts = [];
     list.forEach(function (c, i) {
+        if (i < from) {parts.push(''); return;}
+        var html = '';
         var chips = '';
         (c.refs || []).forEach(function (r) {
             if (r === 'HEAD') return;
@@ -864,20 +888,27 @@ function renderRows() {
         html += '<div class="rdate" data-title="' + commitTooltip + '">' + esc(fmtRelativeTime(c.date)) + '</div>';
         html += '<div class="avatar" style="background:' + avatarColor(c.author || '?') + '">' + esc((c.author || '?').charAt(0).toUpperCase()) + '</div>';
         html += '</div>';
+        parts.push(html);
     });
 
     var wrap = document.getElementById('rows');
-    wrap.innerHTML = html;
-    wrap.style.minWidth = (graphW + 500) + 'px';
-
-    // Detect overflow in .refs containers and add fade-out gradient
-    var refsContainers = wrap.querySelectorAll('.refs');
-    for (var i = 0; i < refsContainers.length; i++) {
-        var refs = refsContainers[i];
-        if (refs.scrollWidth > refs.clientWidth) {
-            refs.classList.add('has-overflow');
+    if (from > 0) {
+        // The canvas sits at index 0, so the appended rows are always the tail.
+        var kids = wrap.children;
+        var before = kids.length;
+        wrap.insertAdjacentHTML('beforeend', parts.slice(from).join(''));
+        var fresh = [];
+        for (var k = before; k < kids.length; k++) {
+            var cell = kids[k].querySelector('.refs');
+            if (cell) {fresh.push(cell);}
         }
+        markRefsOverflow(fresh);
+    } else {
+        wrap.innerHTML = parts.join('');
+        wrap.style.minWidth = (graphW + 500) + 'px';
+        markRefsOverflow(wrap.querySelectorAll('.refs'));
     }
+    rowsPainted = { count: list.length, graphW: graphW };
 
     // Draw graph on canvas overlay
     drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, totalH, rowOf);
@@ -3093,7 +3124,7 @@ window.addEventListener('message', function (ev) {
         state.commits = state.commits.concat(m.commits || []);
         state.hasMore = !!m.hasMore;
         setLoader(false);
-        renderRows();
+        renderRows(true);
     } else if (m.command === 'loadMoreFailed') {
         // Keep hasMore: the next scroll retries instead of silently ending the list.
         setLoader(false);
