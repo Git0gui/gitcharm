@@ -139,7 +139,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **CHANGELOG 分两份，每次发布两份都要写**：根目录 `CHANGELOG.md` 面向用户，随 VSIX 发布并在市场页展示——每个版本只留简短明确的几条，只说用户能感知的变化，不写文件名、函数名、实测数据；`docs/CHANGELOG-detailed.md` 面向维护者，保持详细程度（踩坑原因、实测数据、涉及的函数与文件），`docs/` 不进 VSIX。新增条目一律写在两份文件的最上方，版本号与日期保持一致。
 - **禁止自动切换分支**：不主动 checkout。
 - **禁止 push**，除非用户明确要求；用户说"提交并推送"时才一次性执行 add/commit/push。
-- **发布流程触发词："项目升级"**：提交当前改动 → 按上条规则 bump 版本号并更新 CHANGELOG/README → `--no-ff` 合 main；不推送（除非用户要求）。发布由用户在自己终端执行（agent shell 无 VSCE_PAT），合入后提醒重新 `vsce publish`。
+- **发布流程触发词："项目升级"**：提交当前改动 → 按上条规则 bump 版本号并更新 CHANGELOG/README → `npm run package` 产出仓库根目录的 `git-charm-<版本>.vsix` → `--no-ff` 合 main → **上传 VSIX 到 Marketplace**：打开 <https://marketplace.visualstudio.com/manage/publishers/liugui>，在 GitCharm 行的 More Actions… 菜单里选 Update，选中该 `.vsix` 后 Upload；版本列表出现新版本行（状态 Verifying）即算上传完成，不必等它转为 Active（通常几分钟内自动完成）。上传用浏览器里已登录的账号，**不需要 PAT**——agent shell 没有 VSCE_PAT，`vsce publish` 只作为用户在终端自行发布时的备选。浏览器未登录就停下让用户登录，**任何情况下都不要索要、代填或保存账号密码与 PAT**。不推送（除非用户要求）。
 
 ## 10. 环境杂项
 
