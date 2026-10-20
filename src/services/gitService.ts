@@ -255,6 +255,7 @@ export class GitService {
 
     // Git directory watcher: external changes (CLI, other tools) invalidate caches
     private _repoWatchers: fs.FSWatcher[] = [];
+    private _workspaceFoldersListener: vscode.Disposable | undefined;
     private _watchDebounce: NodeJS.Timeout | undefined;
     private _watchRequested = false;
     private readonly _watchTokens = new Set<symbol>();
@@ -287,7 +288,7 @@ export class GitService {
             this._branchCache.set(`${this._repositoryPath}|details`, cachedBranches as BranchDetails);
         }
 
-        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        this._workspaceFoldersListener = vscode.workspace.onDidChangeWorkspaceFolders(() => {
             // Only clear root memo when workspace folders change; keep caches alive
             this._resetRootDiscovery();
             // Re-resolve root for new workspace
@@ -1562,8 +1563,8 @@ export class GitService {
         
         if (branchName === current) {
             // Read pull strategy from configuration
-            const config = require('vscode').workspace.getConfiguration('idea-git');
-            const pullStrategy = config.get('pullStrategy', 'merge');
+            const config = vscode.workspace.getConfiguration('idea-git');
+            const pullStrategy = config.get<string>('pullStrategy', 'merge');
             const useRebase = pullStrategy === 'rebase';
             logger.debug('[GitCharm] updateBranch() pulling current branch with useRebase:', useRebase);
             // Pull from the remote the branch tracks; "origin" is only a fallback.
@@ -3014,6 +3015,8 @@ export class GitService {
 
     /** Release the repository watcher and every outstanding watch token. */
     dispose(): void {
+        this._workspaceFoldersListener?.dispose();
+        this._workspaceFoldersListener = undefined;
         this._watchTokens.clear();
         this._stopRepositoryWatch();
     }

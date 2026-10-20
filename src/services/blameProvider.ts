@@ -69,10 +69,11 @@ function readEditorFontFamily(): string {
     return raw || "'Consolas', 'Courier New', monospace";
 }
 
-export class BlameProvider {
+export class BlameProvider implements vscode.Disposable {
     private _decoration: vscode.TextEditorDecorationType;
     private readonly _cache = new Map<string, BlameInfo[]>();
     private readonly _active = new Set<string>();
+    private readonly _disposables: vscode.Disposable[] = [];
 
     constructor(
         private readonly _git: GitService,
@@ -80,21 +81,21 @@ export class BlameProvider {
     ) {
         this._decoration = this._createDecorationType();
 
-        vscode.window.onDidChangeVisibleTextEditors(editors => {
+        this._disposables.push(vscode.window.onDidChangeVisibleTextEditors(editors => {
             for (const ed of editors) {
                 if (this._active.has(ed.document.uri.toString())) {this._apply(ed);}
             }
-        });
+        }));
 
-        vscode.workspace.onDidChangeTextDocument(e => {
+        this._disposables.push(vscode.workspace.onDidChangeTextDocument(e => {
             const key = e.document.uri.toString();
             this._cache.delete(key);
             for (const ed of vscode.window.visibleTextEditors) {
                 if (ed.document === e.document && this._active.has(key)) {this._apply(ed);}
             }
-        });
+        }));
 
-        vscode.window.onDidChangeTextEditorSelection(e => {
+        this._disposables.push(vscode.window.onDidChangeTextEditorSelection(e => {
             const key = e.textEditor.document.uri.toString();
             if (!this._active.has(key)) {return;}
             if (e.kind !== vscode.TextEditorSelectionChangeKind.Mouse) {return;}
@@ -102,9 +103,9 @@ export class BlameProvider {
             if (!sel || sel.active.character !== 0) {return;}
             const info = this._cache.get(key)?.[sel.active.line];
             if (info && !ZERO_HASH.test(info.hash)) {this._onReveal(info.hash);}
-        });
+        }));
 
-        vscode.workspace.onDidChangeConfiguration(e => {
+        this._disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('editor.fontFamily') ||
                 e.affectsConfiguration('editor.fontSize') ||
                 e.affectsConfiguration('editor.letterSpacing')) {
@@ -115,9 +116,9 @@ export class BlameProvider {
                     if (editor) {this._apply(editor);}
                 }
             }
-        });
+        }));
 
-        vscode.languages.registerHoverProvider({ scheme: 'file' }, {
+        this._disposables.push(vscode.languages.registerHoverProvider({ scheme: 'file' }, {
             provideHover: (doc, pos) => {
                 const key = doc.uri.toString();
                 if (!this._active.has(key)) {return undefined;}
@@ -139,7 +140,15 @@ export class BlameProvider {
                 md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${encodeURIComponent(JSON.stringify([info.hash]))})`);
                 return new vscode.Hover(md);
             }
-        });
+        }));
+    }
+
+    /** The listeners and the decoration type were created for us, so they have to
+     *  be handed back — nothing else in the extension owns them. */
+    dispose(): void {
+        for (const d of this._disposables) {d.dispose();}
+        this._disposables.length = 0;
+        this._decoration.dispose();
     }
 
     private _createDecorationType(): vscode.TextEditorDecorationType {
