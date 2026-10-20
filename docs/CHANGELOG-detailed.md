@@ -2,6 +2,30 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.1] - 2026-10-20
+
+本版是 git 层的性能批次（10 个子进程层面的改动）加一次第一栏交互收敛。原则是**不得减缓启动**：首屏仍取 `PAGE_FIRST = 20` 条，新增的缓存全部是内存或 fs-stat 判定，没有任何一处给冷启动加子进程。
+
+### 优化
+
+- **所有 git 命令禁止签名校验**（`gitRunner.ts`）：全局配了 `log.showSignature=true` 的环境里，`git log` 会为每条提交去验 GPG，历史遍历直接变成秒级到十几秒。runner 统一加 `-c log.showSignature=false`，与既有的 `-c core.quotePath=false -c gc.auto=0` 同批基础参数。
+- **日志一次带全字段，选中提交不再补一次 `git show`**（`gitService.ts` 的 log format）：原先 `%H %h %s %an` 之外还要在选中时单独 `show` 一次取作者/提交者/时间。现在 format 改为 `%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci%x00%P`，一行拿齐。分隔符从竖线换成 NUL 是因为提交消息里真的会出现 `|`，竖线解析会把消息截断错位；实测两种 format 成本一致（约 20.5 ms/op），属于纯赚。
+- **`diff-tree` 一次取全状态与行数**（`getCommitFilesWithStats`）：单选提交原先跑两次 `diff-tree`（`--name-status` 一次、`--numstat` 一次），多选 N 个提交就是 3N 个进程。改成 `--raw --numstat -z` 单进程输出两段，按 NUL 边界解析；多选走 `--stdin` 把全部完整哈希交给一个进程，只有缩写哈希（`--stdin` 不认）才回退逐个查询。差异面板的两版本对比同样合并成一次 `git diff`。
+- **tag 剥离结果记忆化**（`refsReader.ts` 的 `_peelCache`，上限 500）：annotated tag 每次 refs 读取（5s TTL 到期后）都要同步解压并扫描同一个 tag 对象。tag 对象的哈希即其内容，剥离结论永不变，因此按 40 位对象哈希缓存且**不随 `invalidate()` 清空**。只缓存"loose 文件确实读到"的结果——打包对象没有 loose 文件，缓存这个否定结论会在对象被 unpack 后读到旧值。
+- **worktree 列表按目录签名缓存**（`getWorktrees` + `_worktreeSignature`）：每次显示面板、打开分支右键菜单都 spawn 一次 `git worktree list`。签名 = 主 worktree 的 HEAD mtime 加 `.git/worktrees/<name>` 下各注册项的 HEAD 与 `locked` 文件 mtime，签名未变直接复用；`addWorktree` / `removeWorktree` 成功后主动置空。
+- **内联差异预览按哈希缓存**（`_previewCache`，上限 30）：文件列表里点来点去会把同一份 diff 反复 spawn。缓存键只接受两侧都是 40 位完整哈希的请求，这类对象内容不可变，所以不需要失效逻辑；分支名与 `stash@{N}` 会移动，一律不进缓存。为此贮藏差异先 `rev-parse` 成具体提交（`getStashDiffRefs`）——既让缓存可用，也避免执行期间 stash 索引重排导致左右版本对不上。面板隐藏时随 `releaseHeavyCaches()` 一并释放。
+- **详情缓存放宽到 100 条**（`DETAIL_CACHE_MAX`）：多选与方向键浏览会在短时间内反复取同一批提交的文件与详情，原先 20 条的窗口刚填完就被挤出，下一次点击又走子进程；按提交哈希不可变，100 条的内存开销可忽略。同时补上 `_branchCache` 此前不随 `invalidateVolatile()` 失效的漏洞——外部提交后分支上的 ahead/behind 箭头会短暂停在旧值。
+- **加载更多改为窗口预取**（`graphView.ts` 的 `LOAD_WINDOW = 50`）：每滚一页就 `git log --skip N`，而 `--skip` 每次都要从分支顶端重新走一遍历史，越往下翻越慢。现在一次取 50 条缓冲在宿主侧（`_pendingCommits`），仍按 `PAGE_MORE = 10` 追加给 webview（协议不变），缓冲耗尽才再起子进程；`_streamExhausted` 记历史是否已取尽，避免最后一段反复拿到短页。刷新、切分支、过滤器变化时缓冲一并清空。
+
+### 变更
+
+- **取消分支树的"收藏""最近切换"两个置顶分组**（`media/webview.js` 的 `renderTree`）：同一分支此前最多在树里出现三行（HEAD 分组、本地目录树、置顶分组），收藏被冲淡成一份重复清单；最近切换只是 reflog 回溯，日常用处不大。`flatSection` 与 `I_CLOCK` 随之删除。服务层 `RecentBranchReader`、消息协议里的 `recent` 字段与 `w.recentSection` / `w.favoritesSection` 文案原样保留，只撤这一处展示。
+- **分支树工具栏新增"只看收藏的分支"按钮**（`#fav-filter`，与 `#stash-save` 同款）：点下去走的是分支文本筛选同一条 `narrowing` 路径——命中的分支才画、文件夹自动展开、键盘导航（`treeRowIsOpen`）跳过隐藏行、当前分支那一行同样受筛选约束（`cherry-pick` 恢复横幅是行动提示不是清单，保留）。生效时按钮填成主题强调色（`.col-refresh.on`），一个都没收藏时给一句"右键分支选择收藏分支"的提示（`w.noFavorites`）而不是留几行空表头；此时 `section()` / `stashSection()` 在 `narrowing && 命中数为 0` 直接不画表头。空判用 `item()` 自增的行计数器，不是嗅 `class="bitem"` 字符串——嗅字符串会被 HEAD 那行绕过。
+
+### 修
+
+- **预览截图脚本自带私有 profile**（`docs/preview/shot.mjs`）：原先用 `chrome.exe --version` 探测浏览器，又不给截图进程指定 `--user-data-dir`。Windows 上不带私有 profile 的 chrome 启动会把请求转交给已经在跑的那个实例然后不退出，于是你浏览器开着的时候整条脚本卡死在探测那一步、一张图也出不来。改成只判断可执行文件是否存在，每次运行给一个临时 profile（用完删掉），单次截图加 120s 上限。
+
 ## [0.1.0] - 2026-10-20
 
 本版只发布分支树与第三栏交互相关的功能。提交文件的就地 diff 预览不在本版：完整实现拆到 `feat/third-column-diff-preview`（基于拆分前的 52e9b31），本分支只保留贮藏预览复用的差异带渲染与 `filePreview` 协议。
