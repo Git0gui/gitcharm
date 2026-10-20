@@ -3559,11 +3559,20 @@ function showPushDialog(branchName, commits, remoteExists, isFirstPush, remote, 
         remoteControl = '<select class="push-remote-select" id="push-remote-select" data-title="' +
             esc(T('pushDlg.target')) + '">' + optionHtml + '</select>';
     }
-    var remoteLabel = remoteControl + '<button class="push-remote-manage" id="push-remote-manage" data-title="' +
-        esc(T('remote.manageTitle')) + '">' + esc(T('remote.manageBtn')) + '</button>' +
-        '/' + esc(branchName) + (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
+    var remoteLabel = remoteControl + '<span class="push-target-path" data-title="' +
+        esc(targetRemote + '/' + branchName) + '">/' + esc(branchName) + '</span>' +
+        (pushState.remoteExists ? '' : ' <span class="push-new-badge">(new)</span>');
     var commitCountText = commits.length > 0 ? T('common.commitCount', { n: commits.length }) : (pushState.remoteExists ? T('pushDlg.upToDate') : T('pushDlg.firstPush'));
-    var headerText = esc(branchName) + ' <span class="push-arrow">→</span> ' + remoteLabel + ' — ' + commitCountText;
+    // Each segment is its own flex item with a stable identity: the source branch,
+    // the target (remote + path, never split by the manage button), the manage
+    // link, and the count pushed to the right. Flattening them into one text run
+    // let the header wrap mid-branch-name and stack 管理 vertically.
+    var headerText = '<span class="push-head-branch" data-title="' + esc(branchName) + '">' + esc(branchName) + '</span>' +
+        '<span class="push-arrow">→</span>' +
+        '<span class="push-head-target">' + remoteLabel + '</span>' +
+        '<button class="push-remote-manage" id="push-remote-manage" data-title="' + esc(T('remote.manageTitle')) + '">' +
+        esc(T('remote.manageBtn')) + '</button>' +
+        '<span class="push-head-count">' + esc(commitCountText) + '</span>';
 
     overlay.innerHTML = '<div class="push-dialog-box">' +
         '<div class="push-dialog-header">' + headerText + '</div>' +

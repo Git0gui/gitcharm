@@ -1566,6 +1566,40 @@ canvas.graph-canvas {
     margin: 0 4px;
     color: var(--vscode-foreground, #cccccc);
     font-weight: normal;
+    flex: none;
+}
+/* The header is a flex row, so every text run is a shrinkable item. Without these
+   the branch name wraps mid-word and CJK breaks between characters (管理 stacked
+   vertically). Each segment keeps one line; only the names give way, and they
+   carry the full value in a tooltip. */
+.push-head-branch {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 34%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.push-head-target {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+}
+.push-target-path {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.push-head-count {
+    margin-left: auto;
+    flex: none;
+    white-space: nowrap;
+    font-weight: normal;
+    color: var(--vscode-descriptionForeground, #888);
+    font-size: 12px;
 }
 
 .push-remote-select {
@@ -1588,7 +1622,8 @@ canvas.graph-canvas {
 }
 
 .push-remote-manage {
-    margin-left: 6px;
+    /* The header row already gaps its items; an extra left margin just widened it. */
+    margin-left: 0;
     padding: 1px 6px;
     border: 1px solid transparent;
     border-radius: 4px;
@@ -1597,6 +1632,8 @@ canvas.graph-canvas {
     font: inherit;
     font-weight: normal;
     cursor: pointer;
+    white-space: nowrap;
+    flex: none;
 }
 .push-remote-manage:hover {
     text-decoration: underline;
@@ -1612,6 +1649,8 @@ canvas.graph-canvas {
     margin-left: 6px;
     font-size: 11px;
     font-weight: 600;
+    white-space: nowrap;
+    flex: none;
     color: #fff;
     background: linear-gradient(135deg, #4ab07a 0%, #3d9966 100%);
     border-radius: 12px;

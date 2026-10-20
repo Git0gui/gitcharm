@@ -266,6 +266,26 @@
                 }
             ]
         }),
+        /**
+         * First push of a long branch name with two remotes — the worst case for
+         * the header row: picker + remote path + (new) badge + status text all on
+         * one line. This is the layout the flat text run used to break apart.
+         */
+        pushDialogFirstPush: Object.assign({}, base, {
+            steps: [
+                {
+                    msg: {
+                        command: 'showPushDialog',
+                        branchName: 'fix/push-pull-and-repo-guidance',
+                        remote: 'origin',
+                        remotes: ['origin', 'github'],
+                        remoteExists: false,
+                        isFirstPush: true,
+                        commits: []
+                    }
+                }
+            ]
+        }),
         /** Reflog dialog — the mist操作 rescue view. */
         reflog: Object.assign({}, base, {
             steps: [{
