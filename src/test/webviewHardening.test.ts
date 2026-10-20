@@ -41,3 +41,25 @@ describe('webview content security policy', () => {
         assert.ok(/randomBytes/.test(nonceFn[0]), '_nonce() must read from a cryptographic source');
     });
 });
+
+describe('webview HTML escaping', () => {
+    const webview = fs.readFileSync(path.join(ROOT, 'media', 'webview.js'), 'utf8');
+    const escFn = webview.match(/function esc\(t\) \{[\s\S]*?\n\}/);
+    // The entity table sits next to esc() at module scope, not inside it.
+    const escBlock = webview.match(/var ESC_MAP = \{[^}]*\};[\s\S]*?function esc\(t\) \{[\s\S]*?\n\}/);
+
+    it('esc() escapes quotes as well as angle brackets', () => {
+        assert.ok(escBlock, 'webview.js must define the ESC_MAP table and esc()');
+        for (const entity of ['&amp;', '&lt;', '&gt;', '&quot;', '&#39;']) {
+            assert.ok(
+                escBlock[0].includes(entity),
+                `esc() must emit ${entity}: its output is interpolated into quoted data-* attributes, where a raw quote closes the value`
+            );
+        }
+    });
+
+    it('esc() does not depend on the DOM', () => {
+        assert.ok(escFn, 'webview.js must define esc()');
+        assert.ok(!/document\./.test(escFn[0]), 'esc() must stay a pure string transform');
+    });
+});

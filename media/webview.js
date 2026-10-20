@@ -393,10 +393,13 @@ function avatarColor(name) {
     for (var i = 0; i < name.length; i++) { h = (h * 31 + name.charCodeAt(i)) >>> 0; }
     return 'hsl(' + (h % 360) + ',45%,42%)';
 }
+// Escapes for both text nodes and quoted attributes. The DOM round-trip this
+// replaced left quotes alone — text nodes do not need them escaped — but almost
+// every caller interpolates into data-*="…", where a commit message or branch
+// name containing a double quote would close the attribute early.
+var ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function esc(t) {
-    var d = document.createElement('div');
-    d.textContent = t == null ? '' : String(t);
-    return d.innerHTML;
+    return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return ESC_MAP[c]; });
 }
 function fmtDate(s) {
     if (!s) return '';
