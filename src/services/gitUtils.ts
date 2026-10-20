@@ -145,17 +145,42 @@ export function parseLogLine(line: string): GitCommit | null {
     };
 }
 
-export function parseGraphLine(line: string): { hash: string; shortHash: string; message: string; author: string; date: string; parents: string[] } | null {
-    const parts = line.split('|');
-    if (parts.length < 6) {return null;}
-    const [hash, shortHash, message, author, date, ...parentParts] = parts;
+export interface ParsedGraphLine {
+    hash: string;
+    shortHash: string;
+    message: string;
+    author: string;
+    authorEmail: string;
+    date: string;
+    committer: string;
+    committerEmail: string;
+    committerDate: string;
+    parents: string[];
+}
+
+/**
+ * One `git log` record. Fields are NUL-separated (`%x00`), not pipe-separated:
+ * a commit subject legally contains `|`, which used to shift every field after
+ * the message, and it can never contain NUL.
+ */
+export function parseGraphLine(line: string): ParsedGraphLine | null {
+    const parts = line.split('\0');
+    if (parts.length < 10) {return null;}
+    const [
+        hash, shortHash, message, author, authorEmail, date,
+        committer, committerEmail, committerDate, parentPart
+    ] = parts;
     return {
         hash,
         shortHash,
         message,
         author,
+        authorEmail,
         date,
-        parents: parentParts.join('|').split(' ').filter(p => p.length > 0)
+        committer,
+        committerEmail,
+        committerDate,
+        parents: parentPart.split(' ').filter(p => p.length > 0)
     };
 }
 
@@ -335,6 +360,90 @@ export interface FileStatLike {
     path: string;
     added: number;
     deleted: number;
+}
+
+export interface DiffTreeGroup {
+    /** Present only for `diff-tree --stdin`, where each result starts with it. */
+    hash?: string;
+    files: FileStatLike[];
+}
+
+/**
+ * Parse `git diff-tree/diff --raw --numstat -z` output.
+ *
+ * One invocation replaces the old pair (`--name-status` + `--numstat`): the
+ * raw block carries statuses and comes first, then the numstat block follows
+ * in the same order. `-z` makes every field a NUL-terminated token. With
+ * `--stdin`, each commit is introduced by its full 40-hex id; without it the
+ * whole output is one anonymous group.
+ *
+ * Parsing is positional on purpose: a legal file name can itself be 40 hex
+ * characters, so tokens are classified by where the grammar says they are,
+ * not by their shape.
+ */
+export function parseDiffTreeRawNumstat(output: string): DiffTreeGroup[] {
+    const tokens = output.split('\0');
+    if (tokens.length > 0 && tokens[tokens.length - 1] === '') {tokens.pop();}
+
+    const groups: DiffTreeGroup[] = [];
+    let current: DiffTreeGroup | undefined;
+    let i = 0;
+
+    const startGroup = (hash?: string): void => {
+        current = { hash, files: [] };
+        groups.push(current);
+    };
+
+    while (i < tokens.length) {
+        const token = tokens[i];
+
+        // diff-tree --stdin: a bare full hash starts the next commit.
+        if (/^[0-9a-f]{40}$/i.test(token)) {
+            startGroup(token);
+            i++;
+            continue;
+        }
+        if (!current) {startGroup();}
+
+        if (token.startsWith(':')) {
+            // ":<oldmode> <newmode> <oldsha> <newsha> <status>"; R/C carry two paths.
+            const status = token.substring(token.lastIndexOf(' ') + 1).charAt(0) || 'M';
+            let path = tokens[++i] || '';
+            if ((status === 'R' || status === 'C') && i + 1 < tokens.length) {
+                path = tokens[++i];
+            }
+            i++;
+            if (path) {
+                current!.files.push({ status, path, added: 0, deleted: 0 });
+            }
+            continue;
+        }
+
+        // "<added>\t<deleted>\t<path>"; a rename has an empty path and two tokens.
+        const t1 = token.indexOf('\t');
+        const t2 = t1 >= 0 ? token.indexOf('\t', t1 + 1) : -1;
+        if (t2 >= 0) {
+            let path = token.slice(t2 + 1);
+            const added = token.slice(0, t1);
+            const deleted = token.slice(t1 + 1, t2);
+            if (path === '' && i + 2 < tokens.length) {
+                path = tokens[i + 2];
+                i += 2;
+            }
+            const file = current!.files.find(f => f.path === path);
+            if (file) {
+                file.added = added === '-' ? 0 : parseInt(added) || 0;
+                file.deleted = deleted === '-' ? 0 : parseInt(deleted) || 0;
+            }
+            i++;
+            continue;
+        }
+
+        // Unknown token: skip rather than desynchronise the rest.
+        i++;
+    }
+
+    return groups;
 }
 
 /** Git's empty tree — the left side when there is no parent commit to diff against. */

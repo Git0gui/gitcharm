@@ -185,25 +185,44 @@ describe('parseLogLine', () => {
 });
 
 describe('parseGraphLine', () => {
+    const fields = [
+        'abc123', 'abc12', 'Merge branch', 'Author', 'a@b.c', '2024-01-15 10:00:00',
+        'Committer', 'c@d.e', '2024-01-15 11:00:00', 'p1 p2'
+    ];
+
     it('parses a valid graph line', () => {
-        const line = 'abc123|abc12|Merge branch|Author|2024-01-15 10:00:00|p1 p2';
-        const result = parseGraphLine(line);
+        const result = parseGraphLine(fields.join('\0'));
         assert.notEqual(result, null);
         assert.equal(result!.hash, 'abc123');
         assert.equal(result!.shortHash, 'abc12');
         assert.equal(result!.message, 'Merge branch');
         assert.equal(result!.author, 'Author');
+        assert.equal(result!.authorEmail, 'a@b.c');
+        assert.equal(result!.date, '2024-01-15 10:00:00');
+        assert.equal(result!.committer, 'Committer');
+        assert.equal(result!.committerEmail, 'c@d.e');
+        assert.equal(result!.committerDate, '2024-01-15 11:00:00');
+        assert.deepEqual(result!.parents, ['p1', 'p2']);
+    });
+
+    it('keeps a subject containing a pipe intact', () => {
+        const line = [...fields];
+        line[2] = 'fix | parser | edge';
+        const result = parseGraphLine(line.join('\0'));
+        assert.equal(result!.message, 'fix | parser | edge');
+        assert.equal(result!.author, 'Author');
         assert.deepEqual(result!.parents, ['p1', 'p2']);
     });
 
     it('handles single parent', () => {
-        const line = 'hash|short|msg|auth|date|parent1';
-        const result = parseGraphLine(line);
+        const line = [...fields];
+        line[9] = 'parent1';
+        const result = parseGraphLine(line.join('\0'));
         assert.notEqual(result, null);
         assert.deepEqual(result!.parents, ['parent1']);
     });
 
     it('returns null for short lines', () => {
-        assert.equal(parseGraphLine('a|b|c'), null);
+        assert.equal(parseGraphLine('a\0b\0c'), null);
     });
 });

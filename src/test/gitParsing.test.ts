@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parseWorktreeList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern, parseDiffPreview, EMPTY_TREE_HASH } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parseWorktreeList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, parseDiffTreeRawNumstat, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern, parseDiffPreview, EMPTY_TREE_HASH } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -1318,5 +1318,72 @@ describe('parseWorktreeList', () => {
     it('returns nothing for empty output', () => {
         assert.deepEqual(parseWorktreeList(''), []);
         assert.deepEqual(parseWorktreeList('\n\n'), []);
+    });
+});
+
+describe('parseDiffTreeRawNumstat', () => {
+    it('pairs the raw status with the numstat block', () => {
+        const out = [
+            ':100644 100644 aaa bbb M', 'README.md',
+            '10\t2\tREADME.md', ''
+        ].join('\0');
+        const groups = parseDiffTreeRawNumstat(out);
+        assert.equal(groups.length, 1);
+        assert.equal(groups[0].hash, undefined);
+        assert.deepEqual(groups[0].files, [
+            { status: 'M', path: 'README.md', added: 10, deleted: 2 }
+        ]);
+    });
+
+    it('shows the new path of a rename and consumes its extra tokens', () => {
+        const out = [
+            ':100644 100644 aaa bbb R100', 'old.txt', 'new.txt',
+            '0\t0\t', 'old.txt', 'new.txt', ''
+        ].join('\0');
+        const groups = parseDiffTreeRawNumstat(out);
+        assert.deepEqual(groups[0].files, [
+            { status: 'R', path: 'new.txt', added: 0, deleted: 0 }
+        ]);
+    });
+
+    it('counts binary files as zero lines', () => {
+        const out = [
+            ':100644 100644 aaa bbb M', 'bin.dat',
+            '-\t-\tbin.dat', ''
+        ].join('\0');
+        assert.deepEqual(parseDiffTreeRawNumstat(out)[0].files, [
+            { status: 'M', path: 'bin.dat', added: 0, deleted: 0 }
+        ]);
+    });
+
+    it('splits --stdin output per commit, including empty ones', () => {
+        const h1 = 'a'.repeat(40);
+        const h2 = 'b'.repeat(40);
+        const out = [
+            h1, ':100644 100644 aaa bbb A', 'n.txt', '3\t0\tn.txt',
+            h2, ''
+        ].join('\0');
+        const groups = parseDiffTreeRawNumstat(out);
+        assert.deepEqual(groups.map(g => g.hash), [h1, h2]);
+        assert.deepEqual(groups[0].files, [
+            { status: 'A', path: 'n.txt', added: 3, deleted: 0 }
+        ]);
+        assert.deepEqual(groups[1].files, []);
+    });
+
+    it('keeps a 40-hex file name as a path instead of a commit boundary', () => {
+        const weird = 'c'.repeat(40);
+        const out = [
+            ':100644 100644 aaa bbb A', weird,
+            `1\t0\t${weird}`, ''
+        ].join('\0');
+        const groups = parseDiffTreeRawNumstat(out);
+        assert.equal(groups.length, 1);
+        assert.equal(groups[0].hash, undefined);
+        assert.equal(groups[0].files[0].path, weird);
+    });
+
+    it('returns one empty group for empty output', () => {
+        assert.deepEqual(parseDiffTreeRawNumstat(''), []);
     });
 });

@@ -184,6 +184,7 @@ var state = {
     inProgress: INITIAL.inProgress || null,
     loadingMore: false,
     bfilter: '',
+    favoritesOnly: false,
     highlight: '',
     selectedHash: null,
     selectedHashes: [], // Multi-select support
@@ -468,8 +469,6 @@ var I_WORKTREE = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" st
 // of a different glyph keeps the mark readable at 12px in any theme.
 var I_STAR = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>';
 var I_STAR_ON = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>';
-// HEAD's own clock — the recent section is what git recorded, not what the user marked.
-var I_CLOCK = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.4 1.6"/></svg>';
 // Rounded two-tone folder (soft fill + stroke) with a distinct open state, matching
 // the stroke-based carets used across the panel. currentColor keeps it theme aware.
 var I_FOLDER = '<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6c.5 0 .9.2 1.2.6l.8 1.1h4.4A1.5 1.5 0 0 1 14 6.2v5.3a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5v-7z" fill="currentColor" fill-opacity=".2" stroke="currentColor" stroke-opacity=".9" stroke-width="1.1" stroke-linejoin="round"/></svg>';
@@ -537,7 +536,15 @@ function renderTree() {
     }
     
     var q = state.bfilter.toLowerCase();
-    function match(n) { return !q || n.toLowerCase().indexOf(q) >= 0; }
+    // The favorites toggle narrows the tree exactly like the text filter does: only
+    // matching rows are drawn and every folder opens up for them.
+    var narrowing = !!q || state.favoritesOnly;
+    function match(n) {
+        if (q && n.toLowerCase().indexOf(q) < 0) {return false;}
+        if (state.favoritesOnly && state.favorites.indexOf(n) < 0) {return false;}
+        return true;
+    }
+    var branchRows = 0;
     function item(n, icon, depth, label) {
         var isCur = n === state.current;
         if (isCur) {icon = I_BRANCH_CURRENT;}
@@ -562,6 +569,7 @@ function renderTree() {
             }
         }
         
+        branchRows++;
         return '<div class="' + cls + '" data-branch="' + esc(n) + '" data-title="' + esc(tooltipText) + '" style="padding-left:' + (20 + depth * 12) + 'px">' + icon + '<span class="bname">' + esc(displayName) + '</span>' +
             (state.favorites.indexOf(n) >= 0 ? '<span class="bmark" data-title="' + esc(T('w.favoriteMark')) + '">' + I_STAR_ON + '</span>' : '') + arrows + '</div>';
     }
@@ -588,8 +596,8 @@ function renderTree() {
             var p = prefix ? prefix + '/' + k : k;
             var child = node.children[k];
             var cnt = countLeaves(child);
-            if (q && cnt === 0) return;
-            var expanded = !!q || !!state.expandedFolder[p];
+            if (narrowing && cnt === 0) return;
+            var expanded = narrowing || !!state.expandedFolder[p];
             var folderCaret = expanded ? I_CARET_D : I_CARET_R;
             out.push('<div class="bfolder" data-folder="' + esc(p) + '" style="padding-left:' + (8 + depth * 16) + 'px">' +
                 '<span class="caret">' + folderCaret + '</span>' + (expanded ? I_FOLDER_OPEN : I_FOLDER) +
@@ -607,6 +615,8 @@ function renderTree() {
     }
     function section(key, title, list, icon) {
         var total = list.filter(match).length;
+        // While narrowing, a section header with no rows under it is just clutter.
+        if (narrowing && total === 0) {return '';}
         var s = header(key, title, total);
         if (!state.collapsedSec[key]) {
             var out = [];
@@ -615,22 +625,8 @@ function renderTree() {
         }
         return s;
     }
-    // Favorites and Recent keep full names in a chosen order, so they are flat
-    // lists: folding them into the folder tree would sort them alphabetically and
-    // throw away the very order that makes them worth pinning. A name whose branch
-    // is gone drops out here — the mark stays stored (recreate the branch and it
-    // is favorite again), but a row that errors on click would not be acceptable.
-    function flatSection(key, title, names, icon) {
-        var visible = names.filter(function (n) {
-            return match(n) && (n === state.current || state.local.indexOf(n) >= 0 || state.remote.indexOf(n) >= 0);
-        });
-        if (visible.length === 0) {return '';}
-        var s = header(key, title, visible.length);
-        if (!state.collapsedSec[key]) {
-            visible.forEach(function (n) { s += item(n, icon, 0, n); });
-        }
-        return s;
-    }
+    // Favorites no longer get their own pinned section: the marks live on the
+    // branch rows themselves, and the toolbar star narrows the tree to them.
     // Stash rows carry no branch, so they are not .bitem: the tree's dblclick ->
     // checkout handler must never fire on them.
     function stashItem(entry) {
@@ -646,6 +642,7 @@ function renderTree() {
     function stashSection() {
         if (state.stashes.length === 0) {return '';}
         var visible = state.stashes.filter(function (s) { return match(s.message || ''); });
+        if (narrowing && visible.length === 0) {return '';}
         var s = header('stash', T('w.stashSection'), visible.length);
         if (!state.collapsedSec['stash']) {
             visible.forEach(function (entry) { s += stashItem(entry); });
@@ -688,17 +685,26 @@ function renderTree() {
                 T('w.resumeCherryPick', { count: count, hash: state.cherryPickResume.conflictHash }) + 
                 '</div>';
         }
-        head = header('head', T('w.headSection')) + (state.collapsedSec['head'] ? '' : item(state.current, I_BRANCH, 0) + resumeHtml);
+        // The current branch is a branch like any other, so the filter applies to
+        // it too — otherwise "only favorites" would still list an unmarked row.
+        // The resume banner is an action prompt, not a listing, so it stays.
+        if (match(state.current)) {
+            head = header('head', T('w.headSection')) +
+                (state.collapsedSec['head'] ? '' : item(state.current, I_BRANCH, 0));
+        }
+        head += resumeHtml;
     }
-    document.getElementById('btree').innerHTML =
-        '<div id="btree-inner">' + head +
-        flatSection('favorites', T('w.favoritesSection'), state.favorites, I_STAR_ON) +
-        // The branch HEAD is on already has its own row at the top of the tree, so
-        // repeating it as "recently checked out" would add a row and no information.
-        flatSection('recent', T('w.recentSection'), state.recent.filter(function (n) { return n !== state.current; }), I_CLOCK) +
+    var tree = '<div id="btree-inner">' + head +
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
         stashSection() + worktreeSection() + '</div>';
+    // Nothing marked yet: a tree of empty section headers reads as a broken list
+    // instead of "mark a branch first", so replace it with the instruction.
+    if (state.favoritesOnly && branchRows === 0) {
+        tree = '<div class="empty">' + esc(T('w.noFavorites')) + '</div>';
+    }
+    document.getElementById('btree').innerHTML = tree;
+    syncFavFilterBtn();
     applyTreeCursor();
 }
 
@@ -1971,6 +1977,23 @@ document.getElementById('rf-branch').addEventListener('click', function () {
     vscode.postMessage({ command: 'refreshBranches' });
 });
 
+document.getElementById('fav-filter').addEventListener('click', function () {
+    state.favoritesOnly = !state.favoritesOnly;
+    renderTree();
+});
+
+/**
+ * The toolbar star is also the filter's indicator: accent-filled while it is
+ * narrowing the tree, dimmed while nothing is marked yet. renderTree keeps it in
+ * step with whatever branch list it just drew.
+ */
+function syncFavFilterBtn() {
+    var btn = document.getElementById('fav-filter');
+    if (!btn) {return;}
+    btn.classList.toggle('on', !!state.favoritesOnly);
+    btn.classList.toggle('off', !state.favoritesOnly && state.favorites.length === 0);
+}
+
 document.getElementById('stash-save').addEventListener('click', function () {
     vscode.postMessage({ command: 'action', action: 'stashSave' });
 });
@@ -2624,8 +2647,8 @@ function treeRowIsOpen(row) {
     if (row.classList.contains('bsec')) {return !state.collapsedSec[row.getAttribute('data-sec')];}
     if (row.classList.contains('bfolder')) {
         // A branch filter forces every folder open, so the folder state does not
-        // decide what is visible while one is typed.
-        return !!state.bfilter || !!state.expandedFolder[row.getAttribute('data-folder')];
+        // decide what is visible while one is typed (same for the favorites filter).
+        return !!state.bfilter || state.favoritesOnly || !!state.expandedFolder[row.getAttribute('data-folder')];
     }
     return false;
 }

@@ -36,6 +36,7 @@ import {
     formatGitError,
     classifyGitNetworkFailure,
     isMissingGitBinary,
+    parseDiffTreeRawNumstat,
     redactUrlCredentials,
     gitFailureHost,
     pickFetchRemote,
@@ -81,7 +82,11 @@ export interface GraphCommit {
     shortHash: string;
     message: string;
     author: string;
+    authorEmail: string;
     date: string;
+    committer: string;
+    committerEmail: string;
+    committerDate: string;
     parents: string[];
     refs: string[];
     /** Subset of `refs` that are tags — authoritative, from the refs directory. */
@@ -175,6 +180,12 @@ const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir'
 export class GitService {
     /** Max cached entries per cache (branch list / commit log / per-commit files). */
     static readonly CACHE_MAX = 20; // Reduced from 30 to save memory
+    /**
+     * Per-commit payloads are fetched in browsing bursts (a multi-select, then
+     * arrow-keying through rows); a shallow cache evicted the very entries the
+     * next click needed. Still bounded, just wider than the graph caches.
+     */
+    static readonly DETAIL_CACHE_MAX = 100;
 
     /**
      * Lines of a single file's diff the panel is willing to draw. Past this the
@@ -195,10 +206,18 @@ export class GitService {
     private _graphCache = new LruCache<GraphData>(GitService.CACHE_MAX);
     private _branchCache = new LruCache<BranchDetails>(GitService.CACHE_MAX);
     // Immutable caches: keyed by commit hash, safe until evicted
-    private _filesCache = new LruCache<FileStat[]>(GitService.CACHE_MAX);
-    private _detailCache = new LruCache<CommitDetail>(GitService.CACHE_MAX);
+    private _filesCache = new LruCache<FileStat[]>(GitService.DETAIL_CACHE_MAX);
+    private _detailCache = new LruCache<CommitDetail>(GitService.DETAIL_CACHE_MAX);
     /** commit -> diff base. A commit's parent never moves, so this one needs no invalidation. */
     private _diffBaseCache = new LruCache<string>(100);
+    /**
+     * Inline diff previews keyed by (repo, base, target, path). Only full-hash
+     * endpoints are stored: those name immutable objects, while `stash@{N}` and
+     * branch names move under the same string.
+     */
+    private _previewCache = new LruCache<DiffPreview>(30);
+    /** `git worktree list` output, tagged with the filesystem stamp it was read under. */
+    private _worktreeCache: { signature: string; entries: WorktreeEntry[] } | null = null;
 
     // Commit index cache: bounded LRU to avoid unbounded growth
     private _commitIndex = new LruCache<GraphCommit>(200); // Reduced from 500 to save memory
@@ -661,14 +680,35 @@ export class GitService {
         const hit = force ? undefined : this._detailCache.get(key);
         if (hit) {return hit;}
 
-        // Format includes both author and committer info
+        // The graph log already carries every field this card shows, so a row
+        // the user clicked needs no second process. Only commits reached from
+        // outside the list (blame, file history, reflog) fall back to `show`.
+        const indexed = force ? undefined : this._commitIndex.get(hash);
+        if (indexed) {
+            const detail: CommitDetail = {
+                hash: indexed.hash,
+                shortHash: indexed.shortHash,
+                message: indexed.message,
+                author: indexed.author,
+                authorEmail: indexed.authorEmail,
+                authorDate: indexed.date,
+                committer: indexed.committer,
+                committerEmail: indexed.committerEmail,
+                committerDate: indexed.committerDate
+            };
+            this._detailCache.set(key, detail);
+            return detail;
+        }
+
+        // Format includes both author and committer info. NUL-separated for the
+        // same reason as the graph log: a subject may contain any other char.
         // %an=author name, %ae=author email, %ai=author date
         // %cn=committer name, %ce=committer email, %ci=committer date
         const output = (await this.executeGitArgs([
-            'show', '-s', '--format=%H|%h|%s|%an|%ae|%ai|%cn|%ce|%ci', hash
-        ])).trim();
-        const parts = output.split('|');
-        
+            'show', '-s', '--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci', hash
+        ])).trimEnd();
+        const parts = output.split('\0');
+
         const detail: CommitDetail = {
             hash: parts[0] || hash,
             shortHash: parts[1] || hash.substring(0, 7),
@@ -734,22 +774,69 @@ export class GitService {
      */
     async getCommitFilesWithStats(hash: string, force: boolean = false): Promise<FileStat[]> {
         assertHash(hash);
-        const key = `${this._repositoryPath ?? ''}|${hash}`;
+        const key = this._filesKey(hash);
         const hit = force ? undefined : this._filesCache.get(key);
         if (hit) {return hit;}
 
-        // NUL-delimited plumbing output: stable across versions and safe for
-        // paths containing spaces or newlines.
+        // One process carries both the raw status block and the numstat block.
+        // NUL-delimited plumbing output is stable across versions and safe for
+        // paths containing spaces, tabs or newlines. It has to be one process:
+        // this is the critical path when a commit row is selected, and the two
+        // queries used to run in parallel purely to hide each other's spawn.
         // --root is required for the initial commit: diff-tree diffs against the
         // first parent, so a parentless commit would otherwise report no files.
-        const [nameStatus, numStat] = await Promise.all([
-            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--name-status', '-z', hash]).catch(() => ''),
-            this.executeGitArgs(['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--numstat', '-z', hash]).catch(() => '')
-        ]);
+        const output = await this.executeGitArgs([
+            'diff-tree', '--root', '--no-commit-id', '-r', '-M', '--raw', '--numstat', '-z', hash
+        ]).catch(() => '');
 
-        const files = this._mergeDiffFileStats(nameStatus, numStat);
+        const files = parseDiffTreeRawNumstat(output)[0]?.files ?? [];
         this._filesCache.set(key, files);
         return files;
+    }
+
+    /**
+     * File lists for several commits in one process (`diff-tree --stdin`).
+     * Multi-select used to cost three spawns per commit (detail, name-status,
+     * numstat); detail now rides along in the log, and this folds the rest.
+     * `--stdin` accepts only full hashes, so abbreviated input falls back to
+     * the per-commit path (callers pass rev-list output, always full).
+     */
+    async getCommitFilesWithStatsBatch(hashes: readonly string[]): Promise<Map<string, FileStat[]>> {
+        const unique = [...new Set(hashes)];
+        unique.forEach(assertHash);
+        const result = new Map<string, FileStat[]>();
+        const missing: string[] = [];
+        for (const hash of unique) {
+            const cached = this._filesCache.get(this._filesKey(hash));
+            if (cached) {result.set(hash, cached);} else {missing.push(hash);}
+        }
+        if (missing.length === 0) {return result;}
+
+        if (!missing.every(hash => /^[0-9a-f]{40}$/i.test(hash))) {
+            const lists = await Promise.all(missing.map(hash => this.getCommitFilesWithStats(hash)));
+            missing.forEach((hash, i) => result.set(hash, lists[i]));
+            return result;
+        }
+
+        const output = await this.executeGitArgs(
+            ['diff-tree', '--stdin', '--root', '-r', '-M', '--raw', '--numstat', '-z'],
+            { input: missing.join('\n') + '\n' }
+        ).catch(() => '');
+        for (const group of parseDiffTreeRawNumstat(output)) {
+            if (!group.hash) {continue;}
+            this._filesCache.set(this._filesKey(group.hash), group.files);
+            result.set(group.hash, group.files);
+        }
+        // An empty commit yields a hash with no files; a failed batch yields
+        // nothing. Callers still merge a list per selected commit.
+        for (const hash of missing) {
+            if (!result.has(hash)) {result.set(hash, []);}
+        }
+        return result;
+    }
+
+    private _filesKey(hash: string): string {
+        return `${this._repositoryPath ?? ''}|${hash}`;
     }
 
     /**
@@ -988,17 +1075,18 @@ export class GitService {
 
     /**
      * Drop caches whose contents depend on refs/history (commit log).
-     * Branch cache is now persistent and only cleared manually or when repo changes.
+     * The persisted branch list stays: it is the startup fast path and is
+     * replaced wholesale by the next forced detail load.
      */
     invalidateVolatile(): void {
         this._graphCache.clear();
+        this._branchCache.clear();
         this._trackInfoCache = undefined;
         // Head hashes must be re-read: divergence checks compare them against
         // remote-tracking refs, and a stale cache hides the arrows.
         this._refsReader.invalidate();
-        // Don't clear branch cache - it's now persistent
-        // Only clear persisted cache file if needed (but we're keeping it persistent now)
-        // this._persistedCache.clear();
+        // The in-memory detail map holds ahead/behind; the persisted snapshot
+        // (workspaceState) is untouched and still seeds the next startup.
     }
 
     /**
@@ -1008,6 +1096,7 @@ export class GitService {
     releaseHeavyCaches(): void {
         this._filesCache.clear();
         this._detailCache.clear();
+        this._previewCache.clear();
     }
 
     /**
@@ -1018,6 +1107,8 @@ export class GitService {
         this._filesCache.clear();
         this._detailCache.clear();
         this._commitIndex.clear();
+        this._previewCache.clear();
+        this._worktreeCache = null;
     }
 
     /**
@@ -1393,10 +1484,20 @@ export class GitService {
     ): Promise<DiffPreview> {
         assertShellSafe(baseRef, t('label.ref'));
         assertShellSafe(targetRef, t('label.ref'));
+        const immutable = /^[0-9a-f]{40}$/.test(baseRef) && /^[0-9a-f]{40}$/.test(targetRef);
+        const key = immutable
+            ? `${this._repositoryPath ?? ''}|${baseRef}|${targetRef}|${filePath}|${maxLines}`
+            : undefined;
+        if (key) {
+            const hit = this._previewCache.get(key);
+            if (hit) {return hit;}
+        }
         const patch = await this.executeGitArgs([
             'diff', '--no-color', '--no-ext-diff', `--unified=3`, `${baseRef}..${targetRef}`, '--', filePath
         ]);
-        return parseDiffPreview(patch, maxLines);
+        const preview = parseDiffPreview(patch, maxLines);
+        if (key) {this._previewCache.set(key, preview);}
+        return preview;
     }
 
     /**
@@ -1756,12 +1857,43 @@ export class GitService {
      * from offering to open or remove itself.
      */
     async getWorktrees(): Promise<WorktreeEntry[]> {
-        const raw = await this.executeGitArgs(['worktree', 'list', '--porcelain', '-z'], { timeoutMs: 5000 });
+        const signature = this._worktreeSignature();
+        if (!this._worktreeCache || this._worktreeCache.signature !== signature) {
+            const raw = await this.executeGitArgs(['worktree', 'list', '--porcelain', '-z'], { timeoutMs: 5000 });
+            this._worktreeCache = { signature, entries: parseWorktreeList(raw) };
+        }
         const current = this._repositoryPath;
-        return parseWorktreeList(raw).map(entry => ({
+        const entries = this._worktreeCache.entries;
+        return entries.map(entry => ({
             ...entry,
             isCurrent: !!current && repositoryKey(entry.path) === repositoryKey(current)
         }));
+    }
+
+    /**
+     * Filesystem stamp for the registered-worktree set: each registration's HEAD
+     * and lock file plus the main HEAD. `git worktree list` is a spawn, and the
+     * panel asks for it on every show and branch context menu; any worktree
+     * add/remove or checkout elsewhere moves this stamp, so a match is enough.
+     */
+    private _worktreeSignature(): string {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        if (!gitDir) {return '';}
+        const stamp = (file: string): string => {
+            try {return fs.statSync(file).mtimeMs.toFixed(3);} catch {return '-';}
+        };
+        const parts = [`main:${stamp(path.join(gitDir, 'HEAD'))}`];
+        const worktreesDir = path.join(resolveCommonDir(gitDir), 'worktrees');
+        try {
+            for (const name of fs.readdirSync(worktreesDir).sort()) {
+                const dir = path.join(worktreesDir, name);
+                parts.push(`${name}:${stamp(path.join(dir, 'HEAD'))}:${stamp(path.join(dir, 'locked'))}`);
+            }
+        } catch {
+            // No linked worktrees registered.
+        }
+        return parts.join('|');
     }
 
     /**
@@ -1782,6 +1914,7 @@ export class GitService {
     async addWorktree(targetPath: string, branchName: string): Promise<void> {
         assertRef(branchName);
         await this._execMutate(['worktree', 'add', path.resolve(targetPath), branchName], { timeoutMs: 0 });
+        this._worktreeCache = null;
     }
 
     /**
@@ -1796,6 +1929,7 @@ export class GitService {
         if (!known) {throw new Error(t('worktree.notRegistered', { path: target }));}
         if (known.isCurrent) {throw new Error(t('worktree.removeCurrent'));}
         await this._execMutate(['worktree', 'remove', ...(force ? ['--force'] : []), target], { timeoutMs: 0 });
+        this._worktreeCache = null;
     }
 
     /**
@@ -2273,23 +2407,27 @@ export class GitService {
 
     /**
      * The two revisions that bracket one stash file, so the inline preview and
-     * the editor diff show the same change the stash would apply.
+     * the editor diff show the same change the stash would apply. Both ends are
+     * resolved to hashes: `stash@{N}` shifts when another stash is pushed or
+     * dropped, and only a hash-stable pair can be cached as the preview's key.
      */
     async getStashDiffRefs(index: number, filePath: string): Promise<{ baseRef: string; targetRef: string }> {
         const ref = stashRef(index);
-        if (await this._stashHasUntracked(ref, filePath)) {
-            return { baseRef: EMPTY_TREE_HASH, targetRef: `${ref}^3` };
+        const untrackedCommit = await this._revParse(`${ref}^3`);
+        if (untrackedCommit && await this._stashPathInCommit(untrackedCommit, filePath)) {
+            return { baseRef: EMPTY_TREE_HASH, targetRef: untrackedCommit };
         }
-        return { baseRef: `${ref}^1`, targetRef: ref };
+        const stashCommit = await this._revParse(ref);
+        const base = stashCommit ? await this._revParse(`${stashCommit}^1`) : '';
+        return { baseRef: base || `${ref}^1`, targetRef: stashCommit || ref };
     }
 
     /** Is this exact path part of the stash's untracked-files commit? */
-    private async _stashHasUntracked(ref: string, filePath: string): Promise<boolean> {
-        if (!(await this._revParse(`${ref}^3`))) {return false;}
+    private async _stashPathInCommit(commitHash: string, filePath: string): Promise<boolean> {
         try {
             // cat-file takes a literal object name, so a path containing glob
             // characters cannot match a sibling file the way a pathspec would.
-            await this.executeGitArgs(['cat-file', '-e', this._objectSpec(`${ref}^3`, filePath)]);
+            await this.executeGitArgs(['cat-file', '-e', this._objectSpec(commitHash, filePath)]);
             return true;
         } catch {
             return false;
@@ -2304,57 +2442,12 @@ export class GitService {
     private async _diffFilesWithStats(baseRef: string, targetRef: string): Promise<FileStat[]> {
         assertShellSafe(baseRef, t('label.baseRef'));
         assertShellSafe(targetRef, t('label.targetRef'));
-        const [nameStatus, numStat] = await Promise.all([
-            this.executeGitArgs(['diff', '-M', '--name-status', '-z', `${baseRef}..${targetRef}`]).catch(() => ''),
-            this.executeGitArgs(['diff', '-M', '--numstat', '-z', `${baseRef}..${targetRef}`]).catch(() => '')
-        ]);
-        return this._mergeDiffFileStats(nameStatus, numStat);
-    }
-
-    /**
-     * Merge a NUL-delimited `--name-status -z` reply with its `--numstat -z`
-     * counterpart into the rows the panel draws.
-     */
-    private _mergeDiffFileStats(nameStatus: string, numStat: string): FileStat[] {
-        // numstat -z entry: "added\tdeleted\tpath"; renames: "added\tdeleted\t" + src + dst tokens
-        const stats = new Map<string, { added: number; deleted: number }>();
-        const numTokens = splitNul(numStat);
-        for (let i = 0; i < numTokens.length; i++) {
-            const header = numTokens[i];
-            const t1 = header.indexOf('\t');
-            const t2 = t1 >= 0 ? header.indexOf('\t', t1 + 1) : -1;
-            if (t2 < 0) {continue;}
-            let path = header.slice(t2 + 1);
-            if (path === '' && i + 2 < numTokens.length + 1) {
-                // Rename entry: header path is empty, src and dst follow as tokens
-                const dst = numTokens[i + 2] ?? numTokens[i + 1] ?? '';
-                i += 2;
-                path = dst;
-            }
-            const added = header.slice(0, t1);
-            const deleted = header.slice(t1 + 1, t2);
-            stats.set(path, {
-                added: added === '-' ? 0 : parseInt(added) || 0,
-                deleted: deleted === '-' ? 0 : parseInt(deleted) || 0
-            });
-        }
-
-        // name-status -z tokens: status, path; renames: status, src, dst
-        const files: FileStat[] = [];
-        const nsTokens = splitNul(nameStatus);
-        for (let i = 0; i < nsTokens.length; i++) {
-            const statusToken = nsTokens[i];
-            const letter = (statusToken || 'M').charAt(0);
-            let path = nsTokens[++i] || '';
-            if ((letter === 'R' || letter === 'C') && i + 1 < nsTokens.length) {
-                // Display the new name for renames/copies
-                path = nsTokens[++i];
-            }
-            if (!path) {continue;}
-            const s = stats.get(path) || { added: 0, deleted: 0 };
-            files.push({ status: letter, path, added: s.added, deleted: s.deleted });
-        }
-        return files;
+        // Same single-process shape as getCommitFilesWithStats: raw statuses
+        // first, then the numstat block, one NUL-delimited stream.
+        const output = await this.executeGitArgs([
+            'diff', '-M', '--raw', '--numstat', '-z', `${baseRef}..${targetRef}`
+        ]).catch(() => '');
+        return parseDiffTreeRawNumstat(output)[0]?.files ?? [];
     }
 
     /**
@@ -2388,9 +2481,11 @@ export class GitService {
         }
         logger.debug('[GitCharm] Using git commands');
         
-        // Use git log with graph format to get topology info
-        // %ai = author date (matches GitCharm default display)
-        const format = '%H|%h|%s|%an|%ai|%P';
+        // Use git log with graph format to get topology info.
+        // %ai = author date (matches GitCharm default display). Author/committer
+        // fields ride along so selecting a row later needs no `git show`; NUL
+        // separators keep a subject containing `|` from shifting the fields.
+        const format = '%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci%x00%P';
 
         const buildArgs = (forHash: boolean, useBranch: string | undefined): string[] => {
             const a: string[] = ['log'];

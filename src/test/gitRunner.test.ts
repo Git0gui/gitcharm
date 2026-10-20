@@ -55,8 +55,12 @@ describe('splitNul', () => {
 describe('buildSpawnSpec', () => {
     it('always injects base args before command args', () => {
         const spec = buildSpawnSpec(['status'], { cwd: '/repo' });
-        assert.deepEqual(spec.args.slice(0, 4), ['-c', 'core.quotePath=false', '-c', 'gc.auto=0']);
-        assert.deepEqual(spec.args.slice(4), ['status']);
+        assert.deepEqual(spec.args.slice(0, 6), [
+            '-c', 'core.quotePath=false',
+            '-c', 'gc.auto=0',
+            '-c', 'log.showSignature=false'
+        ]);
+        assert.deepEqual(spec.args.slice(6), ['status']);
     });
 
     it('forces C locale so error messages stay parseable', () => {
