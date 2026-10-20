@@ -762,6 +762,13 @@ svg { flex: none; }
 /* The stash button shares the toolbar button look but is not a refresh arrow. */
 .col-refresh.no-spin:hover { transform: scale(1.12); }
 .col-refresh.off { opacity: .45; }
+/* An active filter has to read as "the tree is narrowed", not as a hovered icon:
+   the button takes the accent colour and the star fills itself in. */
+.col-refresh.on {
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #fff);
+}
+.col-refresh.on svg path { fill: currentColor; }
 
 #center { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 #scroll { flex: 1; min-height: 0; overflow: auto; position: relative; }

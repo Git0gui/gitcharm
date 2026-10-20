@@ -183,6 +183,9 @@
         selectedBranch: 'main',
         repoName: 'GitCharm',
         hasMore: true,
+        // Marked in the order the user starred them: the favorites section keeps
+        // that order instead of sorting the names alphabetically.
+        favorites: ['main', 'feat/system-proxy-hint', 'v0.0.4/optimizations'],
         headHash: '153fcf858610d56a4daf93ef269427a52809913e',
         select: 'bd864ce52328c724b8506009414e9b70bf436ff4'
     };
@@ -199,6 +202,15 @@
                 { path: 'D:/gitProject/site-builder', name: 'site-builder' }
             ],
             currentRepository: 'D:/gitProject/GitCharm'
+        }),
+        /** The toolbar star switched on: only marked branches stay in the tree. */
+        favFilter: Object.assign({}, base, {
+            steps: [{ do: 'click', sel: '#fav-filter' }]
+        }),
+        /** Same switch with nothing marked: the hint replaces a tree of empty headers. */
+        favFilterEmpty: Object.assign({}, base, {
+            favorites: [],
+            steps: [{ do: 'click', sel: '#fav-filter' }]
         }),
         /** Commit row context menu, single selection. */
         commitMenu: Object.assign({}, base, {
@@ -320,6 +332,7 @@
                 currentBranch: s.currentBranch,
                 selectedBranch: s.selectedBranch,
                 repoName: s.repoName,
+                favorites: s.favorites || [],
                 hasMore: s.hasMore,
                 headHash: s.headHash,
                 inProgress: s.inProgress

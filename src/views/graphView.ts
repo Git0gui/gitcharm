@@ -2216,6 +2216,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h12l-4.5 5.5V14l-3-1.5V8.5z"/></svg>
                 <input id="f-bfilter" type="text" placeholder="${t('ui.filterBranches')}">
                 <button class="clr" style="display:none" id="clr-bfilter" title="${t('ui.clear')}" type="button">&#10005;</button>
+                <button class="col-refresh no-spin" id="fav-filter" title="${t('ui.favoritesFilter')}">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.2L8 11.6l-3.8 1.9.7-4.2-3.1-3 4.3-.6z"/></svg>
+                </button>
                 <button class="col-refresh no-spin" id="stash-save" title="${t('ui.stashSave')}">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>
                 </button>
