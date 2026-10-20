@@ -51,22 +51,17 @@ function fmtRelativeTimeFromEpoch(epoch: number): string {
     }
 }
 
-function measureTextPixels(text: string, fontFamily: string, fontSize: number): number {
-    try {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {return 0;}
-        ctx.font = `${fontSize}px ${fontFamily}`;
-        return ctx.measureText(text).width;
-    } catch {
-        return 0;
+/**
+ * Approximate rendered width. The extension host is Node — there is no document —
+ * so a canvas measurement can only throw and fall back to a constant. The editor's
+ * monospace font averages ~0.6em per Latin glyph; CJK and full-width glyphs ~1em.
+ */
+function measureTextPixels(text: string, fontSize: number): number {
+    let em = 0;
+    for (const ch of text) {
+        em += /[\u1100-\u115f\u2e80-\u9fff\ua960-\ua97f\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 1 : 0.6;
     }
-}
-
-function readEditorFontFamily(): string {
-    const cfg = vscode.workspace.getConfiguration('editor');
-    const raw = cfg.get<string>('fontFamily', '');
-    return raw || "'Consolas', 'Courier New', monospace";
+    return em * fontSize;
 }
 
 export class BlameProvider implements vscode.Disposable {
@@ -225,7 +220,6 @@ export class BlameProvider implements vscode.Disposable {
         const blame = this._cache.get(editor.document.uri.toString());
         if (!blame) {return;}
 
-        const fontFamily = readEditorFontFamily();
         const fontSize = vscode.workspace.getConfiguration('editor').get<number>('fontSize', 14);
         const lineCount = editor.document.lineCount;
 
@@ -261,7 +255,7 @@ export class BlameProvider implements vscode.Disposable {
         let maxPixelWidth = 0;
         for (let i = 0; i < lineCount; i++) {
             if (!styles[i]) {continue;}
-            const w = measureTextPixels(` ${texts[i]} `, fontFamily, fontSize);
+            const w = measureTextPixels(` ${texts[i]} `, fontSize);
             if (w > maxPixelWidth) {maxPixelWidth = w;}
         }
         if (maxPixelWidth === 0) {
