@@ -1671,11 +1671,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'stashSave':
                     await vscode.commands.executeCommand('idea-git.stashSave');
                     return;
-                case 'reflog':
-                    // Read-only view: the toolbar button asks for HEAD's reflog, a branch
-                    // row asks for its own. No reload either way.
-                    await vscode.commands.executeCommand('idea-git.showReflog', message.branch ? branchNode : undefined);
+                case 'reflog': {
+                    // Read-only view. The toolbar follows the branch the commit
+                    // list is scoped to; with no branch selected it falls back
+                    // to the checked-out branch, so the dialog never shows
+                    // HEAD's checkout history.
+                    const scope = message.branch || await this._gitService.getCurrentBranch().catch(() => '');
+                    await vscode.commands.executeCommand('idea-git.showReflog', scope ? { name: scope } : undefined);
                     return;
+                }
                 case 'stashApply':
                 case 'stashPop':
                 case 'stashDrop': {

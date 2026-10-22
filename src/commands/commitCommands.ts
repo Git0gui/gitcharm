@@ -867,33 +867,18 @@ export function registerCommitCommands(
             }
         }),
 
-        // View file history across branches
+        // File history is VS Code's own Timeline view, pinned to this file —
+        // the same command the Explorer's "Open Timeline" entry runs.
         vscode.commands.registerCommand('idea-git.viewFileHistory', async (uri?: vscode.Uri) => {
             const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
             if (!targetUri || targetUri.scheme !== 'file') {
                 vscode.window.showErrorMessage(t('common.noFileSelected'));
                 return;
             }
-            const repoPath = gitService.repositoryPath;
-            if (!repoPath) {
-                vscode.window.showErrorMessage(t('ext.noGitRepo'));
-                return;
-            }
-            // git pathspec + later `git show hash:path` both need a repo-relative path
-            const rel = path.relative(repoPath, targetUri.fsPath).replace(/\\/g, '/');
-            if (!rel || rel.startsWith('..')) {
-                vscode.window.showErrorMessage(t('ext.fileNotInRepo'));
-                return;
-            }
             try {
-                const history = await gitService.getFileHistory(rel);
-                if (history.length === 0) {
-                    vscode.window.showInformationMessage(t('fileHistory.empty'));
-                    return;
-                }
-                await graphView.showFileHistory(rel, history);
+                await vscode.commands.executeCommand('files.openTimeline', targetUri);
             } catch (error) {
-                vscode.window.showErrorMessage(t('fileHistory.failed', { error: formatGitError(error) }));
+                vscode.window.showErrorMessage(t('fileHistory.timelineFailed', { error: formatGitError(error) }));
             }
         })
     );

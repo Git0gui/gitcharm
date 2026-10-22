@@ -1832,18 +1832,6 @@ body.dialog-resizing * {
     min-width: 52px;
 }
 .push-commit-row.sel .push-commit-hash { color: rgba(255,255,255,.6); }
-/* Reflog selector column: HEAD@{12} / feature/x@{3}, monospace and fixed so the
-   rows line up, and dimmer than the hash it points at. */
-.reflog-ref {
-    font-family: monospace;
-    font-size: 11px;
-    color: var(--vscode-descriptionForeground, #888);
-    flex: none;
-    width: 82px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
 .reflog-row .push-commit-author {
     font-family: monospace;
     font-size: 10.5px;

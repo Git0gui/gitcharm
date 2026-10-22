@@ -1812,9 +1812,10 @@ document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
 });
 document.getElementById('btn-reflog').addEventListener('click', function () {
-    // No branch: the host falls back to HEAD's reflog, which is the list that
-    // still holds commits lost to a checkout or reset.
-    vscode.postMessage({ command: 'action', action: 'reflog' });
+    // Same branch as the commit list above: the reflog answers "what moved
+    // this branch", not "what moved HEAD". With nothing selected the host
+    // falls back to the checked-out branch.
+    vscode.postMessage({ command: 'action', action: 'reflog', branch: state.selectedBranch || '' });
 });
 document.getElementById('tg-graph').addEventListener('click', function () {
     state.graphVisible = state.graphVisible === false;
@@ -4178,11 +4179,10 @@ function showReflogDialog(scope, entries) {
     reflogState = { entries: entries, visibleCount: 20 };
 
     function row(entry) {
-        var tip = entry.ref + '  ' + entry.shortHash + '\n' +
+        var tip = entry.shortHash + '\n' +
             entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
             fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
         return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
-            '<span class="reflog-ref">' + esc(entry.ref) + '</span>' +
             '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
             '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
             '<span class="push-commit-author">' + esc(entry.action) + '</span>' +

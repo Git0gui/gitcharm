@@ -161,6 +161,11 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.showWorkingDiff",
+        "title": "%cmd.showWorkingDiff%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.initRepository",
         "title": "%cmd.initRepository%",
         "category": "GitCharm"
@@ -306,6 +311,11 @@
           "command": "idea-git.compareFileWithBranch",
           "when": "resourceScheme == file",
           "group": "1_compare@1"
+        },
+        {
+          "command": "idea-git.showWorkingDiff",
+          "when": "resourceScheme == file",
+          "group": "2_changes@1"
         },
         {
           "command": "idea-git.viewFileHistory",
