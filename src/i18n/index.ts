@@ -447,7 +447,7 @@ const zh: Record<string, string> = {
     'label.tag': '标签',
 
     // graphView messages
-    'view.commitNotFound': '未在当前分支找到提交 {hash}',
+    'view.commitNotFound': '未找到提交 {hash}',
     'view.findCommitFailed': '查找提交失败: {error}',
     'view.openDiffFailed': '打开文件对比失败: {error}',
     'view.emptyRef': '空',
@@ -1076,7 +1076,7 @@ const en: Record<string, string> = {
     'label.tag': 'tag',
 
     // graphView messages
-    'view.commitNotFound': 'Commit {hash} not found in the current branch',
+    'view.commitNotFound': 'Commit {hash} not found',
     'view.findCommitFailed': 'Failed to find commit: {error}',
     'view.openDiffFailed': 'Failed to open file diff: {error}',
     'view.emptyRef': 'empty',
