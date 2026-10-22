@@ -53,6 +53,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * walk costs more the deeper the user scrolls.
      */
     private static readonly LOAD_WINDOW = 50;
+    /**
+     * How many of the rooted commit's own descendants are painted above it. The
+     * list has no upward paging, so this is the whole "scroll up" range and is
+     * capped for that reason — a reveal 5 000 commits behind the tip would else
+     * put 5 000 rows into one repaint.
+     */
+    private static readonly REVEAL_CHILD_WINDOW = 50;
     /** Session-restore window: reopen within this period restores the last view; later opens start fresh. */
     private static readonly SESSION_RESTORE_TTL_MS = 2 * 60 * 60 * 1000;
     /** Short pause after the panel opens before the first background fetch. */
@@ -66,8 +73,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _branch: string | undefined;
     /**
      * Rev the commit list is rooted at, together with the branch it was rooted
-     * under: "history from this commit" puts that commit on row 1, and any other
-     * branch scope drops the rooting by itself (see `_listRev`).
+     * under: the list then reads "its descendants / this commit / what led to it"
+     * instead of starting at the branch tip, and any other branch scope drops the
+     * rooting by itself (see `_listRev`).
      */
     private _revRoot: { rev: string; branch: string | undefined } | undefined;
     private _pendingReveal: string | undefined;
@@ -184,8 +192,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Focus the GitCharm panel and put a specific commit on the first row of the
-     * list, selected — what the blame hover's "view this commit" link asks for.
+     * Focus the GitCharm panel and select a specific commit in the middle of the
+     * list — what the blame hover's "view this commit" link asks for. The list is
+     * rooted at that commit, so it lands with its newer commits above and its
+     * history below, and both directions scroll.
      */
     revealCommit(hash: string): void {
         vscode.commands.executeCommand('idea-git.mainView.focus');
@@ -203,9 +213,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     /**
      * Re-root the history query at the commit and select it, so the list reads
-     * "this commit and what led to it". Showing the single commit on its own left
-     * a one-row panel with no context, and a commit outside the loaded page could
-     * not be scrolled to in the first place.
+     * "what came after it / it / what led to it". Showing the single commit on its
+     * own left a one-row panel with no context, and a commit outside the loaded
+     * page could not be scrolled to in the first place.
      */
     private async _revealFrom(targetHash: string): Promise<void> {
         try {
@@ -1817,6 +1827,54 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             : this._branch;
     }
 
+    /** Is the list currently rooted at a revealed commit rather than at a branch tip? */
+    private _isRootedList(): boolean {
+        return !!this._revRoot && this._revRoot.branch === this._branch;
+    }
+
+    /**
+     * The rows a rooted list shows *above* the rooted commit: the commits that
+     * came after it, taken next to the commit rather than next to the tip so the
+     * graph stays connected through the row the user asked for. The panel's text
+     * filters are deliberately not applied — these are context around the commit,
+     * and a filtered walk would make the tail position meaningless.
+     */
+    private async _rootedDescendants(force: boolean): Promise<GraphCommit[]> {
+        const root = this._revRoot;
+        if (!root) {return [];}
+        const cap = GraphViewProvider.REVEAL_CHILD_WINDOW;
+        const after = await this._gitService.countCommitsAfter(root.rev, root.branch);
+        if (after === 0) {return [];}
+        const data = await this._gitService.getCommitGraphData({
+            limit: cap,
+            skip: Math.max(0, after - cap),
+            branch: root.branch,
+            excludeAncestorsOf: root.rev,
+            force
+        });
+        return data.commits;
+    }
+
+    /**
+     * First page of the commit list for the current scope. `pageRows` counts only
+     * what the rooted rev's own walk returned — that is the `--skip` the next page
+     * resumes from — while the rows the rooting puts *above* the commit come from
+     * a second walk and stay out of that count.
+     */
+    private async _firstPageRows(force: boolean): Promise<{ commits: GraphCommit[]; pageRows: number }> {
+        const [page, newer] = await Promise.all([
+            this._gitService.getCommitGraphData({
+                limit: GraphViewProvider.PAGE_FIRST,
+                branch: this._listRev(),
+                filters: this._filters,
+                force
+            }),
+            // Two extra spawns, and only while the list is rooted.
+            this._isRootedList() ? this._rootedDescendants(force) : Promise.resolve([] as GraphCommit[])
+        ]);
+        return { commits: newer.length > 0 ? [...newer, ...page.commits] : page.commits, pageRows: page.commits.length };
+    }
+
     private async _collect(force: boolean = false): Promise<GraphPayload> {
         // A selection can outlive its ref (deleted in a terminal or another
         // worktree); re-resolve it before it reaches `git log`.
@@ -1824,18 +1882,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         const rev = this._listRev();
         logger.debug(`[GitCharm] _collect called with branch=${rev || 'all'}, force=${force}`);
         logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}`);
-        const [graphData, details] = await Promise.all([
-            this._gitService.getCommitGraphData({
-                limit: GraphViewProvider.PAGE_FIRST,
-                branch: rev,
-                filters: this._filters,
-                force
-            }),
+        const [first, details] = await Promise.all([
+            this._firstPageRows(force),
             // A vanished branch must also disappear from the tree immediately;
             // the cached list would keep the row that produced the error.
             this._gitService.getBranchesWithDetails(force || dropped)
         ]);
-        logger.debug(`[GitCharm] _collect got ${graphData.commits.length} commits for rev=${rev || 'all'}`);
+        logger.debug(`[GitCharm] _collect got ${first.pageRows} commits for rev=${rev || 'all'} (+${first.commits.length - first.pageRows} above)`);
+        const commits = first.commits;
         let headHash = '';
         try {
             headHash = await this._gitService.getHeadHash();
@@ -1853,14 +1907,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // not treat the history it just fetched as an external change.
         this._lastKnownTip = await this._tipOfDisplayedRev();
         
-        this._loaded = graphData.commits.length;
-        this._hasMore = graphData.commits.length >= GraphViewProvider.PAGE_FIRST;
+        this._loaded = first.pageRows;
+        this._hasMore = first.pageRows >= GraphViewProvider.PAGE_FIRST;
         this._pendingCommits = [];
         this._streamExhausted = false;
-        this._loadedHashes = new Set(graphData.commits.map(c => c.hash));
+        this._loadedHashes = new Set(commits.map(c => c.hash));
         const repoPath = this._gitService.repositoryPath;
         return {
-            commits: graphData.commits,
+            commits,
             local: details.local.map(b => b.name),
             remote: details.remote.map(b => b.name),
             currentBranch: details.current,
@@ -1928,15 +1982,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     private async _reload(force: boolean = false, preserveSelection = false) {
         if (!this._view) {return;}
+        // Every reload other than the reveal itself goes back to the branch tip:
+        // a rooted list would keep a new commit from ever showing up. Cleared even
+        // on the guidance-page branch, where no history query runs at all.
+        this._revRoot = undefined;
         if (this._repoState !== 'ready') {
             // Guidance page is showing; history queries would fail here
             await this.refreshRepoState();
             return;
         }
         logger.debug(`[GitCharm] _reload called with branch=${this._branch || 'all'}, force=${force}`);
-        // Every reload other than the reveal itself goes back to the branch tip:
-        // a rooted list would keep a new commit from ever showing up.
-        this._revRoot = undefined;
         this._postLoading('rows', true);
         try {
             const payload = await this._collect(force);
@@ -2105,26 +2160,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         
         try {
             const fetchStart = Date.now();
-            const graphData = await this._gitService.getCommitGraphData({
-                limit: GraphViewProvider.PAGE_FIRST,
-                branch: this._listRev(),
-                filters: this._filters,
-                force: false
-            });
+            const first = await this._firstPageRows(false);
             const fetchTime = Date.now() - fetchStart;
-            logger.debug(`[GitCharm] Git fetch took ${fetchTime}ms, got ${graphData.commits.length} commits`);
+            logger.debug(`[GitCharm] Git fetch took ${fetchTime}ms, got ${first.commits.length} commits`);
             
-            this._loaded = graphData.commits.length;
-            this._hasMore = graphData.commits.length >= GraphViewProvider.PAGE_FIRST;
+            this._loaded = first.pageRows;
+            this._hasMore = first.pageRows >= GraphViewProvider.PAGE_FIRST;
             this._pendingCommits = [];
             this._streamExhausted = false;
-            this._loadedHashes = new Set(graphData.commits.map(c => c.hash));
+            this._loadedHashes = new Set(first.commits.map(c => c.hash));
             
             // Update webview with commits
             const postStart = Date.now();
             this._post({
                 command: 'setCommits',
-                commits: graphData.commits,
+                commits: first.commits,
                 hasMore: this._hasMore
             });
             const postTime = Date.now() - postStart;
