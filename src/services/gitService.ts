@@ -1413,15 +1413,9 @@ export class GitService {
     }
 
     /**
-     * Print a file's content at a given ref (backs the diff content provider).
-     */
-    async showBlob(ref: string, filePath: string): Promise<string> {
-        return (await this.readBlob(ref, filePath)).trim();
-    }
-
-    /**
-     * Exact file content at a given ref — "Jump to Source" opens this version in
-     * the editor, where trimming leading whitespace would shift every line.
+     * Exact file content at a given ref (backs the diff content provider).
+     * Trimming would shift lines and turn the final newline into a phantom
+     * added line when diffed against the worktree copy.
      */
     async readBlob(ref: string, filePath: string): Promise<string> {
         assertShellSafe(ref, t('label.ref'));

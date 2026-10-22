@@ -762,18 +762,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * URI for the exact content at a ref. "Jump to Source" opens this instead of
-     * a diff side, so leading whitespace and the final newline have to survive.
-     */
-    private _gitSourceUri(ref: string, filePath: string): vscode.Uri {
-        return vscode.Uri.from({
-            scheme: 'idea-git-diff',
-            path: '/' + filePath,
-            query: 'ref=' + encodeURIComponent(ref) + '&raw=1'
-        });
-    }
-
-    /**
      * IDEA's "Jump to Source": open the file as the selected commit left it, not
      * the working-tree copy. A file deleted by that commit has no post-image, so
      * the parent's content stands in and the user is told which version this is.
@@ -790,7 +778,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 }
                 vscode.window.showInformationMessage(t('file.deletedOpenedParent', { file: fileName }));
             }
-            await vscode.window.showTextDocument(this._gitSourceUri(ref, relativePath), { preview: true });
+            await vscode.window.showTextDocument(this._gitBlobUri(ref, relativePath), { preview: true });
             vscode.window.setStatusBarMessage(t('file.openedAtRevision', { file: fileName, ref: ref.substring(0, 7) }), 5000);
         } catch (error) {
             vscode.window.showErrorMessage(t('file.jumpToSourceFailed', { error: formatGitError(error) }));

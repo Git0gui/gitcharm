@@ -175,11 +175,11 @@ export function activate(ctx: vscode.ExtensionContext) {
                     return '';
                 }
                 try {
-                    // `raw=1` is the "Jump to Source" view, which must keep the file
-                    // byte-for-byte; diff documents keep their trimmed form.
-                    return params.get('raw') === '1'
-                        ? await gitService.readBlob(ref, filePath)
-                        : await gitService.showBlob(ref, filePath);
+                    // Byte-exact in every view: a diff side has to match the
+                    // worktree exactly, and trimming the final newline made
+                    // every unmodified file look like it had an added line
+                    // at the end.
+                    return await gitService.readBlob(ref, filePath);
                 } catch {
                     return '';
                 }
