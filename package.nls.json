@@ -26,6 +26,7 @@
     "cmd.updateBranch": "Update",
     "cmd.commitBranch": "Commit...",
     "cmd.viewFileHistory": "View File History",
+    "cmd.showWorkingDiff": "Show Changes",
     "cmd.initRepository": "Initialize a Git Repository in This Folder",
     "cmd.revertCommit": "Revert Commits (Create Undoing Commits)",
     "cmd.amendCommit": "Amend Last Commit (Fold Current Changes In)",

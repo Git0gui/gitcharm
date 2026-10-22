@@ -6,9 +6,9 @@ import { t } from '../i18n';
 /**
  * Reflog viewer — the rescue path for a commit that no longer sits on a branch.
  *
- * The scope follows the entry point: the toolbar button asks for HEAD's reflog
- * (HEAD is what records `checkout` and `reset`, the two operations that hide
- * finished work), while a branch row asks for that branch's own movements.
+ * The scope follows the entry point: the toolbar button asks for the reflog of
+ * the branch the commit list is scoped to (the checked-out branch when nothing
+ * is selected), while a branch row asks for that branch's own movements.
  *
  * Reading only: the rows are rendered by the webview and its context menu
  * reuses the existing commit actions (create branch / reset / diff), so this

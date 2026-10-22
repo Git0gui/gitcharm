@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { GitService, GitCommit, assertHash } from '../services/gitService';
+import { GitService, GitCommit, FileStat, assertHash } from '../services/gitService';
 import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
+    gitBlobUri,
     isConflictError,
     combineErrorText,
     tryHandleConflict,
@@ -21,18 +22,51 @@ export function registerCommitCommands(
 ): void {
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.showCommitDiff', async (commit: GitCommit) => {
-            if (!commit) {
+            if (!commit?.hash) {
                 vscode.window.showErrorMessage(t('common.noCommitSelected'));
                 return;
             }
+            const hash = commit.hash;
 
             try {
-                const diff = await gitService.getCommitDiff(commit.hash);
-                const doc = await vscode.workspace.openTextDocument({
-                    content: diff,
-                    language: 'diff'
-                });
-                await vscode.window.showTextDocument(doc);
+                // One `diff-tree` gives the whole file list; the two sides of
+                // each diff then load lazily through the virtual-document
+                // provider as the multi-diff editor opens a section. That is
+                // the same shape as the SCM view's "Open Changes": no per-file
+                // git call up front, and a 200-file commit still costs one
+                // process to open.
+                const stats = await gitService.getCommitFilesWithStats(hash);
+                const files: Array<Pick<FileStat, 'path' | 'fromPath'>> = stats.length > 0
+                    ? stats
+                    // `diff-tree` prints nothing for a merge commit; comparing
+                    // against its first parent explicitly still gives the files.
+                    : await gitService.getDiffFilesBetweenRefs(await gitService.getDiffBase(hash), hash);
+
+                if (files.length === 0) {
+                    vscode.window.showInformationMessage(t('commit.showDiffNoFiles'));
+                    return;
+                }
+
+                const baseRef = await gitService.getDiffBase(hash);
+                const root = gitService.repositoryPath;
+                let subject = (commit.message || '').split('\n')[0].trim();
+                if (!subject) {
+                    // Row actions post the hash only; the detail is already in
+                    // the service cache from drawing that row's card.
+                    subject = await gitService.getCommitDetail(hash)
+                        .then(d => (d.message || '').split('\n')[0].trim())
+                        .catch(() => '');
+                }
+                // The multi-diff editor appends its own file count to the title.
+                const title = subject ? `${hash.substring(0, 7)} - ${subject}` : hash.substring(0, 7);
+                const changes: Array<[vscode.Uri, vscode.Uri, vscode.Uri]> = files.map(f => [
+                    // Label only: gives the section its file name and folder.
+                    root ? vscode.Uri.file(path.join(root, f.path)) : gitBlobUri(hash, f.path),
+                    // A rename has to take its left side from the old path.
+                    gitBlobUri(baseRef, f.fromPath ?? f.path),
+                    gitBlobUri(hash, f.path)
+                ]);
+                await vscode.commands.executeCommand('vscode.changes', title, changes);
             } catch (error) {
                 vscode.window.showErrorMessage(t('commit.showDiffFailed', { error: formatGitError(error) }));
             }
@@ -771,11 +805,29 @@ export function registerCommitCommands(
         }),
 
         vscode.commands.registerCommand('idea-git.resetToCommit', async (commitNode: any) => {
-            const hash = commitNode?.hash ?? commitNode?.commit?.hash;
+            let hash: string | undefined = commitNode?.hash ?? commitNode?.commit?.hash;
+
+            // The command is also listed in the palette, where there is no row to
+            // read a hash from. Ask for the commit there instead of refusing.
             if (!hash) {
-                vscode.window.showErrorMessage(t('common.noCommitSelected'));
-                return;
+                const commits = await gitService.getLog(50);
+                if (commits.length === 0) {
+                    vscode.window.showErrorMessage(t('common.noCommitSelected'));
+                    return;
+                }
+                const picked = await vscode.window.showQuickPick(
+                    commits.map(c => ({
+                        label: c.message || t('commit.noMessage'),
+                        description: c.shortHash,
+                        detail: `${c.author} · ${c.relativeDate}`,
+                        hash: c.hash
+                    })),
+                    { placeHolder: t('commit.resetPickPlaceHolder') }
+                );
+                if (!picked) {return;}
+                hash = picked.hash;
             }
+            const targetHash: string = hash;
 
             const resetModes: Array<{ label: string; value: 'soft' | 'mixed' | 'hard' }> = [
                 { label: t('commit.resetModeSoft'), value: 'soft' },
@@ -786,16 +838,28 @@ export function registerCommitCommands(
 
             if (!mode) {return;}
 
+            // Reset always moves HEAD, which may not be the branch on screen;
+            // naming it here is the only place the user can see that.
+            const branch = await gitService.getCurrentBranch().catch(() => '');
+            const shortHash = targetHash.substring(0, 7);
             const confirm = await vscode.window.showWarningMessage(
-                t('commit.resetConfirm', { hash: hash.substring(0, 7), mode: mode.label.split(' - ')[0] }),
+                t('commit.resetConfirm', {
+                    branch: branch || t('w.worktreeDetached'),
+                    hash: shortHash,
+                    mode: mode.label.split(' - ')[0]
+                }),
                 { modal: true },
                 t('commit.resetBtn')
             );
 
             if (confirm === t('commit.resetBtn')) {
                 try {
-                    await gitService.resetToCommit(hash, mode.value);
-                    vscode.window.showInformationMessage(t('commit.resetSuccess', { hash: hash.substring(0, 7) }));
+                    await vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: t('commit.resetting', { hash: shortHash }),
+                        cancellable: false
+                    }, () => gitService.resetToCommit(targetHash, mode.value));
+                    vscode.window.showInformationMessage(t('commit.resetSuccess', { hash: shortHash }));
                     graphView.refresh();
                 } catch (error) {
                     vscode.window.showErrorMessage(t('commit.resetFailed', { error: formatGitError(error) }));
@@ -803,33 +867,18 @@ export function registerCommitCommands(
             }
         }),
 
-        // View file history across branches
+        // File history is VS Code's own Timeline view, pinned to this file —
+        // the same command the Explorer's "Open Timeline" entry runs.
         vscode.commands.registerCommand('idea-git.viewFileHistory', async (uri?: vscode.Uri) => {
             const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
             if (!targetUri || targetUri.scheme !== 'file') {
                 vscode.window.showErrorMessage(t('common.noFileSelected'));
                 return;
             }
-            const repoPath = gitService.repositoryPath;
-            if (!repoPath) {
-                vscode.window.showErrorMessage(t('ext.noGitRepo'));
-                return;
-            }
-            // git pathspec + later `git show hash:path` both need a repo-relative path
-            const rel = path.relative(repoPath, targetUri.fsPath).replace(/\\/g, '/');
-            if (!rel || rel.startsWith('..')) {
-                vscode.window.showErrorMessage(t('ext.fileNotInRepo'));
-                return;
-            }
             try {
-                const history = await gitService.getFileHistory(rel);
-                if (history.length === 0) {
-                    vscode.window.showInformationMessage(t('fileHistory.empty'));
-                    return;
-                }
-                await graphView.showFileHistory(rel, history);
+                await vscode.commands.executeCommand('files.openTimeline', targetUri);
             } catch (error) {
-                vscode.window.showErrorMessage(t('fileHistory.failed', { error: formatGitError(error) }));
+                vscode.window.showErrorMessage(t('fileHistory.timelineFailed', { error: formatGitError(error) }));
             }
         })
     );

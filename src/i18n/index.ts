@@ -303,6 +303,7 @@ const zh: Record<string, string> = {
     'fileHistory.dblclickHint': '双击提交查看该文件在此提交的改动',
     'fileHistory.empty': '该文件没有历史记录',
     'fileHistory.failed': '获取文件历史失败: {error}',
+    'fileHistory.timelineFailed': '打开时间线失败: {error}',
     'common.noFileSelected': '未选择文件',
     'cherryPick.pickPlaceHolder': '选择要拣选的提交（可多选）',
     'cherryPick.pickTitle': '拣选提交',
@@ -338,6 +339,7 @@ const zh: Record<string, string> = {
 
     // commit commands
     'commit.showDiffFailed': '显示提交差异失败: {error}',
+    'commit.showDiffNoFiles': '该提交没有可对比的文件改动',
     'commit.promptToBranch': '提交到 "{name}"（已暂存的改动）',
     'commit.promptMessage': '提交信息',
     'commit.messagePlaceHolder': '输入提交信息',
@@ -390,8 +392,10 @@ const zh: Record<string, string> = {
     'commit.resetModeMixed': 'Mixed - 保留改动在工作区（默认）',
     'commit.resetModeHard': 'Hard - 丢弃所有改动',
     'commit.resetModePlaceHolder': '选择重置模式',
-    'commit.resetConfirm': '将当前分支重置到 {hash}（{mode}）？这将重写提交历史。',
+    'commit.resetPickPlaceHolder': '选择要重置到的提交',
+    'commit.resetConfirm': '将当前分支 {branch} 重置到 {hash}（{mode}）？这将重写提交历史。',
     'commit.resetBtn': '重置',
+    'commit.resetting': '正在重置到 {hash}…',
     'commit.resetSuccess': '已重置到 {hash}',
     'commit.resetFailed': '重置失败: {error}',
 
@@ -443,7 +447,7 @@ const zh: Record<string, string> = {
     'label.tag': '标签',
 
     // graphView messages
-    'view.commitNotFound': '未在当前分支找到提交 {hash}',
+    'view.commitNotFound': '未找到提交 {hash}',
     'view.findCommitFailed': '查找提交失败: {error}',
     'view.openDiffFailed': '打开文件对比失败: {error}',
     'view.emptyRef': '空',
@@ -928,6 +932,7 @@ const en: Record<string, string> = {
     'fileHistory.dblclickHint': 'Double-click a commit to view its changes to this file',
     'fileHistory.empty': 'No history for this file',
     'fileHistory.failed': 'Failed to get file history: {error}',
+    'fileHistory.timelineFailed': 'Failed to open the Timeline view: {error}',
     'common.noFileSelected': 'No file selected',
     'cherryPick.pickPlaceHolder': 'Select commits to cherry-pick (multi-select)',
     'cherryPick.pickTitle': 'Cherry-Pick Commits',
@@ -963,6 +968,7 @@ const en: Record<string, string> = {
 
     // commit commands
     'commit.showDiffFailed': 'Failed to show commit diff: {error}',
+    'commit.showDiffNoFiles': 'This commit has no file changes to diff',
     'commit.promptToBranch': 'Commit to "{name}" (staged changes)',
     'commit.promptMessage': 'Commit message',
     'commit.messagePlaceHolder': 'Enter commit message',
@@ -1015,8 +1021,10 @@ const en: Record<string, string> = {
     'commit.resetModeMixed': 'Mixed - keep changes in working tree (default)',
     'commit.resetModeHard': 'Hard - discard all changes',
     'commit.resetModePlaceHolder': 'Select reset mode',
-    'commit.resetConfirm': 'Reset the current branch to {hash} ({mode})? This rewrites commit history.',
+    'commit.resetPickPlaceHolder': 'Select the commit to reset to',
+    'commit.resetConfirm': 'Reset branch {branch} to {hash} ({mode})? This rewrites commit history.',
     'commit.resetBtn': 'Reset',
+    'commit.resetting': 'Resetting to {hash}…',
     'commit.resetSuccess': 'Reset to {hash}',
     'commit.resetFailed': 'Reset failed: {error}',
 
@@ -1068,7 +1076,7 @@ const en: Record<string, string> = {
     'label.tag': 'tag',
 
     // graphView messages
-    'view.commitNotFound': 'Commit {hash} not found in the current branch',
+    'view.commitNotFound': 'Commit {hash} not found',
     'view.findCommitFailed': 'Failed to find commit: {error}',
     'view.openDiffFailed': 'Failed to open file diff: {error}',
     'view.emptyRef': 'empty',

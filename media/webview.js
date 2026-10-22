@@ -1812,9 +1812,10 @@ document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
 });
 document.getElementById('btn-reflog').addEventListener('click', function () {
-    // No branch: the host falls back to HEAD's reflog, which is the list that
-    // still holds commits lost to a checkout or reset.
-    vscode.postMessage({ command: 'action', action: 'reflog' });
+    // Same branch as the commit list above: the reflog answers "what moved
+    // this branch", not "what moved HEAD". With nothing selected the host
+    // falls back to the checked-out branch.
+    vscode.postMessage({ command: 'action', action: 'reflog', branch: state.selectedBranch || '' });
 });
 document.getElementById('tg-graph').addEventListener('click', function () {
     state.graphVisible = state.graphVisible === false;
@@ -2107,8 +2108,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['checkout', T('menu.checkout')],
             ['fetch', T('menu.fetchRemote')],
             ['newBranchFrom', T('menu.newBranchFrom')],
-            ['compareBranch', T('menu.compareWithCurrent')],
-            ['reflog', T('menu.reflog')]
+            ['compareBranch', T('menu.compareWithCurrent')]
         ];
     } else if (isCurrent) {
         // Current branch: only show applicable actions
@@ -2117,8 +2117,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['push', T('menu.push')],
             ['newBranchFrom', T('menu.newBranchFrom')],
             ['rename', T('menu.rename')],
-            ['openRemoteBranch', T('menu.openOnRemote')],
-            ['reflog', T('menu.reflog')]
+            ['openRemoteBranch', T('menu.openOnRemote')]
         ];
     } else {
         // Other local branches: full action set
@@ -2133,14 +2132,13 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['compareBranch', T('menu.compareWithCurrent')],
             ['rename', T('menu.rename')],
             ['deleteBranch', T('menu.deleteBranch')],
-            ['openRemoteBranch', T('menu.openOnRemote')],
-            ['reflog', T('menu.reflog')]
+            ['openRemoteBranch', T('menu.openOnRemote')]
         ];
     }
-    
-    // Marking a branch is the one action every kind of row offers, so it goes on
-    // top and the type-specific list keeps its order below it.
-    showMenu(e.clientX, e.clientY, [['toggleFavorite', T(isFavorite ? 'menu.unfavorite' : 'menu.favorite')]].concat(menuItems), function (action) {
+
+    // Marking a branch is the one action every kind of row offers, so the
+    // type-specific list keeps its order on top and the star sits below it.
+    showMenu(e.clientX, e.clientY, menuItems.concat([['toggleFavorite', T(isFavorite ? 'menu.unfavorite' : 'menu.favorite')]]), function (action) {
         vscode.postMessage({ command: 'action', action: action, branch: branch });
     });
 });
@@ -2245,7 +2243,6 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
     }
     items.push(['openRemoteCommit', T('menu.openOnRemote')]);
     items.push(['copy', T('menu.copyHash')]);
-    items.push(['copyMessage', T('menu.copyMessage')]);
 
     showMenu(e.clientX, e.clientY, items, function (action) {
         if (action === 'copy' || action === 'copyMessage') {
@@ -4179,11 +4176,10 @@ function showReflogDialog(scope, entries) {
     reflogState = { entries: entries, visibleCount: 20 };
 
     function row(entry) {
-        var tip = entry.ref + '  ' + entry.shortHash + '\n' +
+        var tip = entry.shortHash + '\n' +
             entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
             fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
         return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
-            '<span class="reflog-ref">' + esc(entry.ref) + '</span>' +
             '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
             '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
             '<span class="push-commit-author">' + esc(entry.action) + '</span>' +

@@ -114,6 +114,12 @@ export interface LogOptions {
     branch?: string;
     filters?: LogFilters;
     force?: boolean;
+    /**
+     * Drop every commit reachable from this one, so the walk returns only what
+     * came *after* it (up to `branch`). Used to fill the rows above a rooted
+     * commit list.
+     */
+    excludeAncestorsOf?: string;
 }
 
 export interface BranchDetails {
@@ -151,6 +157,8 @@ type BranchTrackMap = Map<string, { upstream?: string; ahead: number; behind: nu
 export interface FileStat {
     status: string;
     path: string;
+    /** Source path of a rename/copy, absent otherwise. */
+    fromPath?: string;
     added: number;
     deleted: number;
 }
@@ -1199,14 +1207,6 @@ export class GitService {
         }
     }
 
-    /**
-     * Get the diff for a specific commit
-     */
-    async getCommitDiff(hash: string): Promise<string> {
-        assertHash(hash);
-        return (await this.executeGitArgs(['show', '--stat', hash])).trim();
-    }
-
     /** Checkout a single file from a specific commit into working tree */
     async checkoutFileFromCommit(commitHash: string, filePath: string): Promise<void> {
         assertHash(commitHash);
@@ -1419,15 +1419,9 @@ export class GitService {
     }
 
     /**
-     * Print a file's content at a given ref (backs the diff content provider).
-     */
-    async showBlob(ref: string, filePath: string): Promise<string> {
-        return (await this.readBlob(ref, filePath)).trim();
-    }
-
-    /**
-     * Exact file content at a given ref — "Jump to Source" opens this version in
-     * the editor, where trimming leading whitespace would shift every line.
+     * Exact file content at a given ref (backs the diff content provider).
+     * Trimming would shift lines and turn the final newline into a phantom
+     * added line when diffed against the worktree copy.
      */
     async readBlob(ref: string, filePath: string): Promise<string> {
         assertShellSafe(ref, t('label.ref'));
@@ -2083,20 +2077,22 @@ export class GitService {
      * Files differing between two refs (tip-to-tip, two-dot). Used by the push
      * dialog's "全部提交" row and the branch compare dialog's "全部差异" row.
      */
-    async getDiffFilesBetweenRefs(baseRef: string, targetRef: string): Promise<Array<{ path: string; status: string }>> {
+    async getDiffFilesBetweenRefs(baseRef: string, targetRef: string): Promise<Array<{ path: string; status: string; fromPath?: string }>> {
         assertRef(baseRef, t('label.baseRef'));
         assertRef(targetRef, t('label.targetRef'));
         const output = await this.executeGitArgs(['diff', '--name-status', '-z', '-M', `${baseRef}..${targetRef}`]).catch(() => '');
         // name-status -z tokens: status, path; renames: status, src, dst
         const tokens = splitNul(output);
-        const files: Array<{ path: string; status: string }> = [];
+        const files: Array<{ path: string; status: string; fromPath?: string }> = [];
         for (let i = 0; i < tokens.length; i++) {
             const letter = (tokens[i] || 'M').charAt(0);
             let path = tokens[++i] || '';
+            let fromPath: string | undefined;
             if ((letter === 'R' || letter === 'C') && i + 1 < tokens.length) {
+                fromPath = path;
                 path = tokens[++i];
             }
-            if (path) {files.push({ status: letter, path });}
+            if (path) {files.push({ status: letter, path, ...(fromPath ? { fromPath } : {}) });}
         }
         return files;
     }
@@ -2452,6 +2448,20 @@ export class GitService {
     }
 
     /**
+     * How many commits come after `fromHash` on `topRev` (every ref when none is
+     * given). A rooted commit list needs this to ask for the *tail* of that range,
+     * because `git log -n` counts from the tip and `--reverse` only flips the
+     * output, never the limit.
+     */
+    async countCommitsAfter(fromHash: string, topRev?: string): Promise<number> {
+        assertHash(fromHash);
+        if (topRev) {assertRef(topRev);}
+        const output = await this.executeGitArgs(['rev-list', '--count', topRev ?? '--all', '--not', fromHash]);
+        const count = Number.parseInt(output.trim(), 10);
+        return Number.isFinite(count) && count > 0 ? count : 0;
+    }
+
+    /**
      * Get commit graph data for visualization
      * Returns commits with branch/decoration info suitable for rendering a topology graph
      */
@@ -2459,24 +2469,26 @@ export class GitService {
         const limit = opts.limit ?? 20;
         const skip = opts.skip ?? 0;
         const f = opts.filters ?? {};
-        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${f.text ?? ''}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}|${f.path ?? ''}`;
+        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${opts.excludeAncestorsOf ?? ''}|${f.text ?? ''}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}|${f.path ?? ''}`;
         if (!opts.force) {
             const hit = this._graphCache.get(key);
             if (hit) {return hit;}
         }
-        const data = await this._loadGraphData(limit, skip, opts.branch, f);
+        const data = await this._loadGraphData(limit, skip, opts.branch, f, opts.excludeAncestorsOf);
         this._graphCache.set(key, data);
         return data;
     }
 
-    private async _loadGraphData(limit: number, skip: number, branch: string | undefined, f: LogFilters): Promise<GraphData> {
+    private async _loadGraphData(limit: number, skip: number, branch: string | undefined, f: LogFilters, excludeAncestorsOf?: string): Promise<GraphData> {
         const startTime = Date.now();
-        logger.debug(`[GitCharm] _loadGraphData called: limit=${limit}, skip=${skip}, branch=${branch || 'all'}`);
+        logger.debug(`[GitCharm] _loadGraphData called: limit=${limit}, skip=${skip}, branch=${branch || 'all'}, not=${excludeAncestorsOf ?? '-'}`);
         
-        // A hash-like query resolves to that single commit rather than a text search
+        // A hash-like query resolves to that single commit rather than a text search.
+        // Not on a range walk: the fast path drops every other argument, and the
+        // rows above a rooted commit are exactly the arguments that matter.
         const searchText = f.text?.trim();
         const isHashLike = (v: string): boolean => /^[0-9a-f]{4,40}$/i.test(v);
-        const hashSearch = searchText && isHashLike(searchText) ? searchText : undefined;
+        const hashSearch = excludeAncestorsOf ? undefined : (searchText && isHashLike(searchText) ? searchText : undefined);
         if (hashSearch) {
             logger.debug(`[GitCharm] Hash-like search detected (${hashSearch})`);
         }
@@ -2497,6 +2509,11 @@ export class GitService {
                 // Positional revs are validated, not sanitised: argv spawn means no
                 // shell interpolation, and a legal ref can never start with '-'.
                 a.push(useBranch ? assertRef(useBranch) : '--all');
+                if (excludeAncestorsOf) {
+                    // `top --not <hash>` is that hash's descendant set; `..` cannot be
+                    // used because assertRef rejects it (a real ref never contains one).
+                    a.push('--not', assertHash(excludeAncestorsOf));
+                }
             }
             a.push('--topo-order');
             if (searchText && !forHash) {

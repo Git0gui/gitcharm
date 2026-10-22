@@ -2,6 +2,46 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.3] - 2026-10-22
+
+本版把"差异"与"操作记录"两个入口重做了一遍：提交差异换成原生多文件差异视图，差异两侧改按字节精确取内容，blame 的"查看提交"从"单独画一行"改成把整个提交列表改根到那条提交（上下都能滚）。另外新增一个编辑器右键命令，删掉三个重复入口。
+
+### 新增
+
+- **编辑器 / 资源管理器右键"查看差异"**（`idea-git.showWorkingDiff`，`src/extension.ts`）：当前文件与 HEAD 版本放进原生 `vscode.diff`，左侧走 `idea-git-diff` 虚拟文档，未提交的改动一眼可见。贡献点挂在 `editor/context` 与 `explorer/context` 的 `2_changes@1`，`when: resourceScheme == file`；`package.nls.json` / `package.nls.zh-cn.json` 各加一条 `cmd.showWorkingDiff`（en `Show Changes` / zh `查看差异`）。
+- **提交"显示差异"改多文件差异视图**（`commands/commitCommands.ts` → `vscode.changes`）：一条提交改动的全部文件在同一个页签里依次列出，标题带短哈希与提交主题，与 SCM"打开更改"同形。文件清单仍由一次 `diff-tree` 取回，两侧内容通过虚拟文档按需加载——打开含 200 个文件的提交也只起一个进程。合并提交 `diff-tree` 为空时回退到与第一父的 name-status；根提交左侧靠空树哈希自然为空。重命名/复制的左侧要用**旧路径**，所以解析器只在 `R`/`C` 时填 `fromPath`（`services/gitUtils.ts`），`git diff --name-status` 同步补上这一列。行操作只传哈希，标题缺主题时用 `getCommitDetail` 补（详情已有缓存，不多起进程）。第一版曾先落地单文件原生双栏（`vscode.diff` 左父右子、多文件先选），随后被多文件视图取代，同时删掉已无调用方的 `GitService.getCommitDiff`。
+- **blame 的"查看提交"把提交列表改根到那条提交**（`views/graphView.ts` 的 `_revRoot` / `_listRev()`）：第一行不再是"只有这一条"。列表读作 `[它的子提交] / [这条提交] / [它的祖先]`，选中行落在中间，`scrollIntoView({block:'center'})`，加载更多从祖先那条线继续往下翻。`revealCommit` 在**第一个 await 之前**同步写下 `_revRoot={rev,branch}`——聚焦视图会在同一个 tick 里按分支 tip 自己起跑一次加载，那一页晚到就把 reveal 盖掉。`_revRoot` 记着 rooting 时的分支，所以选别的分支、切仓库都让它自己失效；**任何 `_reload` 都必须清掉它**，否则新提交永远进不了这个列表。hash 查不到走 `_dropReveal`（清根 + 重刷 + 一句提示），不把面板留在只有骨架屏的半更新状态。
+- **子提交段**（`countCommitsAfter` + `LogOptions.excludeAncestorsOf`，`services/gitService.ts`）：取区间 `<rev> --not <hash>` 的**尾段**而不是最新那几条——`git log -n` 从 tip 起算，而 `--reverse` 只颠倒输出、**不改计数**（实测某条提交之后有 61 条时 `--reverse -n 5` 仍给最新 5 条），所以先 `rev-list --count` 再 `skip = 数量 - 窗口`。取尾段让这一段最后一行正好是 rooted 提交的子提交，图线不断（实测 `091e77e` 之上第 50 行 `b31aa7d` 的父就是它）。区间写成两个 argv token（`--not`）而不是 `hash..rev`：`assertRef` 禁止 `..`。面板没有向上翻页，所以窗口封顶 `REVEAL_CHILD_WINDOW = 50`，否则定位到 5000 条之前的提交会一次画 5000 行。这一段**不套面板过滤器**——它是上下文，且过滤后的区间长度对不上未过滤的 count，skip 会算错。`_loaded`（下一页的 `--skip`）只数 rooted 页的行数，prepend 的行不计入。`getCommitGraphData` 的缓存键补上 `excludeAncestorsOf`，区间遍历期间禁用 hash 快路径。
+
+### 变更
+
+- **操作记录跟随提交列表所选分支**（`reflogCommands.ts` + webview）：点击工具栏时钟按钮时把 `state.selectedBranch` 发给宿主，没选中时宿主用 `getCurrentBranch()` 兜底，不再固定展示 `HEAD` 的检出历史——用户要读的是"这个分支怎么动"。对话框里的 `HEAD@{n}` 选择器列与对应样式（`media/webview.css`）一并删除。
+- **"查看文件所有历史提交"改走原生时间线**（`commitCommands.ts`）：命令入口保留，实现换成 `files.openTimeline(uri)`，即资源管理器"打开时间线"跑的同一条命令，并把时间线钉在该文件上（`followActiveEditor` 为 false）；自绘的文件历史对话框实现保留但已不可达。
+- **分支右键菜单顺序**（`media/webview.js`）：收藏切换原来钉在菜单第一项、把类型相关操作整体往下挤一行，现在改成操作在前、收藏收尾（实测三种行：当前分支 5+1、其他本地分支 11+1、远程分支 4+1）。"查看操作记录"从三种分支菜单里删掉，入口只剩工具栏那个时钟按钮——它已经跟随所选分支，分支行再放一份只是重复；`action: 'reflog'` 的宿主处理与对话框原样保留。`AGENTS.md` §7 里"本地分支 7 项"的旧计数换成顺序规则。
+- **提交右键菜单去掉"复制提交消息"**：只删菜单项与对应 i18n key，处理分支保留，便于按需恢复。
+- **`view.commitNotFound` 文案**改为"未找到提交"：探测跑的是 `git log -n 1 <hash>`，跟当前分支无关，原来那句"未在当前分支找到提交"是错的。
+
+### 修复
+
+- **差异文档改为字节精确**（`readBlob`，`services/gitService.ts`）：差异两侧原来走 `showBlob()`，它把 `git show` 的输出 `trim()` 了——工作区文件以换行结尾、HEAD 版本却被削掉最后一个 `\n`，于是右栏画出一条绿色的"新增空行"假差异；`trim` 同样会吃掉文件开头的空行与缩进。现在差异两侧与"跳转源码"统一走本来就是精确内容的 `readBlob()`，`showBlob` 与 `raw=1` 分支、`_gitSourceUri` 一并删除。实测：未改动的 `README.md` 与 `package.json` 对 HEAD 打开差异，两侧行号与末尾完全一致、无任何高亮行。
+- **"重置到此提交"从命令面板执行只弹"未选择提交"**：该命令原来只吃行数据，从调色板直接调用没有参数。现在无参时列出最近 50 条提交让用户选，确认文案带上当前分支名（HEAD 可能不在面板展示的分支上），并给 reset 包 `withProgress`。
+- **reveal 的两条首屏路径合一走 `_firstPageRows()`**（`_collect` 与 `_loadAndDisplayCommits`）：后者原来还自己起一次 `getCommitGraphData`，晚到的 `setCommits` 会把上面那段子提交抹掉、选中行跳回第一行。合并后 `_loadAndDisplayCommits` 不再重复查询（顺带少一个子进程和一条 unused-var 告警）。
+- **`_reload` 的清根挪到 `_repoState` 判定之前**：引导页那条早退路径原来会留着 `_revRoot`，是 harness 里两条 FAIL 暴露出来的真实漏洞（fake provider 从未进入 `ready`），不是测试写错。
+
+### 性能
+
+- reveal 的代价是多两个子进程：实测 142 条历史的仓库 45ms → 90–107ms。另用合成线性历史单独测过 `git log <rev> --not <hash> --skip`：5 万条提交、无 commit-graph 时按深度 +51ms（第 500 条）到 +374ms（第 49 990 条），有 commit-graph 约 +45～82ms 且与深度基本无关（同一仓库既有首屏在无 commit-graph 时本身就要 ~175ms，有 graph 约 20ms）。深历史 + 无 commit-graph 是唯一能被感知的组合，后续若要再压成本，方向是提高窗口前先改成按需取子提交段。
+
+### 文档
+
+- `AGENTS.md`：§7 分支菜单计数改顺序规则、reflog 入口唯一化、文件历史走时间线；§8 把 reveal 改根拆成两条硬规则（同步写根 + 任何 `_reload` 清根 / `_dropReveal` 禁止半更新；首屏一律 `_firstPageRows()`、尾段 `countCommitsAfter` + `skip = 数量 - REVEAL_CHILD_WINDOW`、`--not` 而非 `..`、子提交段不套过滤器）。
+- README：中英特性清单同步——`复制提交消息` 从英文清单补删（中文已在上一次改动删掉）、提交差异 / 操作记录 / 文件历史 / blame 跳转四处描述换成新行为、新增"当前文件 vs 最近提交"的右键入口，常用操作表同步；顺带修掉 0.1.1 遗留的过期描述（分支树不再有"收藏 / 最近"两个置顶分组，收藏改成工具栏那个筛选按钮）。中英两节 8 张截图改 jsDelivr CDN（`cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/…`），市场页不再依赖仓库相对路径。`docs/CSDN-GitCharm使用说明.md` 的提交 / Reflog / 文件 / Blame 四节与常用操作表同样跟上。
+
+### 验证
+
+- reveal 的 rooted 列表：stub `vscode` 的 Node harness 19 项断言全过（深 / 浅 reveal、接缝与 `git log` 逐行一致且无重复、`_loaded` 只数 rooted 页、加载更多、tip 形状不变、刷新清根、未选分支走 `--all`、bogus hash 回落、两条首屏路径一致），并在隔离的 Extension Development Host 里实看：tip 带分支徽章停在第一行、选中行在其下方、上下都滚得动。
+- compile / lint（0 error，74 warning 与基线一致）/ test 全绿，289 例。
+
 ## [0.1.2] - 2026-10-21
 
 本版是界面批次（四个对话框的尺寸与排版）加一道安全加固。没有新增 git 子进程路径，首屏逻辑未动。

@@ -1342,7 +1342,7 @@ describe('parseDiffTreeRawNumstat', () => {
         ].join('\0');
         const groups = parseDiffTreeRawNumstat(out);
         assert.deepEqual(groups[0].files, [
-            { status: 'R', path: 'new.txt', added: 0, deleted: 0 }
+            { status: 'R', path: 'new.txt', fromPath: 'old.txt', added: 0, deleted: 0 }
         ]);
     });
 

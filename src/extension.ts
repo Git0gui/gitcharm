@@ -175,11 +175,11 @@ export function activate(ctx: vscode.ExtensionContext) {
                     return '';
                 }
                 try {
-                    // `raw=1` is the "Jump to Source" view, which must keep the file
-                    // byte-for-byte; diff documents keep their trimmed form.
-                    return params.get('raw') === '1'
-                        ? await gitService.readBlob(ref, filePath)
-                        : await gitService.showBlob(ref, filePath);
+                    // Byte-exact in every view: a diff side has to match the
+                    // worktree exactly, and trimming the final newline made
+                    // every unmodified file look like it had an added line
+                    // at the end.
+                    return await gitService.readBlob(ref, filePath);
                 } catch {
                     return '';
                 }
@@ -259,6 +259,37 @@ export function activate(ctx: vscode.ExtensionContext) {
                 );
             } catch (error) {
                 vscode.window.showErrorMessage(t('ext.compareFailed', { error: formatGitError(error) }));
+            }
+        }),
+
+        // --- Editor context menu: uncommitted worktree content vs the last commit ---
+        vscode.commands.registerCommand('idea-git.showWorkingDiff', async (uri?: vscode.Uri) => {
+            const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+            if (!target || target.scheme !== 'file') {
+                vscode.window.showErrorMessage(t('ext.selectFile'));
+                return;
+            }
+            const repoPath = gitService.repositoryPath;
+            if (!repoPath) {
+                vscode.window.showErrorMessage(t('ext.noGitRepo'));
+                return;
+            }
+            const rel = path.relative(repoPath, target.fsPath).replace(/\\/g, '/');
+            if (!rel || rel.startsWith('..')) {
+                vscode.window.showErrorMessage(t('ext.fileNotInRepo'));
+                return;
+            }
+
+            const fileName = rel.split('/').pop() || rel;
+            try {
+                await vscode.commands.executeCommand(
+                    'vscode.diff',
+                    gitBlobUri('HEAD', rel),
+                    target,
+                    `${fileName} (HEAD ↔ ${t('ext.workingTree')})`
+                );
+            } catch (error) {
+                vscode.window.showErrorMessage(t('ext.openDiffFailed', { error: formatGitError(error) }));
             }
         })
     );
