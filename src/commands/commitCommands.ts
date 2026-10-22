@@ -5,6 +5,7 @@ import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
+    gitBlobUri,
     isConflictError,
     combineErrorText,
     tryHandleConflict,
@@ -21,18 +22,50 @@ export function registerCommitCommands(
 ): void {
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.showCommitDiff', async (commit: GitCommit) => {
-            if (!commit) {
+            if (!commit?.hash) {
                 vscode.window.showErrorMessage(t('common.noCommitSelected'));
                 return;
             }
+            const hash = commit.hash;
 
             try {
-                const diff = await gitService.getCommitDiff(commit.hash);
-                const doc = await vscode.workspace.openTextDocument({
-                    content: diff,
-                    language: 'diff'
-                });
-                await vscode.window.showTextDocument(doc);
+                // The editor holds two versions of one file, so a commit that
+                // touched several asks which one; a single-file commit opens
+                // straight away, like Timeline's "Open Changes".
+                const stats = await gitService.getCommitFilesWithStats(hash);
+                const files: Array<{ path: string; description: string }> = stats.length > 0
+                    ? stats.map(f => ({
+                        path: f.path,
+                        description: `${f.status}  +${f.added} -${f.deleted}`
+                    }))
+                    // `diff-tree` prints nothing for a merge commit; comparing
+                    // against its first parent explicitly still gives the files.
+                    : (await gitService.getDiffFilesBetweenRefs(await gitService.getDiffBase(hash), hash))
+                        .map(f => ({ path: f.path, description: f.status }));
+
+                if (files.length === 0) {
+                    vscode.window.showInformationMessage(t('commit.showDiffNoFiles'));
+                    return;
+                }
+
+                let target = files[0];
+                if (files.length > 1) {
+                    const picked = await vscode.window.showQuickPick(
+                        files.map(f => ({ label: f.path, description: f.description })),
+                        { placeHolder: t('commit.showDiffPickFile', { n: files.length }) }
+                    );
+                    if (!picked) {return;}
+                    target = files.find(f => f.path === picked.label) ?? target;
+                }
+
+                const baseRef = await gitService.getDiffBase(hash);
+                const fileName = target.path.split('/').pop() || target.path;
+                await vscode.commands.executeCommand(
+                    'vscode.diff',
+                    gitBlobUri(baseRef, target.path),
+                    gitBlobUri(hash, target.path),
+                    `${fileName} (${hash.substring(0, 7)})`
+                );
             } catch (error) {
                 vscode.window.showErrorMessage(t('commit.showDiffFailed', { error: formatGitError(error) }));
             }
@@ -771,11 +804,29 @@ export function registerCommitCommands(
         }),
 
         vscode.commands.registerCommand('idea-git.resetToCommit', async (commitNode: any) => {
-            const hash = commitNode?.hash ?? commitNode?.commit?.hash;
+            let hash: string | undefined = commitNode?.hash ?? commitNode?.commit?.hash;
+
+            // The command is also listed in the palette, where there is no row to
+            // read a hash from. Ask for the commit there instead of refusing.
             if (!hash) {
-                vscode.window.showErrorMessage(t('common.noCommitSelected'));
-                return;
+                const commits = await gitService.getLog(50);
+                if (commits.length === 0) {
+                    vscode.window.showErrorMessage(t('common.noCommitSelected'));
+                    return;
+                }
+                const picked = await vscode.window.showQuickPick(
+                    commits.map(c => ({
+                        label: c.message || t('commit.noMessage'),
+                        description: c.shortHash,
+                        detail: `${c.author} · ${c.relativeDate}`,
+                        hash: c.hash
+                    })),
+                    { placeHolder: t('commit.resetPickPlaceHolder') }
+                );
+                if (!picked) {return;}
+                hash = picked.hash;
             }
+            const targetHash: string = hash;
 
             const resetModes: Array<{ label: string; value: 'soft' | 'mixed' | 'hard' }> = [
                 { label: t('commit.resetModeSoft'), value: 'soft' },
@@ -786,16 +837,28 @@ export function registerCommitCommands(
 
             if (!mode) {return;}
 
+            // Reset always moves HEAD, which may not be the branch on screen;
+            // naming it here is the only place the user can see that.
+            const branch = await gitService.getCurrentBranch().catch(() => '');
+            const shortHash = targetHash.substring(0, 7);
             const confirm = await vscode.window.showWarningMessage(
-                t('commit.resetConfirm', { hash: hash.substring(0, 7), mode: mode.label.split(' - ')[0] }),
+                t('commit.resetConfirm', {
+                    branch: branch || t('w.worktreeDetached'),
+                    hash: shortHash,
+                    mode: mode.label.split(' - ')[0]
+                }),
                 { modal: true },
                 t('commit.resetBtn')
             );
 
             if (confirm === t('commit.resetBtn')) {
                 try {
-                    await gitService.resetToCommit(hash, mode.value);
-                    vscode.window.showInformationMessage(t('commit.resetSuccess', { hash: hash.substring(0, 7) }));
+                    await vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: t('commit.resetting', { hash: shortHash }),
+                        cancellable: false
+                    }, () => gitService.resetToCommit(targetHash, mode.value));
+                    vscode.window.showInformationMessage(t('commit.resetSuccess', { hash: shortHash }));
                     graphView.refresh();
                 } catch (error) {
                     vscode.window.showErrorMessage(t('commit.resetFailed', { error: formatGitError(error) }));

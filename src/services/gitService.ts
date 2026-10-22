@@ -1199,14 +1199,6 @@ export class GitService {
         }
     }
 
-    /**
-     * Get the diff for a specific commit
-     */
-    async getCommitDiff(hash: string): Promise<string> {
-        assertHash(hash);
-        return (await this.executeGitArgs(['show', '--stat', hash])).trim();
-    }
-
     /** Checkout a single file from a specific commit into working tree */
     async checkoutFileFromCommit(commitHash: string, filePath: string): Promise<void> {
         assertHash(commitHash);

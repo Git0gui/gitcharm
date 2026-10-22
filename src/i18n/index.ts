@@ -338,6 +338,8 @@ const zh: Record<string, string> = {
 
     // commit commands
     'commit.showDiffFailed': '显示提交差异失败: {error}',
+    'commit.showDiffPickFile': '选择要对比的文件（共 {n} 个）',
+    'commit.showDiffNoFiles': '该提交没有可对比的文件改动',
     'commit.promptToBranch': '提交到 "{name}"（已暂存的改动）',
     'commit.promptMessage': '提交信息',
     'commit.messagePlaceHolder': '输入提交信息',
@@ -390,8 +392,10 @@ const zh: Record<string, string> = {
     'commit.resetModeMixed': 'Mixed - 保留改动在工作区（默认）',
     'commit.resetModeHard': 'Hard - 丢弃所有改动',
     'commit.resetModePlaceHolder': '选择重置模式',
-    'commit.resetConfirm': '将当前分支重置到 {hash}（{mode}）？这将重写提交历史。',
+    'commit.resetPickPlaceHolder': '选择要重置到的提交',
+    'commit.resetConfirm': '将当前分支 {branch} 重置到 {hash}（{mode}）？这将重写提交历史。',
     'commit.resetBtn': '重置',
+    'commit.resetting': '正在重置到 {hash}…',
     'commit.resetSuccess': '已重置到 {hash}',
     'commit.resetFailed': '重置失败: {error}',
 
@@ -963,6 +967,8 @@ const en: Record<string, string> = {
 
     // commit commands
     'commit.showDiffFailed': 'Failed to show commit diff: {error}',
+    'commit.showDiffPickFile': 'Select a file to diff ({n} changed)',
+    'commit.showDiffNoFiles': 'This commit has no file changes to diff',
     'commit.promptToBranch': 'Commit to "{name}" (staged changes)',
     'commit.promptMessage': 'Commit message',
     'commit.messagePlaceHolder': 'Enter commit message',
@@ -1015,8 +1021,10 @@ const en: Record<string, string> = {
     'commit.resetModeMixed': 'Mixed - keep changes in working tree (default)',
     'commit.resetModeHard': 'Hard - discard all changes',
     'commit.resetModePlaceHolder': 'Select reset mode',
-    'commit.resetConfirm': 'Reset the current branch to {hash} ({mode})? This rewrites commit history.',
+    'commit.resetPickPlaceHolder': 'Select the commit to reset to',
+    'commit.resetConfirm': 'Reset branch {branch} to {hash} ({mode})? This rewrites commit history.',
     'commit.resetBtn': 'Reset',
+    'commit.resetting': 'Resetting to {hash}…',
     'commit.resetSuccess': 'Reset to {hash}',
     'commit.resetFailed': 'Reset failed: {error}',
 

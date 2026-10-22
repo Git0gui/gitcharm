@@ -4,7 +4,7 @@
 
 > Bring the IntelliJ IDEA Git UI and workflow to VSCode / Qoder.
 
-![GitCharm three-panel git log UI](resources/screenshots/main-view.png)
+![GitCharm three-panel git log UI](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
 
 GitCharm provides a three-panel Git log view:
 
@@ -16,31 +16,31 @@ GitCharm provides a three-panel Git log view:
 
 **Commit context menu (single)** — right-click a commit row for Show Diff / Cherry-Pick / Reset / New Branch, plus Amend message & Drop on HEAD
 
-![Commit context menu](resources/screenshots/commit-context-menu.png)
+![Commit context menu](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu.png)
 
 **Commit context menu (multi-select)** — select several commits then right-click for batch Cherry-Pick / Drop / Squash
 
-![Commit context menu multi-select](resources/screenshots/commit-context-menu-multi.png)
+![Commit context menu multi-select](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu-multi.png)
 
 **Branch context menu** — right-click a branch node for Checkout / Rename / Delete / Merge / Rebase / Push / Pull
 
-![Branch context menu](resources/screenshots/branch-context-menu.png)
+![Branch context menu](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
 **Push dialog** — review outgoing commits and their changed files before pushing: files on top, commit info below, both scrollable; switch flat / tree view in the header (force-push available when behind). All four dialogs (push, compare, reflog, file history) can be resized by dragging their edges, and the push / compare dialogs have draggable splitters between panes; sizes last for the current session only
 
-![Push dialog](resources/screenshots/push-dialog.png)
+![Push dialog](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/push-dialog.png)
 
 **Editor context menu** — GitCharm actions available from the code editor right-click
 
-![Editor context menu](resources/screenshots/editor-context-menu.png)
+![Editor context menu](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/editor-context-menu.png)
 
 **Blame gutter** — click a line number to reveal the last commit that touched it, with a jump-to-commit link
 
-![Blame gutter](resources/screenshots/editor-blame-commit-message.png)
+![Blame gutter](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/editor-blame-commit-message.png)
 
 **Conflict handling** — merge / rebase / cherry-pick conflicts surface in a persistent status bar with Continue / Abort
 
-![Conflict handling](resources/screenshots/conflict-resolution.png)
+![Conflict handling](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/conflict-resolution.png)
 
 ## Features
 
@@ -170,7 +170,7 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 > 在 VSCode / Qoder 中复刻 IntelliJ IDEA 的 Git UI 与工作流。
 
-![GitCharm 三栏式提交图谱界面](resources/screenshots/main-view.png)
+![GitCharm 三栏式提交图谱界面](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
 
 GitCharm 提供一个三栏式的 Git 日志面板：
 
@@ -182,31 +182,31 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 **提交右键菜单（单选）**：提交行右键呼出 显示差异 / 精选提交 / 重置 / 新建分支，HEAD 附近另有 编辑提交信息 与 删除提交
 
-![提交右键菜单](resources/screenshots/commit-context-menu.png)
+![提交右键菜单](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu.png)
 
 **提交右键菜单（多选）**：多选提交后右键，批量 精选提交 / 删除提交 / 合并提交
 
-![提交右键菜单多选](resources/screenshots/commit-context-menu-multi.png)
+![提交右键菜单多选](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu-multi.png)
 
 **分支右键菜单**：分支节点右键呼出 检出 / 重命名 / 删除 / 合并 / 变基 / 推送 / 拉取
 
-![分支右键菜单](resources/screenshots/branch-context-menu.png)
+![分支右键菜单](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
 **推送对话框**：推送前查看待推送提交及其变更文件——上为文件列表、下为提交信息，两块均可上下左右滚动，表头可切换平铺/目录结构（落后远程时可强制推送）。推送、对比、Reflog 与文件历史对话框都可以拖拽边框或内部分隔条调整大小，尺寸只在本次会话生效
 
-![推送对话框](resources/screenshots/push-dialog.png)
+![推送对话框](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/push-dialog.png)
 
 **编辑器右键菜单**：代码编辑器右键可用的 GitCharm 操作
 
-![编辑器右键菜单](resources/screenshots/editor-context-menu.png)
+![编辑器右键菜单](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/editor-context-menu.png)
 
 **行号 Blame**：点击行号查看该行的最后一次提交，并提供跳转到提交的链接
 
-![行号 Blame](resources/screenshots/editor-blame-commit-message.png)
+![行号 Blame](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/editor-blame-commit-message.png)
 
 **冲突处理**：合并 / 变基 / 精选冲突统一在顶部持久状态栏提示，提供 继续 / 终止
 
-![冲突处理](resources/screenshots/conflict-resolution.png)
+![冲突处理](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/conflict-resolution.png)
 
 ## 特性一览
 
