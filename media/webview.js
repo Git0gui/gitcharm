@@ -2245,7 +2245,6 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
     }
     items.push(['openRemoteCommit', T('menu.openOnRemote')]);
     items.push(['copy', T('menu.copyHash')]);
-    items.push(['copyMessage', T('menu.copyMessage')]);
 
     showMenu(e.clientX, e.clientY, items, function (action) {
         if (action === 'copy' || action === 'copyMessage') {

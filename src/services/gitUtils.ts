@@ -358,6 +358,8 @@ export function parsePathFilter(raw: string | undefined): string[] {
 export interface FileStatLike {
     status: string;
     path: string;
+    /** Source path of a rename/copy, absent otherwise. */
+    fromPath?: string;
     added: number;
     deleted: number;
 }
@@ -409,12 +411,20 @@ export function parseDiffTreeRawNumstat(output: string): DiffTreeGroup[] {
             // ":<oldmode> <newmode> <oldsha> <newsha> <status>"; R/C carry two paths.
             const status = token.substring(token.lastIndexOf(' ') + 1).charAt(0) || 'M';
             let path = tokens[++i] || '';
+            let fromPath: string | undefined;
             if ((status === 'R' || status === 'C') && i + 1 < tokens.length) {
+                fromPath = path;
                 path = tokens[++i];
             }
             i++;
             if (path) {
-                current!.files.push({ status, path, added: 0, deleted: 0 });
+                current!.files.push({
+                    status,
+                    path,
+                    ...(fromPath ? { fromPath } : {}),
+                    added: 0,
+                    deleted: 0
+                });
             }
             continue;
         }

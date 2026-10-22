@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { GitService, GitCommit, assertHash } from '../services/gitService';
+import { GitService, GitCommit, FileStat, assertHash } from '../services/gitService';
 import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
@@ -29,43 +29,44 @@ export function registerCommitCommands(
             const hash = commit.hash;
 
             try {
-                // The editor holds two versions of one file, so a commit that
-                // touched several asks which one; a single-file commit opens
-                // straight away, like Timeline's "Open Changes".
+                // One `diff-tree` gives the whole file list; the two sides of
+                // each diff then load lazily through the virtual-document
+                // provider as the multi-diff editor opens a section. That is
+                // the same shape as the SCM view's "Open Changes": no per-file
+                // git call up front, and a 200-file commit still costs one
+                // process to open.
                 const stats = await gitService.getCommitFilesWithStats(hash);
-                const files: Array<{ path: string; description: string }> = stats.length > 0
-                    ? stats.map(f => ({
-                        path: f.path,
-                        description: `${f.status}  +${f.added} -${f.deleted}`
-                    }))
+                const files: Array<Pick<FileStat, 'path' | 'fromPath'>> = stats.length > 0
+                    ? stats
                     // `diff-tree` prints nothing for a merge commit; comparing
                     // against its first parent explicitly still gives the files.
-                    : (await gitService.getDiffFilesBetweenRefs(await gitService.getDiffBase(hash), hash))
-                        .map(f => ({ path: f.path, description: f.status }));
+                    : await gitService.getDiffFilesBetweenRefs(await gitService.getDiffBase(hash), hash);
 
                 if (files.length === 0) {
                     vscode.window.showInformationMessage(t('commit.showDiffNoFiles'));
                     return;
                 }
 
-                let target = files[0];
-                if (files.length > 1) {
-                    const picked = await vscode.window.showQuickPick(
-                        files.map(f => ({ label: f.path, description: f.description })),
-                        { placeHolder: t('commit.showDiffPickFile', { n: files.length }) }
-                    );
-                    if (!picked) {return;}
-                    target = files.find(f => f.path === picked.label) ?? target;
-                }
-
                 const baseRef = await gitService.getDiffBase(hash);
-                const fileName = target.path.split('/').pop() || target.path;
-                await vscode.commands.executeCommand(
-                    'vscode.diff',
-                    gitBlobUri(baseRef, target.path),
-                    gitBlobUri(hash, target.path),
-                    `${fileName} (${hash.substring(0, 7)})`
-                );
+                const root = gitService.repositoryPath;
+                let subject = (commit.message || '').split('\n')[0].trim();
+                if (!subject) {
+                    // Row actions post the hash only; the detail is already in
+                    // the service cache from drawing that row's card.
+                    subject = await gitService.getCommitDetail(hash)
+                        .then(d => (d.message || '').split('\n')[0].trim())
+                        .catch(() => '');
+                }
+                // The multi-diff editor appends its own file count to the title.
+                const title = subject ? `${hash.substring(0, 7)} - ${subject}` : hash.substring(0, 7);
+                const changes: Array<[vscode.Uri, vscode.Uri, vscode.Uri]> = files.map(f => [
+                    // Label only: gives the section its file name and folder.
+                    root ? vscode.Uri.file(path.join(root, f.path)) : gitBlobUri(hash, f.path),
+                    // A rename has to take its left side from the old path.
+                    gitBlobUri(baseRef, f.fromPath ?? f.path),
+                    gitBlobUri(hash, f.path)
+                ]);
+                await vscode.commands.executeCommand('vscode.changes', title, changes);
             } catch (error) {
                 vscode.window.showErrorMessage(t('commit.showDiffFailed', { error: formatGitError(error) }));
             }

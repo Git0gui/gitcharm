@@ -338,7 +338,6 @@ const zh: Record<string, string> = {
 
     // commit commands
     'commit.showDiffFailed': '显示提交差异失败: {error}',
-    'commit.showDiffPickFile': '选择要对比的文件（共 {n} 个）',
     'commit.showDiffNoFiles': '该提交没有可对比的文件改动',
     'commit.promptToBranch': '提交到 "{name}"（已暂存的改动）',
     'commit.promptMessage': '提交信息',
@@ -967,7 +966,6 @@ const en: Record<string, string> = {
 
     // commit commands
     'commit.showDiffFailed': 'Failed to show commit diff: {error}',
-    'commit.showDiffPickFile': 'Select a file to diff ({n} changed)',
     'commit.showDiffNoFiles': 'This commit has no file changes to diff',
     'commit.promptToBranch': 'Commit to "{name}" (staged changes)',
     'commit.promptMessage': 'Commit message',

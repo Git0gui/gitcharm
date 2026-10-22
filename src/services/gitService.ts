@@ -151,6 +151,8 @@ type BranchTrackMap = Map<string, { upstream?: string; ahead: number; behind: nu
 export interface FileStat {
     status: string;
     path: string;
+    /** Source path of a rename/copy, absent otherwise. */
+    fromPath?: string;
     added: number;
     deleted: number;
 }
@@ -2075,20 +2077,22 @@ export class GitService {
      * Files differing between two refs (tip-to-tip, two-dot). Used by the push
      * dialog's "全部提交" row and the branch compare dialog's "全部差异" row.
      */
-    async getDiffFilesBetweenRefs(baseRef: string, targetRef: string): Promise<Array<{ path: string; status: string }>> {
+    async getDiffFilesBetweenRefs(baseRef: string, targetRef: string): Promise<Array<{ path: string; status: string; fromPath?: string }>> {
         assertRef(baseRef, t('label.baseRef'));
         assertRef(targetRef, t('label.targetRef'));
         const output = await this.executeGitArgs(['diff', '--name-status', '-z', '-M', `${baseRef}..${targetRef}`]).catch(() => '');
         // name-status -z tokens: status, path; renames: status, src, dst
         const tokens = splitNul(output);
-        const files: Array<{ path: string; status: string }> = [];
+        const files: Array<{ path: string; status: string; fromPath?: string }> = [];
         for (let i = 0; i < tokens.length; i++) {
             const letter = (tokens[i] || 'M').charAt(0);
             let path = tokens[++i] || '';
+            let fromPath: string | undefined;
             if ((letter === 'R' || letter === 'C') && i + 1 < tokens.length) {
+                fromPath = path;
                 path = tokens[++i];
             }
-            if (path) {files.push({ status: letter, path });}
+            if (path) {files.push({ status: letter, path, ...(fromPath ? { fromPath } : {}) });}
         }
         return files;
     }
