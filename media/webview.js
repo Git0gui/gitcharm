@@ -2108,8 +2108,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['checkout', T('menu.checkout')],
             ['fetch', T('menu.fetchRemote')],
             ['newBranchFrom', T('menu.newBranchFrom')],
-            ['compareBranch', T('menu.compareWithCurrent')],
-            ['reflog', T('menu.reflog')]
+            ['compareBranch', T('menu.compareWithCurrent')]
         ];
     } else if (isCurrent) {
         // Current branch: only show applicable actions
@@ -2118,8 +2117,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['push', T('menu.push')],
             ['newBranchFrom', T('menu.newBranchFrom')],
             ['rename', T('menu.rename')],
-            ['openRemoteBranch', T('menu.openOnRemote')],
-            ['reflog', T('menu.reflog')]
+            ['openRemoteBranch', T('menu.openOnRemote')]
         ];
     } else {
         // Other local branches: full action set
@@ -2134,14 +2132,13 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
             ['compareBranch', T('menu.compareWithCurrent')],
             ['rename', T('menu.rename')],
             ['deleteBranch', T('menu.deleteBranch')],
-            ['openRemoteBranch', T('menu.openOnRemote')],
-            ['reflog', T('menu.reflog')]
+            ['openRemoteBranch', T('menu.openOnRemote')]
         ];
     }
-    
-    // Marking a branch is the one action every kind of row offers, so it goes on
-    // top and the type-specific list keeps its order below it.
-    showMenu(e.clientX, e.clientY, [['toggleFavorite', T(isFavorite ? 'menu.unfavorite' : 'menu.favorite')]].concat(menuItems), function (action) {
+
+    // Marking a branch is the one action every kind of row offers, so the
+    // type-specific list keeps its order on top and the star sits below it.
+    showMenu(e.clientX, e.clientY, menuItems.concat([['toggleFavorite', T(isFavorite ? 'menu.unfavorite' : 'menu.favorite')]]), function (action) {
         vscode.postMessage({ command: 'action', action: action, branch: branch });
     });
 });

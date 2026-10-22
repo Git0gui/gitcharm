@@ -94,7 +94,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **所有搜索输入框（提交消息/作者/日期）回车触发**，不用 input 实时搜索；搜索结果用 `setStatusBarMessage`/`showInformationMessage` 系统提示，不做自定义 hint UI。
 - **日期筛选是一个范围按钮 + 自绘月历**（`#date-trigger` → `.date-popover`）：按住拖动圈选一段时间，反着拖自动归正；不想拖就先点起始日再点结束日（`datePick.pending`，提示语跟着变）。网格固定 6 周，所以跨月拖动落在同一格里、浮层高度不会中途跳动。端点在 webview 内就排好序再发出，**宿主收到的格式不变**（`YYYY-MM-DDT00:00:00` / `T23:59:59`，git 侧仍按 §8 把 `T` 换成空格）；因为结构性选不反，原先的 `w.endBeforeStart` 校验已删。快捷区间 今天／近 7 天／近 30 天／近 1 年，点标题切年视图。**松手只有落在日历内才算完成**：`mouseup` 在浮层外一律视为放弃，否则按下去之后把鼠标移出窗口松手留下的 `dragging`，会在用户下一次点任何东西时提交成一个莫名其妙的区间。
 - 树节点：文件夹单击展开、分支双击切换；折叠指示器用内联 SVG chevron（`currentColor`），不用 ASCII；分支叶子只显示最后一段路径（`data-branch`/tooltip 保留全名，操作用完整 ref）。
-- 右键菜单按类型区分：本地分支 7 项、远程分支 4 项精简。
+- 分支右键菜单按类型区分（远程精简、当前分支只给适用项），**收藏切换固定排在最后一项**，类型相关操作在前。操作记录（reflog）只从工具栏那个时钟按钮进入——它跟随提交列表所选分支，分支行菜单不再重复这一项（`action: 'reflog'` 的宿主分支与对话框都保留，别连带删掉）。
 - tag 显示为 IDEA 风格黄色徽章。
 - 提交时间：<24h 显示相对时间，≥24h 显示 `YYYY-MM-DD HH:mm:ss`；**git log 一律用作者时间（%ai/%ar）**，不用 %ci/%cr（这只管**显示**哪一天；判一组提交谁先谁后见 §8 的 `orderCommitsByHistory`）；committer≠author 时详情额外显示"合入"行。
 - 确认对话框保持简洁（标题+按钮），不堆技术细节。
