@@ -280,6 +280,25 @@
             ]
         }),
         /**
+         * Folded after the file/detail split had been dragged: the drag leaves a
+         * fixed inline flex on the files pane, which used to strand the freed
+         * height as dead space under the folder.
+         */
+        compareDialogCollapsedSplit: Object.assign({}, base, {
+            steps: [
+                {
+                    msg: {
+                        command: 'showCompareDialog',
+                        branchName: 'origin/main',
+                        currentBranch: 'main',
+                        commits: commits.slice(0, 12)
+                    }
+                },
+                { do: 'style', sel: '.push-files-section', prop: 'flex', value: '0 1 160px' },
+                { do: 'click', sel: '.push-detail-toggle' }
+            ]
+        }),
+        /**
          * File context menu for a path that is gone from the working tree: "jump
          * to source" must be greyed out instead of opening a historical blob.
          * The selected commit really did change webview.js, so the row is there;

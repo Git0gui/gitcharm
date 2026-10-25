@@ -2032,6 +2032,10 @@ body.dialog-resizing * {
 .push-detail-section.collapsed { flex: 0 0 26px !important; min-height: 0 !important; }
 .push-detail-section.collapsed .push-detail-body { display: none; }
 .push-detail-section.collapsed .push-detail-head { border-bottom: none; }
+/* A split drag leaves a fixed inline flex on the files pane (setDialogRowSplit).
+   While the info pane is folded that grow:0 would strand the freed height as a
+   dead strip above the actions bar; !important restores the growth. */
+.push-files-panel.detail-collapsed .push-files-section { flex: 1 1 auto !important; }
 .push-files-panel.detail-collapsed .push-split-h { display: none; }
 .push-detail-section .ccard { padding: 10px 12px; }
 .push-detail-section .crow:first-child .hashchip { margin-right: 0; }

@@ -95,6 +95,12 @@
                     var node = document.querySelector(step.sel);
                     if (node) {node.dispatchEvent(new Event(step.type, { bubbles: true }));}
                 }
+                // Reproduces an inline style a drag would have left behind,
+                // without handing scene data a code-execution hook.
+                if (step.do === 'style') {
+                    var styled = document.querySelector(step.sel);
+                    if (styled) {styled.style[step.prop] = step.value;}
+                }
             }, 80 * (i + 1));
         });
     }
