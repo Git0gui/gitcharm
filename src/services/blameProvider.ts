@@ -5,6 +5,8 @@ import { t } from '../i18n';
 
 export interface BlameInfo {
     hash: string;
+    /** Repository-relative path of the blamed file; the panel selects it. */
+    file: string;
     author: string;
     time: number;
     summary: string;
@@ -66,15 +68,17 @@ function measureTextPixels(text: string, fontSize: number): number {
 
 export class BlameProvider implements vscode.Disposable {
     private _decoration: vscode.TextEditorDecorationType;
+    private _endDecoration: vscode.TextEditorDecorationType;
     private readonly _cache = new Map<string, BlameInfo[]>();
     private readonly _active = new Set<string>();
     private readonly _disposables: vscode.Disposable[] = [];
 
     constructor(
         private readonly _git: GitService,
-        private readonly _onReveal: (hash: string) => void
+        private readonly _onReveal: (hash: string, file: string) => void
     ) {
         this._decoration = this._createDecorationType();
+        this._endDecoration = this._createEndDecorationType();
 
         this._disposables.push(vscode.window.onDidChangeVisibleTextEditors(editors => {
             for (const ed of editors) {
@@ -97,19 +101,23 @@ export class BlameProvider implements vscode.Disposable {
             const sel = e.selections[0];
             if (!sel || sel.active.character !== 0) {return;}
             const info = this._cache.get(key)?.[sel.active.line];
-            if (info && !ZERO_HASH.test(info.hash)) {this._onReveal(info.hash);}
+            if (info && !ZERO_HASH.test(info.hash)) {this._onReveal(info.hash, info.file);}
         }));
 
         this._disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('editor.fontFamily') ||
+            const fontChanged = e.affectsConfiguration('editor.fontFamily') ||
                 e.affectsConfiguration('editor.fontSize') ||
-                e.affectsConfiguration('editor.letterSpacing')) {
+                e.affectsConfiguration('editor.letterSpacing');
+            if (!fontChanged && !e.affectsConfiguration('editor.wordWrap')) {return;}
+            if (fontChanged) {
                 this._decoration.dispose();
+                this._endDecoration.dispose();
                 this._decoration = this._createDecorationType();
-                for (const key of this._active) {
-                    const editor = vscode.window.visibleTextEditors.find(ed => ed.document.uri.toString() === key);
-                    if (editor) {this._apply(editor);}
-                }
+                this._endDecoration = this._createEndDecorationType();
+            }
+            for (const key of this._active) {
+                const editor = vscode.window.visibleTextEditors.find(ed => ed.document.uri.toString() === key);
+                if (editor) {this._apply(editor);}
             }
         }));
 
@@ -132,7 +140,7 @@ export class BlameProvider implements vscode.Disposable {
                 md.appendText(info.author);
                 md.appendMarkdown(` · ${fmtRelativeTimeFromEpoch(info.time)} <small>(${fmtDay(info.time)})</small>\n\n`);
                 md.appendMarkdown(`\`${info.hash.substring(0, 8)}\`\n\n`);
-                md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${encodeURIComponent(JSON.stringify([info.hash]))})`);
+                md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${encodeURIComponent(JSON.stringify([info.hash, info.file]))})`);
                 return new vscode.Hover(md);
             }
         }));
@@ -144,11 +152,19 @@ export class BlameProvider implements vscode.Disposable {
         for (const d of this._disposables) {d.dispose();}
         this._disposables.length = 0;
         this._decoration.dispose();
+        this._endDecoration.dispose();
     }
 
     private _createDecorationType(): vscode.TextEditorDecorationType {
         return vscode.window.createTextEditorDecorationType({
             before: { margin: '0 10px 0 0' },
+            rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
+        });
+    }
+
+    private _createEndDecorationType(): vscode.TextEditorDecorationType {
+        return vscode.window.createTextEditorDecorationType({
+            after: { margin: '0 0 0 16px' },
             rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
         });
     }
@@ -161,6 +177,7 @@ export class BlameProvider implements vscode.Disposable {
         if (this._active.has(key)) {
             this._active.delete(key);
             ed.setDecorations(this._decoration, []);
+            ed.setDecorations(this._endDecoration, []);
             return;
         }
 
@@ -198,7 +215,7 @@ export class BlameProvider implements vscode.Disposable {
             const head = /^([0-9a-f]{40}) \d+ (\d+)/.exec(ln);
             if (head) {
                 cur = { hash: head[1], line: parseInt(head[2], 10) };
-                if (!meta.has(cur.hash)) {meta.set(cur.hash, { hash: cur.hash, author: '', time: 0, summary: '' });}
+                if (!meta.has(cur.hash)) {meta.set(cur.hash, { hash: cur.hash, file: rel, author: '', time: 0, summary: '' });}
                 continue;
             }
             if (ln.startsWith('\t')) {
@@ -263,22 +280,53 @@ export class BlameProvider implements vscode.Disposable {
         }
         const fixedWidth = `${Math.ceil(maxPixelWidth) + 4}px`;
 
+        // VS Code lays inline `before` content out on the first visual row only:
+        // every wrapped continuation row starts at the line's left edge, so the
+        // first row's code sits right of the annotation while the rest of the
+        // same logical line sits left of it. The API offers no way to indent
+        // those rows, so as soon as word wrap is on the annotation moves to the
+        // end of the line — nothing injected before the code, nothing to
+        // misalign. With wrap off the IDEA-style left column takes no space from
+        // the text and stays.
+        const wrap = vscode.workspace.getConfiguration('editor', editor.document.uri)
+            .get<string | boolean>('wordWrap', 'off');
+        const atLineEnd = wrap !== 'off' && wrap !== false;
+
         const ranges: vscode.DecorationOptions[] = [];
         for (let i = 0; i < lineCount; i++) {
             const st = styles[i];
             if (!st) {continue;}
-            ranges.push({
-                range: new vscode.Range(i, 0, i, 0),
-                renderOptions: {
-                    before: {
-                        contentText: ` ${texts[i]} `,
-                        backgroundColor: st.bg,
-                        color: st.fg,
-                        width: fixedWidth
+            if (atLineEnd) {
+                const label = texts[i].trim();
+                // Nothing useful to show for an uncommitted line at the end of
+                // the text; an empty pill there would just be noise.
+                if (!label) {continue;}
+                const len = editor.document.lineAt(i).text.length;
+                ranges.push({
+                    range: new vscode.Range(i, len, i, len),
+                    renderOptions: {
+                        after: {
+                            contentText: ` ${label} `,
+                            backgroundColor: st.bg,
+                            color: st.fg
+                        }
                     }
-                }
-            });
+                });
+            } else {
+                ranges.push({
+                    range: new vscode.Range(i, 0, i, 0),
+                    renderOptions: {
+                        before: {
+                            contentText: ` ${texts[i]} `,
+                            backgroundColor: st.bg,
+                            color: st.fg,
+                            width: fixedWidth
+                        }
+                    }
+                });
+            }
         }
-        editor.setDecorations(this._decoration, ranges);
+        editor.setDecorations(this._decoration, atLineEnd ? [] : ranges);
+        editor.setDecorations(this._endDecoration, atLineEnd ? ranges : []);
     }
 }

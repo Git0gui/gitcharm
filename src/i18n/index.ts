@@ -27,6 +27,11 @@ const zh: Record<string, string> = {
     'common.loadMoreCommits': '加载更多 ({n} 个提交)',
     'common.commitCount': '{n} 个提交',
 
+    // dialogs: collapsible detail pane (push / compare)
+    'dialog.detailTitle': '详情',
+    'dialog.hideDetail': '收起详情',
+    'dialog.showDetail': '展开详情',
+
     // relative time
     'time.justNow': '刚刚',
     'time.withinOneMinute': '1分钟内',
@@ -577,10 +582,8 @@ const zh: Record<string, string> = {
     'menu.fileCompareLocal': '与当前本地文件对比',
     'menu.fileCherryPick': '挑选文件',
     'menu.filterByPath': '按此文件过滤提交',
-    'file.jumpToSourceFailed': '无法打开该提交中的文件: {error}',
-    'file.notInCommit': '提交 {ref} 中没有此文件',
-    'file.deletedOpenedParent': '该提交删除了 {file}，已打开删除前的最新版本',
-    'file.openedAtRevision': '{file} · 提交 {ref} 的版本（只读）',
+    'file.jumpToSourceFailed': '无法打开工作区文件: {error}',
+    'file.notOnDisk': '当前工作区中不存在该文件: {file}',
     'preview.openInEditor': '在编辑器中对比',
     'preview.close': '关闭预览',
     'preview.loading': '读取差异…',
@@ -655,6 +658,11 @@ const en: Record<string, string> = {
     'common.noFileChanges': 'No file changes',
     'common.loadMoreCommits': 'Load more ({n} commits)',
     'common.commitCount': '{n} commits',
+
+    // dialogs: collapsible detail pane (push / compare)
+    'dialog.detailTitle': 'Details',
+    'dialog.hideDetail': 'Hide details',
+    'dialog.showDetail': 'Show details',
 
     // relative time
     'time.justNow': 'just now',
@@ -1206,10 +1214,8 @@ const en: Record<string, string> = {
     'menu.fileCompareLocal': 'Compare with Local File',
     'menu.fileCherryPick': 'Cherry-Pick File',
     'menu.filterByPath': 'Filter commits by this file',
-    'file.jumpToSourceFailed': 'Failed to open the file from this commit: {error}',
-    'file.notInCommit': 'This file does not exist in commit {ref}',
-    'file.deletedOpenedParent': '{file} was deleted in this commit; the latest version before deletion was opened',
-    'file.openedAtRevision': '{file} · version from commit {ref} (read-only)',
+    'file.jumpToSourceFailed': 'Failed to open the working-tree file: {error}',
+    'file.notOnDisk': 'This file does not exist in the current workspace: {file}',
     'preview.openInEditor': 'Compare in the editor',
     'preview.close': 'Close preview',
     'preview.loading': 'Loading diff…',

@@ -180,15 +180,21 @@ var state = {
     selectedBranch: INITIAL.selectedBranch || '',
     repoName: INITIAL.repoName || '',
     hasMore: !!INITIAL.hasMore,
+    hasMoreAbove: !!INITIAL.hasMoreAbove,
     headHash: INITIAL.headHash || '',
     inProgress: INITIAL.inProgress || null,
     loadingMore: false,
+    loadingMoreAbove: false,
     bfilter: '',
     favoritesOnly: false,
     highlight: '',
     selectedHash: null,
     selectedHashes: [], // Multi-select support
     lastClickedIndex: -1, // For Shift+click range selection
+    /** File a reveal/blame jump asked to select once its detail arrives. */
+    revealFile: '',
+    /** Paths of the merged file list that exist in the working tree. */
+    multiExistingPaths: [],
     // Which row the arrow keys are on in the tree and file list. Kept as an
     // identity (branch name / path), not an index, so a re-render can put the
     // cursor back on the same thing instead of jumping to another row.
@@ -985,6 +991,8 @@ function loadSelectedDetail() {
     // The file list is about to be replaced, so a diff of one of its rows would
     // describe a file that may not even be in the new commit.
     clearPreview();
+    // A pending reveal-file selection belongs to the reveal, not to this click.
+    state.revealFile = '';
     if (state.selectedHashes.length === 0) {
         state.multiCommits = null;
         state.multiFiles = null;
@@ -1359,7 +1367,7 @@ function renderDetail() {
         // Convert single commit from multiCommits to detail format
         var singleCommit = state.multiCommits[0];
         var singleFiles = state.multiFiles || [];
-        state.detail = { commit: singleCommit, files: singleFiles };
+        state.detail = { commit: singleCommit, files: singleFiles, existingPaths: state.multiExistingPaths || [] };
         // Fall through to normal render
     }
     
@@ -1420,7 +1428,9 @@ function showMenu(x, y, items, onPick) {
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.innerHTML = items.map(function (it) {
-        return '<div class="context-menu-item" data-action="' + esc(it[0]) + '">' + esc(it[1]) + '</div>';
+        var disabled = it[2] === true;
+        return '<div class="context-menu-item' + (disabled ? ' disabled' : '') + '" data-action="' + esc(it[0]) + '"' +
+            (disabled ? ' aria-disabled="true"' : '') + '>' + esc(it[1]) + '</div>';
     }).join('');
     document.body.appendChild(menu);
     var vw = window.innerWidth, vh = window.innerHeight;
@@ -1430,6 +1440,7 @@ function showMenu(x, y, items, onPick) {
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.querySelectorAll('.context-menu-item').forEach(function (item) {
+        if (item.classList.contains('disabled')) {return;}
         item.addEventListener('click', function () {
             onPick(item.getAttribute('data-action'));
             menu.remove();
@@ -1870,6 +1881,26 @@ function setLoader(on) {
     document.getElementById('loader').className = on ? 'on' : '';
 }
 
+/** The mirror of setLoader: a rooted commit list pages upward too. */
+function setTopLoader(on) {
+    state.loadingMoreAbove = on;
+    document.getElementById('top-loader').className = on ? 'on' : '';
+}
+
+/**
+ * A rooted list is short by construction (10 above, the commit, 10 below), so on
+ * a tall panel it may not fill the pane at all. With nothing to scroll there is
+ * no scroll event, and the upward pages above the commit would be unreachable:
+ * ask for the next chunk whenever the list leaves no scrollbar.
+ */
+function fillUpIfNoScroll() {
+    if (!state.hasMoreAbove || state.loadingMoreAbove) {return;}
+    var el = document.getElementById('scroll');
+    if (!el || el.scrollHeight > el.clientHeight) {return;}
+    setTopLoader(true);
+    vscode.postMessage({ command: 'loadMoreUp' });
+}
+
 /* ---------- delayed busy overlays (only show for slow operations) ---------- */
 var busyTimers = {};
 
@@ -1937,8 +1968,14 @@ function setBusy(area, on) {
 }
 document.getElementById('scroll').addEventListener('scroll', function () {
     saveViewState();
-    if (!state.hasMore || state.loadingMore) return;
     var el = document.getElementById('scroll');
+    // Upward paging only exists above a revealed commit. The compensation after a
+    // prepend keeps scrollTop away from the top, so this fires once per gesture.
+    if (state.hasMoreAbove && !state.loadingMoreAbove && el.scrollTop <= 24) {
+        setTopLoader(true);
+        vscode.postMessage({ command: 'loadMoreUp' });
+    }
+    if (!state.hasMore || state.loadingMore) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 30) {
         setLoader(true);
         vscode.postMessage({ command: 'loadMore' });
@@ -2321,10 +2358,15 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     if (window._hideTooltip) window._hideTooltip();
     var path = file.getAttribute('data-path');
     var items = [];
-    // "Source" is the version the selected commit left behind; with a group
-    // selected there is no single such version, so the item stays single-only.
+    // "Source" is the checked-out branch's copy, not the commit's version. A path
+    // that no longer exists in the working tree has no source to open, so the
+    // entry is disabled rather than silently doing nothing or resurrecting a
+    // historical blob.
     if (state.selectedHashes.length <= 1) {
-        items.push(['fileJumpToSource', T('menu.fileJumpToSource')]);
+        var localPaths = state.detail && Array.isArray(state.detail.existingPaths)
+            ? state.detail.existingPaths : null;
+        var hasSource = !localPaths || localPaths.indexOf(path) >= 0;
+        items.push(['fileJumpToSource', T('menu.fileJumpToSource'), !hasSource]);
     }
     items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],
@@ -2563,6 +2605,20 @@ function selectFileRow(row) {
     // A stash's files preview as the cursor moves; a commit's files keep the
     // editor as their only diff surface on this branch.
     if (!isDirRow(row) && state.stashDetail) {requestFilePreview(state.fileCursor);}
+}
+
+/** Select the file a blame/reveal jump asked for, once its detail is painted. */
+function selectRevealedFile() {
+    if (!state.revealFile) {return;}
+    var path = state.revealFile;
+    state.revealFile = '';
+    var rows = fileRowList();
+    for (var i = 0; i < rows.length; i++) {
+        if (!isDirRow(rows[i]) && rows[i].getAttribute('data-path') === path) {
+            selectFileRow(rows[i]);
+            return;
+        }
+    }
 }
 
 function isDirRow(row) {
@@ -3045,6 +3101,10 @@ window.addEventListener('message', function (ev) {
         state.selectedBranch = m.selectedBranch || '';
         if (m.repoName) state.repoName = m.repoName;
         state.hasMore = !!m.hasMore;
+        state.hasMoreAbove = !!m.hasMoreAbove;
+        state.loadingMoreAbove = false;
+        state.revealFile = '';
+        setTopLoader(false);
         state.headHash = m.headHash || '';
         state.inProgress = m.inProgress || null;
         
@@ -3070,12 +3130,14 @@ window.addEventListener('message', function (ev) {
             state.selectedHashes = [];
             state.multiCommits = null;
             state.multiFiles = null;
+            state.multiExistingPaths = [];
         } else {
             state.selectedHash = null;
             state.selectedHashes = []; // Clear multi-select on full data refresh
             state.lastClickedIndex = -1;
             state.multiCommits = null;
             state.multiFiles = null;
+            state.multiExistingPaths = [];
             state.detail = null;
             state.stashDetail = null;
             // The file list this preview belonged to is gone with the selection.
@@ -3120,20 +3182,47 @@ window.addEventListener('message', function (ev) {
         // Re-apply any pending session restore that arrived before (or during) this
         // full re-render — setData cleared selection/folds/scroll above.
         applyRestoreNow();
+        fillUpIfNoScroll();
     } else if (m.command === 'appendCommits') {
         state.commits = state.commits.concat(m.commits || []);
         state.hasMore = !!m.hasMore;
         setLoader(false);
         renderRows(true);
+    } else if (m.command === 'prependCommits') {
+        var added = m.commits || [];
+        state.hasMoreAbove = !!m.hasMoreAbove;
+        setTopLoader(false);
+        if (added.length === 0) { return; }
+        var scrollBox = document.getElementById('scroll');
+        var before = scrollBox.scrollTop;
+        state.commits = added.concat(state.commits);
+        // Lanes are computed top-down over the whole list, so new rows above
+        // cannot be appended to the painted HTML — this needs a full repaint.
+        // Rows have a fixed height, so moving the viewport down by exactly the
+        // inserted rows keeps the commit the user was looking at in place.
+        var prevBehavior = scrollBox.style.scrollBehavior;
+        scrollBox.style.scrollBehavior = 'auto';
+        renderRows();
+        scrollBox.scrollTop = before + added.length * ROW_H;
+        scrollBox.style.scrollBehavior = prevBehavior;
+        fillUpIfNoScroll();
     } else if (m.command === 'loadMoreFailed') {
         // Keep hasMore: the next scroll retries instead of silently ending the list.
         setLoader(false);
+    } else if (m.command === 'loadMoreUpFailed') {
+        // Keep hasMoreAbove for the same reason, on the upward side.
+        setTopLoader(false);
     } else if (m.command === 'setDetail') {
         // A slower answer for a commit the user already clicked away from must
         // not overwrite the panel (revealCommit / refreshFiles can interleave).
         if (!state.selectedHash || m.commit.hash !== state.selectedHash) { return; }
-        state.detail = { commit: m.commit, files: m.files };
+        state.detail = {
+            commit: m.commit,
+            files: m.files,
+            existingPaths: m.existingPaths || []
+        };
         renderDetail();
+        selectRevealedFile();
     } else if (m.command === 'filePreviewResponse') {
         // Clicking another file (or another commit) fires a new request; a patch
         // that finishes late must not paint over the selection that replaced it.
@@ -3164,6 +3253,10 @@ window.addEventListener('message', function (ev) {
         state.lastClickedIndex = -1;
         state.multiCommits = null;
         state.multiFiles = null;
+        state.multiExistingPaths = [];
+        // The blamed file is selected in the changed-files list as soon as this
+        // commit's detail lands; setDetail calls selectRevealedFile().
+        state.revealFile = m.file || '';
         if (state.stashDetail) {
             state.stashDetail = null;
             renderTree();
@@ -3342,6 +3435,7 @@ window.addEventListener('message', function (ev) {
         if (!matches) { return; }
         state.multiCommits = got;
         state.multiFiles = m.files || [];
+        state.multiExistingPaths = m.existingPaths || [];
         renderDetail();
     }
 });
@@ -3457,7 +3551,16 @@ function dialogSidePanelHtml(ids) {
         '<div class="push-files-head" id="' + ids.head + '"></div>' +
         '<div class="push-files-scroll"><div class="push-files-list" id="' + ids.list + '"></div></div>' +
         '</div>' +
-        '<div class="push-detail-section" id="' + ids.detail + '"></div>' +
+        // The info pane gets a header of its own purely to own the collapse
+        // control: its body is rewritten wholesale on every selection, so a
+        // toggle living inside it would be wiped out.
+        '<div class="push-detail-section">' +
+        '<div class="push-detail-head">' +
+        '<span class="push-detail-title">' + T('dialog.detailTitle') + '</span>' +
+        '<button class="push-detail-toggle" aria-expanded="true" data-title="' + esc(T('dialog.hideDetail')) + '">' + I_CARET_D + '</button>' +
+        '</div>' +
+        '<div class="push-detail-body" id="' + ids.detail + '"></div>' +
+        '</div>' +
         '</div>';
 }
 
@@ -3604,6 +3707,19 @@ function pinDialogBox(lay, box) {
     box.style.height = lay.box.h + 'px';
 }
 
+/** Collapse/expand the info pane; the files section absorbs the freed height. */
+function setDialogDetailCollapsed(sec, collapsed) {
+    sec.classList.toggle('collapsed', collapsed);
+    var panel = sec.closest('.push-files-panel');
+    if (panel) {panel.classList.toggle('detail-collapsed', collapsed);}
+    var btn = sec.querySelector('.push-detail-toggle');
+    if (btn) {
+        btn.innerHTML = collapsed ? I_CARET_R : I_CARET_D;
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        btn.setAttribute('data-title', T(collapsed ? 'dialog.showDetail' : 'dialog.hideDetail'));
+    }
+}
+
 function attachDialogResize(overlay, key) {
     var box = overlay.querySelector('.push-dialog-box');
     var body = overlay.querySelector('.push-dialog-body');
@@ -3618,6 +3734,22 @@ function attachDialogResize(overlay, key) {
         box.style.height = lay.box.h + 'px';
         box.style.maxHeight = 'none';
     }
+
+    // Fold-away info pane (push + compare). The fold is remembered per dialog
+    // slot like the dragged sizes, so switching the push target keeps it closed.
+    overlay.querySelectorAll('.push-detail-section').forEach(function (sec) {
+        var btn = sec.querySelector('.push-detail-toggle');
+        if (!btn) {return;}
+        if (lay.detailCollapsed) {setDialogDetailCollapsed(sec, true);}
+        btn.addEventListener('click', function () {
+            var collapsed = !sec.classList.contains('collapsed');
+            // Pin before folding: an unpinned frame shrinks and re-centres, so
+            // the dialog jumps even though only the pane was supposed to move.
+            if (collapsed) {pinDialogBox(lay, box);}
+            lay.detailCollapsed = collapsed;
+            setDialogDetailCollapsed(sec, collapsed);
+        });
+    });
 
     ['e', 's', 'se'].forEach(function (dir) {
         var grip = document.createElement('div');

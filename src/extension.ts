@@ -69,6 +69,10 @@ export function activate(ctx: vscode.ExtensionContext) {
         )
     );
 
+    // The view is created lazily; warming its first page here is what makes the
+    // first open instant. Gated by idea-git.prefetchOnStartup (default on).
+    graphView.prefetchFirstPage();
+
     // Language override ("idea-git.language" setting): re-resolve locale and
     // rebuild the webview so both host and webview strings switch
     ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
@@ -153,12 +157,12 @@ export function activate(ctx: vscode.ExtensionContext) {
     );
 
     // Git-blame annotations in the editor gutter
-    const blameProvider = new BlameProvider(gitService, hash => graphView.revealCommit(hash));
+    const blameProvider = new BlameProvider(gitService, (hash, file) => graphView.revealCommit(hash, file));
     ctx.subscriptions.push(
         blameProvider,
         vscode.commands.registerCommand('idea-git.toggleBlame', () => blameProvider.toggle()),
-        vscode.commands.registerCommand('idea-git.revealCommit', (hash: string) => {
-            if (hash) {graphView.revealCommit(hash);}
+        vscode.commands.registerCommand('idea-git.revealCommit', (hash: string, file?: string) => {
+            if (hash) {graphView.revealCommit(hash, file);}
         })
     );
 

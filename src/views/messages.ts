@@ -67,6 +67,8 @@ export type ExtToWebviewMessage =
         selectedBranch: string;
         repoName: string;
         hasMore: boolean;
+        /** Rows exist above a revealed commit but are not loaded yet. */
+        hasMoreAbove?: boolean;
         headHash: string;
         inProgress?: OperationKind;
         favorites?: string[];
@@ -104,12 +106,20 @@ export type ExtToWebviewMessage =
     }
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
+    | { command: 'prependCommits'; commits: GraphCommit[]; hasMoreAbove: boolean }
     | { command: 'loadMoreFailed' }
+    | { command: 'loadMoreUpFailed' }
     | { command: 'setHeadHash'; headHash: string }
     | { command: 'setInProgress'; inProgress: OperationKind | null }
     | { command: 'setDivergence'; divergence: Record<string, DivergenceEntry> }
     | { command: 'setCurrentBranch'; branch: string }
-    | { command: 'setDetail'; commit: CommitDetail; files: FileStat[] }
+    | {
+        command: 'setDetail';
+        commit: CommitDetail;
+        files: FileStat[];
+        /** Subset of `files` that still exists in the current working tree. */
+        existingPaths: string[];
+    }
     | {
         command: 'filePreviewResponse';
         /**
@@ -130,8 +140,19 @@ export type ExtToWebviewMessage =
         error?: string;
     }
     | { command: 'setFileIconTheme'; pack?: FileIconPack }
-    | { command: 'multiCommitsResponse'; commits: CommitDetail[]; files: FileStat[] }
-    | { command: 'revealCommit'; hash: string }
+    | {
+        command: 'multiCommitsResponse';
+        commits: CommitDetail[];
+        files: FileStat[];
+        /** Subset of the merged `files` that still exists in the working tree. */
+        existingPaths?: string[];
+    }
+    | {
+        command: 'revealCommit';
+        hash: string;
+        /** File to select in the changed-files list, e.g. the blamed file. */
+        file?: string;
+    }
     | { command: 'restoreViewState'; state: PersistedViewState }
     | { command: 'loading'; area: 'rows' | 'detail' | 'branches' | 'search' | 'multiCommits'; on: boolean }
     | { command: 'showDialog'; message: string; actions: string[]; type?: string }
@@ -204,6 +225,7 @@ export type WebviewToExtMessage =
     | { command: 'showStatusBarMessage'; message: string; timeout?: number }
     | { command: 'setFilters'; text?: string; author?: string; from?: string; to?: string; path?: string }
     | { command: 'loadMore' }
+    | { command: 'loadMoreUp' }
     | { command: 'selectCommit'; hash: string; force?: boolean }
     | { command: 'selectCommits'; hashes: string[] }
     | { command: 'selectStash'; index: number }

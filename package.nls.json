@@ -47,6 +47,7 @@
     "cmd.removeWorktree": "Remove Worktree",
     "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "Enable branch info caching for faster startup (cache is persisted and only updated on repository changes or Git operations)",
+    "config.prefetchOnStartup": "Load the first page of the GitCharm panel (commits, branches, HEAD) right after the extension activates, so the panel opens without waiting. Adds a few Git commands at startup; turn off to pay them on first open instead.",
     "config.pullStrategy": "Update strategy when pulling a remote branch",
     "config.pullStrategy.merge": "Use git pull (merge)",
     "config.pullStrategy.rebase": "Use git pull --rebase",

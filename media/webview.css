@@ -784,6 +784,29 @@ svg { flex: none; }
     color: var(--vscode-descriptionForeground, #888);
 }
 #loader.on { display: flex; }
+/* Upward paging indicator. It floats over the rows instead of sitting in the
+   flow: an in-flow loader changes the height above the list, so every page in
+   would first push the rows the user is reading down and then jump them back
+   when the loader hides. */
+#top-loader {
+    display: none;
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    pointer-events: none;
+}
+#top-loader.on { display: flex; }
 .spin {
     width: 14px;
     height: 14px;
@@ -1419,6 +1442,15 @@ canvas.graph-canvas {
     background: var(--vscode-menu-selectionBackground, #094771);
     transform: translateX(2px);
 }
+/* Unavailable actions stay visible (IDEA greys them out) so the menu does not
+   reshuffle by context; they must not read as clickable either. */
+.context-menu-item.disabled,
+.context-menu-item.disabled:hover {
+    opacity: .45;
+    cursor: default;
+    background: transparent;
+    transform: none;
+}
 
 /* ---- custom confirm dialog (theme-aware) ---- */
 .dialog-overlay {
@@ -1586,6 +1618,21 @@ canvas.graph-canvas {
 .push-rz-e:hover, .push-rz-s:hover, .push-rz-se:hover {
     background: var(--vscode-sash-hoverBorder, rgba(0, 122, 204, .55));
 }
+/* "Compare with current branch" is a file-picking surface, so it pins a frame
+   of its own instead of being content-sized like the other dialogs: the commit
+   column only has to be clickable, while the changed-file pane needs the rest of
+   the width and enough height to scroll a real changeset. */
+#compare-dialog .push-dialog-box {
+    width: min(1100px, 94vw);
+    height: min(760px, 88vh);
+    max-height: none;
+}
+#compare-dialog .push-commits-list {
+    width: 340px;
+    max-width: 38%;
+}
+#compare-dialog .push-files-section { flex: 1 1 66%; }
+#compare-dialog .push-detail-section { flex: 0 1 34%; min-height: 120px; }
 /* Column / row dividers. The negative margins make the 7px hit area overlap the
    existing 1px border instead of stealing layout width from either pane. */
 .push-split {
@@ -1940,8 +1987,56 @@ body.dialog-resizing * {
 .push-detail-section {
     flex: 0 1 45%;
     min-height: 96px;
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
+/* Collapse control lives in a header of its own: the body is rewritten on every
+   selection. */
+.push-detail-head {
+    flex: none;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 6px 0 10px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    background: var(--vscode-editorWidget-background, #252526);
+    border-bottom: 1px solid var(--vscode-panel-border, #2a2a2a);
+}
+.push-detail-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.push-detail-toggle {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.push-detail-toggle:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+    color: var(--vscode-foreground, #cccccc);
+}
+.push-detail-body { flex: 1; min-height: 0; overflow: auto; }
+/* !important beats the inline flex a split drag leaves behind (setDialogRowSplit),
+   so a dragged-then-folded pane still folds. */
+.push-detail-section.collapsed { flex: 0 0 26px !important; min-height: 0 !important; }
+.push-detail-section.collapsed .push-detail-body { display: none; }
+.push-detail-section.collapsed .push-detail-head { border-bottom: none; }
+/* A split drag leaves a fixed inline flex on the files pane (setDialogRowSplit).
+   While the info pane is folded that grow:0 would strand the freed height as a
+   dead strip above the actions bar; !important restores the growth. */
+.push-files-panel.detail-collapsed .push-files-section { flex: 1 1 auto !important; }
+.push-files-panel.detail-collapsed .push-split-h { display: none; }
 .push-detail-section .ccard { padding: 10px 12px; }
 .push-detail-section .crow:first-child .hashchip { margin-right: 0; }
 .push-full-hash { font-family: monospace; user-select: text; }
