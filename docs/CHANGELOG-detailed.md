@@ -2,6 +2,37 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.4] - 2026-10-25
+
+本版是打磨批次：blame 定位后的提交列表改成上下各 10 条、两个方向都能翻；blame 注解在自动换行下改放行尾；推送/对比对话框的详情区可以收起；启动即预取首屏；"跳转到源"回到工作区语义。
+
+### 新增
+
+- **启动预取首屏**（`src/extension.ts` → `views/graphView.ts` 的 `prefetchFirstPage` / `_prefetchTask`）：激活后立刻按"能校验到 tip 的记忆分支，否则全部提交"跑一次首屏查询，真正打开面板时 `_firstPageRows` 直接 await 这份结果，省掉点开面板后那一次 `git log` 的等待。配置 `idea-git.prefetchOnStartup`（默认 `true`）可关闭，`package.nls.json` / `package.nls.zh-cn.json` 各一条说明。关闭时这些查询推迟到首次打开面板。
+- **推送 / 对比对话框的详情区可折叠**（`media/webview.js` 的 `dialogSidePanelHtml` + `setDialogDetailCollapsed`）：详情区自带 26px 标题栏（左侧"详情"、右侧箭头），收起后只留这一条，文件区接收释放的高度。两个对话框共用模板，行为天然一致；收起状态进 `dialogLayout`（与拖动尺寸同一份），推送对话框切换远端重建后不回弹。折叠前先 `pinDialogBox`：推送框由内容撑开，不钉住会整体缩小并重新居中。收起时隐藏文件/详情之间的横向分隔条；`.collapsed` 用 `!important` 压住拖过分隔条留下的行内 `flex`。箭头放在标题栏而不是正文里——正文每次选中文件都被 `renderDialogDetail` 整体重写，放在里面会被冲掉。
+
+### 变更
+
+- **reveal 的 rooted 列表上下各 10 条、两向可加载**（`_firstPageRows` 的 `REVEAL_SIDE`、`loadMoreUp` / `prependCommits`）：向下是 root 那条提交起的历史，向上取同样 10 条子提交。向上翻页 `skip = after - above - limit`，插到列表头部时按 `ROW_H` 补 `scrollTop`；泳道是全表自顶向下算的，所以必须整表重画。首屏若列表填不满面板（没有滚动条就没有 scroll 事件，上方永远翻不动），`fillUpIfNoScroll` 在 `setData` / `prependCommits` 之后再要一页。并发上用 `_dataTicket` 实现"最新查询胜出"：聚焦视图自身会起跑一次按分支 tip 的加载，晚到不能盖掉 reveal 的结果；`_collect` 被顶替时连计数器、`_lastInProgress`、`_lastKnownTip`、`_revRoot.above/after` 一起不写。
+- **"跳转到源"回到 IDEA 语义**（`views/graphView.ts` + `services/gitService.ts`）：只打开工作区的文件，不碰历史版本。提交的文件列表带 `existingPaths`（`fs.promises.access` 逐文件判定），工作区里没有的菜单项灰显且不可点；真点了才发现文件已被删（竞态）就提示"当前工作区中不存在该文件"。删掉 `file.notInCommit` / `deletedOpenedParent` / `openedAtRevision` 三条"打开历史版本"文案。
+- **blame 注解按换行开关换位置**（`services/blameProvider.ts`）：内联 `before` 内容只参与第一段可视行的排版，续行一律从行首开始，扩展拿不到可视行、也没有给续行加缩进的 API——所以"左侧固定列 + 续行对齐"在装饰里做不到。现在 `editor.wordWrap` 不是 `off` 时（含 per-language 覆盖）改用 `after` 装饰把"日期 作者"挂在行尾，代码列与续行落在同一条左边线上；`off` 时没有续行，保持左侧固定列。两种装饰类型各建一个，`_apply` 只给当前模式的 `setDecorations`、另一个清空；`editor.wordWrap` 变更时重算，字体变更时两个都重建。未提交行（全零 hash）在行尾模式下直接不画，避免行尾留空色块。
+- **"与当前分支比较"对话框加宽**：容器钉成 `min(1100px, 94vw)` / `min(760px, 88vh)`，提交列表收到 340px，文件区 `flex: 2`、详情 34%，选文件不再挤在一条窄缝里。
+- **回退 blame 的块合并**（`bb004f3`）：撤回"同提交连续行只在块首行标注"的做法，恢复每行都写日期+作者——逐行确认"这行是谁的"才是标注的用处；超长行的错位另行用换行感知处理。
+
+### 修复
+
+- **收起详情后的空白条**（`media/webview.css`）：拖动过文件/详情分隔条后，`setDialogRowSplit` 给文件区留了行内 `flex: 0 1 <h>px`（grow 0）。再点收起，腾出的高度没人接手，折叠条上方留下一条死区。用只挂在 `.push-files-panel.detail-collapsed` 上的 `flex: 1 1 auto !important` 覆盖行内样式；展开后规则失效，拖动过的固定高度照旧还原。
+
+### 文档
+
+- README 中英同步：新增 `idea-git.prefetchOnStartup` 设置项、对话框详情折叠、blame 换行下的注解位置；"跳转到源"由"打开历史版本（只读）"改为工作区文件语义；推送对话框截图说明与"秒开"一条补上收起/预取。
+- `docs/CSDN-GitCharm使用说明.md` 的设置表、Blame 一节与推送/对比对话框说明同步。
+
+### 验证
+
+- compile / lint（0 error，74 warning 与基线一致）/ test 全绿，289 例。
+- 预览 harness 新增 `compareDialogCollapsed` 与 `compareDialogCollapsedSplit` 场景：后者先用受限的 `style` 步（只写单个属性，不走 eval）模拟拆分条留下的行内 flex，再点收起，复现空白条；修复后文件区一直铺到折叠条。`pushDialog` / `pushDialogFirstPush` 两张文档图随详情标题栏重拍。
+
 ## [0.1.3] - 2026-10-22
 
 本版把"差异"与"操作记录"两个入口重做了一遍：提交差异换成原生多文件差异视图，差异两侧改按字节精确取内容，blame 的"查看提交"从"单独画一行"改成把整个提交列表改根到那条提交（上下都能滚）。另外新增一个编辑器右键命令，删掉三个重复入口。

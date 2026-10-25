@@ -26,7 +26,7 @@ GitCharm provides a three-panel Git log view:
 
 ![Branch context menu](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
-**Push dialog** — review outgoing commits and their changed files before pushing: files on top, commit info below, both scrollable; switch flat / tree view in the header (force-push available when behind). All four dialogs (push, compare, reflog, file history) can be resized by dragging their edges, and the push / compare dialogs have draggable splitters between panes; sizes last for the current session only
+**Push dialog** — review outgoing commits and their changed files before pushing: files on top, commit info below, both scrollable; switch flat / tree view in the header (force-push available when behind). All four dialogs (push, compare, reflog, file history) can be resized by dragging their edges, and the push / compare dialogs have draggable splitters between panes, and their detail pane folds away when you want more room for files; sizes last for the current session only
 
 ![Push dialog](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/push-dialog.png)
 
@@ -54,12 +54,12 @@ GitCharm provides a three-panel Git log view:
 - **Tags**: create lightweight or annotated tags on a commit, delete local tags, push a tag to the remote; annotated tags now resolve through the tag object, so their badges show up on the right commit
 - **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes (optionally including untracked files), and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically; click a stash to list its files (untracked included) in the right pane and preview any file's diff before applying
 - **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes
-- **Files**: compare file with another branch, compare with the local working copy, show the current file against its last commit (editor / Explorer right-click), pick a single file from a commit, jump to source at the commit's version (read-only), open the file's cross-branch history in the editor's Timeline, view diff introduced by a single commit
-- **Blame**: inline annotation of last author & date per line, full commit info on hover, and clicking an annotation re-roots the commit list on that commit — its children above, its ancestors below, the commit itself selected in the middle
+- **Files**: compare file with another branch, compare with the local working copy, show the current file against its last commit (editor / Explorer right-click), pick a single file from a commit, jump to the file in your working tree (entries for files that no longer exist there are greyed out), open the file's cross-branch history in the editor's Timeline, view diff introduced by a single commit
+- **Blame**: inline annotation of last author & date per line, full commit info on hover, and clicking an annotation re-roots the commit list on that commit — its children above, its ancestors below, the commit itself selected in the middle. With word wrap on, the annotation sits at the end of each line so wrapped continuations stay aligned; with it off it stays in a fixed left column
 
 ### Performance
 
-- **Instant open**: three-phase progressive loading (skeleton → branches → commits), startup < 10ms
+- **Instant open**: three-phase progressive loading (skeleton → branches → commits), startup < 10ms; the first page is optionally prefetched right after activation, so the panel opens with data already in hand
 - **Filesystem refs**: resolves the git directory (plain clones, linked worktrees, shared `commondir`) and parses its refs (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
 - **No built-in git extension needed**: GitCharm never activates or reads `vscode.git`; branch lists, the current branch and ahead/behind counts all come from our own refs reader and a single `for-each-ref`, so the panel works even with the built-in Git extension disabled
 - **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; a filesystem watch on the git directory drops stale caches when you commit, fetch or switch branches elsewhere
@@ -74,6 +74,7 @@ GitCharm provides a three-panel Git log view:
 - **Favorites**: mark branches from the branch row's context menu, then use the toolbar button to narrow the tree to just those — the button stays highlighted while the filter is on, and tells you how to mark a branch when nothing is favorited yet
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
 - **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs; the header (count + switch) stays pinned while scrolling in any direction
+- **Collapsible details**: in the push and compare dialogs the info pane below the files folds into a single bar with one click, handing its height to the file list; the fold is remembered per dialog for the current session
 - **Theme-aware file icons**: changed files borrow the icons of the active file-icon theme — installed themes as well as the built-in one, font-based and SVG-based alike; folders use a matching two-tone glyph, and the checked-out branch gets a filled branch icon
 - **Never squeezed out**: the graph column is capped and can be hidden entirely (persisted), so repositories with many branches still show full commit messages
 - **Works without a repository**: the panel and the status bar entry are always present; a folder without `.git` gets a guided page that can run `git init` for you
@@ -137,6 +138,7 @@ Search `idea-git` in settings:
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `idea-git.cache.enabled` | Cache branch info for faster startup (persisted; refreshed on repo changes or Git operations) | `true` |
+| `idea-git.prefetchOnStartup` | Load the panel's first page right after activation so it opens without waiting; adds a few Git commands at startup | `true` |
 | `idea-git.pullStrategy` | Update strategy when pulling: `merge` or `rebase` | `merge` |
 | `idea-git.language` | UI language: `auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | Enable debug logging to the extension host console | `false` |
@@ -193,7 +195,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ![分支右键菜单](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
-**推送对话框**：推送前查看待推送提交及其变更文件——上为文件列表、下为提交信息，两块均可上下左右滚动，表头可切换平铺/目录结构（落后远程时可强制推送）。推送、对比、Reflog 与文件历史对话框都可以拖拽边框或内部分隔条调整大小，尺寸只在本次会话生效
+**推送对话框**：推送前查看待推送提交及其变更文件——上为文件列表、下为提交信息，两块均可上下左右滚动，表头可切换平铺/目录结构（落后远程时可强制推送）。推送、对比、Reflog 与文件历史对话框都可以拖拽边框或内部分隔条调整大小，推送与对比框的详情区还能收起；尺寸与收起状态只在本次会话生效
 
 ![推送对话框](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/push-dialog.png)
 
@@ -221,12 +223,12 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **标签**：在提交上新建轻量或附注标签、删除本地标签、推送标签到远端；附注标签会穿过 tag 对象解析到真正的提交，徽章不再贴错位置
 - **贮藏（Stash）**：分支树第三分区列出贮藏栈，工具栏一键贮藏当前改动（可选择一并收走未跟踪文件），行上可应用 / 弹出 / 删除；在终端里 `git stash` 也会自动跟上；单击贮藏即可在第三栏列出其文件（含未跟踪文件），应用或弹出前先预览差异
 - **工作树（Worktree）**：分支树底部列出同一仓库的所有检出，双击在新窗口打开、右键移除；非当前本地分支可一键检出到新工作树。移除前按 git 登记校验，工作树含未提交改动时需再次确认才强制删除
-- **文件**：与其他分支对比此文件、与当前本地文件对比、查看当前文件与最后一次提交的差异（编辑器 / 资源管理器右键）、从提交中挑选单个文件、按该提交的版本跳转到源（只读打开）、跨分支查看该文件的全部历史提交（打开编辑器的文件时间线）、查看单次提交引入的差异
-- **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击把提交列表改根到那条提交——上面是它之后的提交、下面是导致它的提交，选中行落在中间，两个方向都能滚动
+- **文件**：与其他分支对比此文件、与当前本地文件对比、查看当前文件与最后一次提交的差异（编辑器 / 资源管理器右键）、从提交中挑选单个文件、跳转到工作区中的该文件（工作区已不存在的文件菜单项灰显）、跨分支查看该文件的全部历史提交（打开编辑器的文件时间线）、查看单次提交引入的差异
+- **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击把提交列表改根到那条提交——上面是它之后的提交、下面是导致它的提交，选中行落在中间，两个方向都能滚动。开启自动换行时注解显示在行尾，折行的续行不会错位；关闭换行时保持左侧固定列
 
 ### 性能
 
-- **秒开**：三阶段渐进式加载（骨架屏 → 分支 → 提交），启动 < 10ms
+- **秒开**：三阶段渐进式加载（骨架屏 → 分支 → 提交），启动 < 10ms；激活后即预取首屏（可在设置里关闭），打开面板时数据已经就位
 - **直读 refs**：先定位 git 目录（普通克隆、linked worktree、共享 `commondir` 都能解析），再直接读 refs（loose + packed-refs），数百分支也不卡死，避免大量 `git rev-parse` 子进程
 - **不依赖内置 git 扩展**：全程不激活、不读取 `vscode.git`；分支列表、当前分支、超前/落后全部来自自研 refs 读取器 + 单条 `for-each-ref`，禁用内置 Git 扩展也能正常用
 - **智能缓存**：分支信息持久化到工作区状态（Memento），重启后立即可用；对 git 目录做文件监听，在别处提交 / 拉取 / 切分支时自动失效
@@ -241,6 +243,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **收藏分支**：分支行右键打星，工具栏"只看收藏的分支"按钮把树收窄到这些项，筛选生效时按钮高亮；一个都还没收藏时直接告诉你怎么收藏
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
 - **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换；表头（数量 + 切换按钮）在任意方向滚动时保持吸附
+- **详情可收起**：推送与对比对话框下方的详情区点一下折成一条，腾出的高度交给文件列表；收起状态在本次会话内按对话框记住
 - **文件图标跟随主题**：变更文件直接使用当前文件图标主题的图标（已安装主题与内置主题通用，字体型与 SVG 型都支持），文件夹用配套的双色图标，当前分支则显示实心分支图标
 - **不再挤压信息列**：提交图列宽封顶且可整体隐藏（持久化），分支再多的仓库也能看全提交信息
 - **无仓库也能用**：面板与状态栏入口常驻，没有 `.git` 的文件夹会给出引导页，并可一键执行 `git init`
@@ -304,6 +307,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 配置 | 说明 | 默认 |
 |------|------|------|
 | `idea-git.cache.enabled` | 启用分支信息缓存以提高启动速度（缓存持久保存，仅在仓库变化或执行 Git 操作时更新） | `true` |
+| `idea-git.prefetchOnStartup` | 扩展激活后立即预取面板首屏，打开时无需等待；会在启动时多跑几条 Git 命令 | `true` |
 | `idea-git.pullStrategy` | 拉取远程分支的更新策略：`merge`（合并式）或 `rebase`（变基式） | `merge` |
 | `idea-git.language` | 界面显示语言：`auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | 启用调试日志（输出到扩展宿主控制台） | `false` |
