@@ -32,14 +32,14 @@
                     flush();
                 } else if (msg.command === 'selectCommit') {
                     var d = P.details[msg.hash];
-                    if (d) send({ command: 'setDetail', commit: d.commit, files: d.files });
+                    if (d) send(withExisting({ command: 'setDetail', commit: d.commit, files: d.files }, d));
                 } else if (msg.command === 'selectCommits') {
                     // The panel asks for the selection with this one message, whether
                     // it holds one commit or five, so the stub answers both shapes.
                     var hashes = msg.hashes || [];
                     if (hashes.length === 1) {
                         var one = P.details[hashes[0]];
-                        if (one) send({ command: 'setDetail', commit: one.commit, files: one.files });
+                        if (one) send(withExisting({ command: 'setDetail', commit: one.commit, files: one.files }, one));
                     } else {
                         send({
                             command: 'multiCommitsResponse',
@@ -47,6 +47,10 @@
                             files: P.multiFiles || []
                         });
                     }
+                } else if (msg.command === 'getCompareAllFiles') {
+                    send({ command: 'compareFilesResponse', hash: '__all__', files: P.pushFiles['__all__'] });
+                } else if (msg.command === 'getCompareFiles') {
+                    send({ command: 'compareFilesResponse', hash: msg.hash, files: P.pushFiles[msg.hash] || [] });
                 } else if (msg.command === 'selectStash') {
                     send({ command: 'setStashDetail', index: msg.index, files: P.stashFiles[msg.index] || [] });
                 } else if (msg.command === 'saveViewState') {
@@ -72,6 +76,13 @@
         q.forEach(send);
     }
 
+    /** Detail payloads carry the working-tree subset, like the real host; a mock
+     *  detail without one means "everything is still on disk". */
+    function withExisting(msg, d) {
+        msg.existingPaths = d.existingPaths || (d.files || []).map(function (f) { return f.path; });
+        return msg;
+    }
+
     /** Scenes drive real UI state (selection, menus, dialogs) through real events
      *  instead of poking internals, so a captured frame is one a user can reach. */
     function runSteps(steps) {
@@ -80,6 +91,10 @@
                 if (step.msg) { send(step.msg); return; }
                 if (step.do === 'click') fire('click', step.sel, { ctrlKey: !!step.ctrl });
                 if (step.do === 'menu') fire('contextmenu', step.sel, {});
+                if (step.do === 'event') {
+                    var node = document.querySelector(step.sel);
+                    if (node) {node.dispatchEvent(new Event(step.type, { bubbles: true }));}
+                }
             }, 80 * (i + 1));
         });
     }

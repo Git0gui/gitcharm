@@ -784,6 +784,29 @@ svg { flex: none; }
     color: var(--vscode-descriptionForeground, #888);
 }
 #loader.on { display: flex; }
+/* Upward paging indicator. It floats over the rows instead of sitting in the
+   flow: an in-flow loader changes the height above the list, so every page in
+   would first push the rows the user is reading down and then jump them back
+   when the loader hides. */
+#top-loader {
+    display: none;
+    position: absolute;
+    top: 4px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-widget-border, #454545);
+    box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    pointer-events: none;
+}
+#top-loader.on { display: flex; }
 .spin {
     width: 14px;
     height: 14px;
@@ -1419,6 +1442,15 @@ canvas.graph-canvas {
     background: var(--vscode-menu-selectionBackground, #094771);
     transform: translateX(2px);
 }
+/* Unavailable actions stay visible (IDEA greys them out) so the menu does not
+   reshuffle by context; they must not read as clickable either. */
+.context-menu-item.disabled,
+.context-menu-item.disabled:hover {
+    opacity: .45;
+    cursor: default;
+    background: transparent;
+    transform: none;
+}
 
 /* ---- custom confirm dialog (theme-aware) ---- */
 .dialog-overlay {
@@ -1586,6 +1618,21 @@ canvas.graph-canvas {
 .push-rz-e:hover, .push-rz-s:hover, .push-rz-se:hover {
     background: var(--vscode-sash-hoverBorder, rgba(0, 122, 204, .55));
 }
+/* "Compare with current branch" is a file-picking surface, so it pins a frame
+   of its own instead of being content-sized like the other dialogs: the commit
+   column only has to be clickable, while the changed-file pane needs the rest of
+   the width and enough height to scroll a real changeset. */
+#compare-dialog .push-dialog-box {
+    width: min(1100px, 94vw);
+    height: min(760px, 88vh);
+    max-height: none;
+}
+#compare-dialog .push-commits-list {
+    width: 340px;
+    max-width: 38%;
+}
+#compare-dialog .push-files-section { flex: 1 1 66%; }
+#compare-dialog .push-detail-section { flex: 0 1 34%; min-height: 120px; }
 /* Column / row dividers. The negative margins make the 7px hit area overlap the
    existing 1px border instead of stealing layout width from either pane. */
 .push-split {

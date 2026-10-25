@@ -5,6 +5,8 @@ import { t } from '../i18n';
 
 export interface BlameInfo {
     hash: string;
+    /** Repository-relative path of the blamed file; the panel selects it. */
+    file: string;
     author: string;
     time: number;
     summary: string;
@@ -72,7 +74,7 @@ export class BlameProvider implements vscode.Disposable {
 
     constructor(
         private readonly _git: GitService,
-        private readonly _onReveal: (hash: string) => void
+        private readonly _onReveal: (hash: string, file: string) => void
     ) {
         this._decoration = this._createDecorationType();
 
@@ -97,7 +99,7 @@ export class BlameProvider implements vscode.Disposable {
             const sel = e.selections[0];
             if (!sel || sel.active.character !== 0) {return;}
             const info = this._cache.get(key)?.[sel.active.line];
-            if (info && !ZERO_HASH.test(info.hash)) {this._onReveal(info.hash);}
+            if (info && !ZERO_HASH.test(info.hash)) {this._onReveal(info.hash, info.file);}
         }));
 
         this._disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
@@ -132,7 +134,7 @@ export class BlameProvider implements vscode.Disposable {
                 md.appendText(info.author);
                 md.appendMarkdown(` · ${fmtRelativeTimeFromEpoch(info.time)} <small>(${fmtDay(info.time)})</small>\n\n`);
                 md.appendMarkdown(`\`${info.hash.substring(0, 8)}\`\n\n`);
-                md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${encodeURIComponent(JSON.stringify([info.hash]))})`);
+                md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${encodeURIComponent(JSON.stringify([info.hash, info.file]))})`);
                 return new vscode.Hover(md);
             }
         }));
@@ -198,7 +200,7 @@ export class BlameProvider implements vscode.Disposable {
             const head = /^([0-9a-f]{40}) \d+ (\d+)/.exec(ln);
             if (head) {
                 cur = { hash: head[1], line: parseInt(head[2], 10) };
-                if (!meta.has(cur.hash)) {meta.set(cur.hash, { hash: cur.hash, author: '', time: 0, summary: '' });}
+                if (!meta.has(cur.hash)) {meta.set(cur.hash, { hash: cur.hash, file: rel, author: '', time: 0, summary: '' });}
                 continue;
             }
             if (ln.startsWith('\t')) {

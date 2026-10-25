@@ -47,6 +47,7 @@
     "cmd.removeWorktree": "移除工作树",
     "submenu.gitcharm": "GitCharm",
     "config.cacheEnabled": "启用分支信息缓存以提高启动速度（缓存持久保存，仅在仓库变化或执行 Git 操作时更新）",
+    "config.prefetchOnStartup": "扩展激活后立即预取 GitCharm 面板首屏数据（提交、分支、HEAD），面板打开时无需等待。会在启动时多跑几条 Git 命令；关闭后这些查询推迟到首次打开面板。",
     "config.pullStrategy": "拉取远程分支时的更新策略",
     "config.pullStrategy.merge": "使用 git pull（合并式）",
     "config.pullStrategy.rebase": "使用 git pull --rebase（变基式）",

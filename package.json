@@ -370,6 +370,11 @@
           "default": true,
           "description": "%config.cacheEnabled%"
         },
+        "idea-git.prefetchOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.prefetchOnStartup%"
+        },
         "idea-git.pullStrategy": {
           "type": "string",
           "default": "merge",

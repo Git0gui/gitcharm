@@ -249,6 +249,58 @@
                 { do: 'menu', sel: '.bitem[data-branch="feat/system-proxy-hint"]' }
             ]
         }),
+        /**
+         * Compare-with-current-branch: the dialog that has to leave the
+         * changed-file pane enough room to pick a file out of a real changeset.
+         */
+        compareDialog: Object.assign({}, base, {
+            steps: [
+                {
+                    msg: {
+                        command: 'showCompareDialog',
+                        branchName: 'origin/main',
+                        currentBranch: 'main',
+                        commits: commits.slice(0, 12)
+                    }
+                }
+            ]
+        }),
+        /**
+         * File context menu for a path that is gone from the working tree: "jump
+         * to source" must be greyed out instead of opening a historical blob.
+         * The selected commit really did change webview.js, so the row is there;
+         * only `existingPaths` claims it is missing on disk.
+         */
+        fileMenuNoSource: Object.assign({}, base, {
+            steps: [
+                { do: 'click', sel: row('091e77ed2a299884c744ed094c735b7e71702521') },
+                {
+                    msg: {
+                        command: 'setDetail',
+                        commit: details['091e77ed2a299884c744ed094c735b7e71702521'].commit,
+                        files: details['091e77ed2a299884c744ed094c735b7e71702521'].files,
+                        existingPaths: ['media/webview.css', 'src/views/messages.ts', 'src/i18n/index.ts']
+                    }
+                },
+                { do: 'menu', sel: file('media/webview.js') }
+            ]
+        }),
+        /**
+         * Rooted list scrolled to its top: the upward paging pill floats over the
+         * first row while the host fetches the previous chunk. The stub never
+         * answers loadMoreUp, so the captured frame is exactly the loading state.
+         */
+        revealLoader: Object.assign({}, base, {
+            hasMoreAbove: true,
+            steps: [{ do: 'event', type: 'scroll', sel: '#scroll' }]
+        }),
+        /** Same menu with the file still on disk: the entry stays clickable. */
+        fileMenuWithSource: Object.assign({}, base, {
+            steps: [
+                { do: 'click', sel: row('091e77ed2a299884c744ed094c735b7e71702521') },
+                { do: 'menu', sel: file('media/webview.js') }
+            ]
+        }),
         /** Push dialog: outgoing commits on top, their files below. */
         pushDialog: Object.assign({}, base, {
             steps: [
@@ -354,6 +406,7 @@
                 repoName: s.repoName,
                 favorites: s.favorites || [],
                 hasMore: s.hasMore,
+                hasMoreAbove: s.hasMoreAbove,
                 headHash: s.headHash,
                 inProgress: s.inProgress
             };
