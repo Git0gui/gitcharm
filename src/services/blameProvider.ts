@@ -237,13 +237,9 @@ export class BlameProvider implements vscode.Disposable {
         const texts: string[] = new Array(lineCount);
         const styles: Array<{ bg: string; fg: string } | undefined> = new Array(lineCount);
 
-        // IDEA prints a block's date+author on its first line only; repeating it
-        // on every line of a long block is pure noise. Same hash = same commit,
-        // and blame already returns one shared object per hash.
-        let prevHash: string | undefined;
         for (let i = 0; i < lineCount; i++) {
             const b = blame[i];
-            if (!b) {prevHash = undefined; continue;}
+            if (!b) {continue;}
 
             let bg: string, fg: string;
             if (ZERO_HASH.test(b.hash)) {
@@ -254,8 +250,7 @@ export class BlameProvider implements vscode.Disposable {
                 bg = `hsl(210, 55%, ${light}%)`;
                 fg = light < 55 ? '#fff' : '#16202a';
             }
-            texts[i] = b.hash === prevHash ? ' ' : `${fmtRelativeTimeFromEpoch(b.time)} ${b.author}`;
-            prevHash = b.hash;
+            texts[i] = `${fmtRelativeTimeFromEpoch(b.time)} ${b.author}`;
             styles[i] = { bg, fg };
         }
 
