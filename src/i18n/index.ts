@@ -27,6 +27,11 @@ const zh: Record<string, string> = {
     'common.loadMoreCommits': '加载更多 ({n} 个提交)',
     'common.commitCount': '{n} 个提交',
 
+    // dialogs: collapsible detail pane (push / compare)
+    'dialog.detailTitle': '详情',
+    'dialog.hideDetail': '收起详情',
+    'dialog.showDetail': '展开详情',
+
     // relative time
     'time.justNow': '刚刚',
     'time.withinOneMinute': '1分钟内',
@@ -653,6 +658,11 @@ const en: Record<string, string> = {
     'common.noFileChanges': 'No file changes',
     'common.loadMoreCommits': 'Load more ({n} commits)',
     'common.commitCount': '{n} commits',
+
+    // dialogs: collapsible detail pane (push / compare)
+    'dialog.detailTitle': 'Details',
+    'dialog.hideDetail': 'Hide details',
+    'dialog.showDetail': 'Show details',
 
     // relative time
     'time.justNow': 'just now',

@@ -3551,7 +3551,16 @@ function dialogSidePanelHtml(ids) {
         '<div class="push-files-head" id="' + ids.head + '"></div>' +
         '<div class="push-files-scroll"><div class="push-files-list" id="' + ids.list + '"></div></div>' +
         '</div>' +
-        '<div class="push-detail-section" id="' + ids.detail + '"></div>' +
+        // The info pane gets a header of its own purely to own the collapse
+        // control: its body is rewritten wholesale on every selection, so a
+        // toggle living inside it would be wiped out.
+        '<div class="push-detail-section">' +
+        '<div class="push-detail-head">' +
+        '<span class="push-detail-title">' + T('dialog.detailTitle') + '</span>' +
+        '<button class="push-detail-toggle" aria-expanded="true" data-title="' + esc(T('dialog.hideDetail')) + '">' + I_CARET_D + '</button>' +
+        '</div>' +
+        '<div class="push-detail-body" id="' + ids.detail + '"></div>' +
+        '</div>' +
         '</div>';
 }
 
@@ -3698,6 +3707,19 @@ function pinDialogBox(lay, box) {
     box.style.height = lay.box.h + 'px';
 }
 
+/** Collapse/expand the info pane; the files section absorbs the freed height. */
+function setDialogDetailCollapsed(sec, collapsed) {
+    sec.classList.toggle('collapsed', collapsed);
+    var panel = sec.closest('.push-files-panel');
+    if (panel) {panel.classList.toggle('detail-collapsed', collapsed);}
+    var btn = sec.querySelector('.push-detail-toggle');
+    if (btn) {
+        btn.innerHTML = collapsed ? I_CARET_R : I_CARET_D;
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        btn.setAttribute('data-title', T(collapsed ? 'dialog.showDetail' : 'dialog.hideDetail'));
+    }
+}
+
 function attachDialogResize(overlay, key) {
     var box = overlay.querySelector('.push-dialog-box');
     var body = overlay.querySelector('.push-dialog-body');
@@ -3712,6 +3734,22 @@ function attachDialogResize(overlay, key) {
         box.style.height = lay.box.h + 'px';
         box.style.maxHeight = 'none';
     }
+
+    // Fold-away info pane (push + compare). The fold is remembered per dialog
+    // slot like the dragged sizes, so switching the push target keeps it closed.
+    overlay.querySelectorAll('.push-detail-section').forEach(function (sec) {
+        var btn = sec.querySelector('.push-detail-toggle');
+        if (!btn) {return;}
+        if (lay.detailCollapsed) {setDialogDetailCollapsed(sec, true);}
+        btn.addEventListener('click', function () {
+            var collapsed = !sec.classList.contains('collapsed');
+            // Pin before folding: an unpinned frame shrinks and re-centres, so
+            // the dialog jumps even though only the pane was supposed to move.
+            if (collapsed) {pinDialogBox(lay, box);}
+            lay.detailCollapsed = collapsed;
+            setDialogDetailCollapsed(sec, collapsed);
+        });
+    });
 
     ['e', 's', 'se'].forEach(function (dir) {
         var grip = document.createElement('div');

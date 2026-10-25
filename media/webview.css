@@ -1987,8 +1987,52 @@ body.dialog-resizing * {
 .push-detail-section {
     flex: 0 1 45%;
     min-height: 96px;
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
+/* Collapse control lives in a header of its own: the body is rewritten on every
+   selection. */
+.push-detail-head {
+    flex: none;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 6px 0 10px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    background: var(--vscode-editorWidget-background, #252526);
+    border-bottom: 1px solid var(--vscode-panel-border, #2a2a2a);
+}
+.push-detail-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.push-detail-toggle {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.push-detail-toggle:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+    color: var(--vscode-foreground, #cccccc);
+}
+.push-detail-body { flex: 1; min-height: 0; overflow: auto; }
+/* !important beats the inline flex a split drag leaves behind (setDialogRowSplit),
+   so a dragged-then-folded pane still folds. */
+.push-detail-section.collapsed { flex: 0 0 26px !important; min-height: 0 !important; }
+.push-detail-section.collapsed .push-detail-body { display: none; }
+.push-detail-section.collapsed .push-detail-head { border-bottom: none; }
+.push-files-panel.detail-collapsed .push-split-h { display: none; }
 .push-detail-section .ccard { padding: 10px 12px; }
 .push-detail-section .crow:first-child .hashchip { margin-right: 0; }
 .push-full-hash { font-family: monospace; user-select: text; }

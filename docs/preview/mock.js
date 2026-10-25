@@ -265,6 +265,20 @@
                 }
             ]
         }),
+        /** Same dialog with the info pane folded away: the files pane takes it over. */
+        compareDialogCollapsed: Object.assign({}, base, {
+            steps: [
+                {
+                    msg: {
+                        command: 'showCompareDialog',
+                        branchName: 'origin/main',
+                        currentBranch: 'main',
+                        commits: commits.slice(0, 12)
+                    }
+                },
+                { do: 'click', sel: '.push-detail-toggle' }
+            ]
+        }),
         /**
          * File context menu for a path that is gone from the working tree: "jump
          * to source" must be greyed out instead of opening a historical blob.
