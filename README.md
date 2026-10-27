@@ -111,6 +111,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 1. Open a workspace containing a Git repository — a folder without one still opens the panel and offers `git init`
 2. Click the **GitCharm** tab in the bottom panel to reveal the three-panel log view
 3. Tree nodes: single-click folders to expand, **double-click a branch to switch**; right-click a node or commit row for context actions
+4. Toolbar filters (message / author / path / date range) apply on Enter, and the boxes always show what is actually in effect: re-showing the panel no longer leaves empty boxes over a still-filtered list, and clearing a box back to empty applies immediately
 
 ### Common Actions
 
@@ -125,7 +126,8 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | Squash | Multi-select commits → right-click → Squash |
 | Drop / Amend commit | Right-click commit row (only near HEAD) |
 | Compare file with branch | Editor / Explorer right-click → GitCharm → Compare with Branch |
-| Compare file with local copy | Commit detail (third panel) → double-click a file, or right-click → Compare with Local File |
+| Compare a file's change in a commit | Commit detail (third panel) → double-click a file (images, jars and other binary files get a note instead of a text diff) |
+| Compare file with local copy | Commit detail (third panel) → right-click a file → Compare with Local File |
 | Show a file's uncommitted changes | Editor / Explorer right-click → Show Changes |
 | Pick a file from a commit | Commit detail (third panel) → right-click a file → Cherry-Pick File |
 | View file history | Editor / Explorer right-click → GitCharm → View File History (opens the Timeline) |
@@ -280,6 +282,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 1. 打开一个 Git 仓库工作区——没有 `.git` 的文件夹同样能打开面板，并会提供一键 `git init` 引导
 2. 在底部面板点击 **GitCharm** 标签，即可看到三栏日志视图
 3. 树节点：文件夹单击展开、分支**双击切换**；右键节点或提交行呼出对应操作菜单
+4. 工具栏筛选（消息 / 提交人 / 路径 / 日期区间）按回车生效，框里显示的就是当前真正生效的条件：重新显示面板不会再出现"框是空的、列表却还在按上次的词过滤"，把框删空则立刻按不过滤刷新
 
 ### 常用操作
 
@@ -294,7 +297,8 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 压缩提交 | 多选提交 → 右键 → 压缩提交 |
 | 删除 / 改提交信息 | 提交行右键（仅 HEAD 附近可用） |
 | 与其他分支对比文件 | 编辑器 / 资源管理器右键 → GitCharm → 与其他分支对比此文件 |
-| 与本地文件对比 | 第三栏变更文件双击，或右键 → 与当前本地文件对比 |
+| 看某文件在这次提交里的改动 | 第三栏变更文件双击（图片、jar 等二进制文件只给一句提示，不开文本对比） |
+| 与本地文件对比 | 第三栏变更文件右键 → 与当前本地文件对比 |
 | 看当前文件未提交的改动 | 编辑器 / 资源管理器右键 → 查看差异 |
 | 挑选提交中的单个文件 | 第三栏变更文件右键 → 挑选文件 |
 | 查看文件所有历史提交 | 编辑器 / 资源管理器右键 → GitCharm → 查看文件所有历史提交（打开时间线） |
