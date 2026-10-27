@@ -118,11 +118,15 @@ svg { flex: none; }
     background: var(--vscode-editorWidget-background, #252526);
     border-bottom: 1px solid var(--vscode-panel-border, #333);
     flex: none;
-    flex-wrap: wrap;
+    /* One row, always. Wrapping turned the filter bar into a two-tier stack the
+       moment the commit column narrowed; the boxes shrink instead (see the
+       center-column minimum width in webview.js), which is how IDEA's bar behaves. */
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 .tb {
-    flex: 1 1 110px;
-    min-width: 96px;
+    flex: 1 1 0;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -133,6 +137,12 @@ svg { flex: none; }
     border-radius: 6px;
     color: var(--vscode-descriptionForeground);
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* The search box is the primary filter: it keeps the largest share and the only
+   real floor, so narrowing the column eats the secondary boxes before it. */
+#cbar .tb:first-child {
+    flex: 2 1 0;
+    min-width: 90px;
 }
 .tb:focus-within { 
     border-color: var(--vscode-focusBorder, #007fd4);
@@ -237,7 +247,7 @@ svg { flex: none; }
     font-size: 12px;
 }
 .tb select option { background: var(--vscode-dropdown-background, #3c3c3c); }
-.tb.date { flex: 1 1 150px; min-width: 132px; }
+.tb.date { flex: 1 1 0; min-width: 60px; }
 .tb.date.open {
     border-color: var(--vscode-focusBorder, #007fd4);
     box-shadow: 0 0 0 2px rgba(0, 127, 212, 0.15);

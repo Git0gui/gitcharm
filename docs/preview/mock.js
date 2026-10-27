@@ -223,6 +223,17 @@
                 { msg: { command: 'setCommits', commits: [], hasMore: false } }
             ]
         }),
+        /**
+         * Commit column pinned at its minimum (360px): the filter bar stays on one
+         * row — the search box keeps its floor, the secondary boxes shrink toward
+         * their icons — instead of wrapping into a two-tier stack.
+         */
+        narrowBar: Object.assign({}, base, {
+            steps: [
+                { do: 'style', sel: '#left', prop: 'width', value: '430px' },
+                { do: 'style', sel: '#right', prop: 'width', value: '600px' }
+            ]
+        }),
         /** Commit row context menu, single selection. */
         commitMenu: Object.assign({}, base, {
             select: '091e77ed2a299884c744ed094c735b7e71702521',

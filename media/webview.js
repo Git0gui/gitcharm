@@ -321,6 +321,29 @@ function applyRestoreNow() {
         savedPreview.style.flex = 'none';
     }
 
+    // The commit column may not be squeezed below this: the single-row filter bar
+    // has a hard floor (search + three shrunken boxes + three buttons) and wrapping
+    // is gone, so the divider stops instead of crushing it. Matches the CSS mins.
+    var CENTER_MIN_W = 360;
+
+    /**
+     * Widest a branch/detail panel may grow so the commit column between them
+     * keeps CENTER_MIN_W. A hidden detail pane (no-detail) counts as zero, and only
+     * visible resizers are subtracted, so the ceiling tracks the real layout.
+     */
+    function maxSidePanelWidth(panel) {
+        var main = document.getElementById('main');
+        if (!main) {return Infinity;}
+        var other = document.getElementById(panel.id === 'left' ? 'right' : 'left');
+        var otherW = (other && other.offsetParent) ? other.offsetWidth : 0;
+        var resizers = 0;
+        ['resizer-left', 'resizer-right'].forEach(function (id) {
+            var r = document.getElementById(id);
+            if (r && r.offsetParent) {resizers += r.offsetWidth;}
+        });
+        return Math.max(0, main.clientWidth - CENTER_MIN_W - otherW - resizers);
+    }
+
     function setup(resizerId, panelId, minW, invert) {
         var resizer = document.getElementById(resizerId);
         var panel = document.getElementById(panelId);
@@ -334,7 +357,9 @@ function applyRestoreNow() {
             function onMove(e) {
                 var delta = e.clientX - startX;
                 var newW = invert ? startW - delta : startW + delta;
-                panel.style.width = Math.max(minW, newW) + 'px';
+                // The panel's own min wins over the center floor when the window is
+                // too small to honor both — a stuck divider beats an unusable bar.
+                panel.style.width = Math.max(minW, Math.min(newW, maxSidePanelWidth(panel))) + 'px';
             }
             function onUp() {
                 document.removeEventListener('mousemove', onMove);
@@ -384,6 +409,20 @@ function applyRestoreNow() {
     setup('resizer-right', 'right', 180, true);
     setupV('resizer-info', 'd-files', 60, 'filesHeight');
     setupV('resizer-preview', 'd-preview', 80, 'previewHeight');
+
+    // A restored session can carry side widths that leave the commit column under
+    // its floor (the window shrank since they were saved). Pull the panels back in,
+    // detail first as the secondary pane — but only once the layout has a real width
+    // to measure, because a hidden webview reports clientWidth 0 and would collapse.
+    (function clampRestoredWidths() {
+        var main = document.getElementById('main');
+        if (!main || main.clientWidth <= CENTER_MIN_W) {return;}
+        [['right', 180], ['left', 120]].forEach(function (pair) {
+            var p = document.getElementById(pair[0]);
+            if (!p || !p.offsetParent) {return;}
+            p.style.width = Math.max(pair[1], Math.min(p.offsetWidth, maxSidePanelWidth(p))) + 'px';
+        });
+    })();
 })();
 
 var palette = ['#d060a0','#4a90d9','#4ab07a','#d9a04a','#8a6ad0','#4ab0a8','#d0704a','#7a8ab0','#e070b0','#60c0b0','#c0b060','#8070e0'];
