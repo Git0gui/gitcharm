@@ -224,9 +224,19 @@
             ]
         }),
         /**
-         * Commit column pinned at its minimum (360px): the filter bar stays on one
-         * row — the search box keeps its floor, the secondary boxes shrink toward
-         * their icons — instead of wrapping into a two-tier stack.
+         * IDEA's two switches lit inside the search field: the term is handed to git
+         * as an extended regex, case-sensitively. The echo from the host is what
+         * lights them, so the frame is the one a user actually sees after Enter.
+         */
+        searchModes: Object.assign({}, base, {
+            steps: [
+                { msg: { command: 'syncFilters', filters: { text: 'fix|优化', regex: true, caseSensitive: true, author: '', path: '', from: '', to: '' } } }
+            ]
+        }),
+        /**
+         * Commit column pinned at its minimum (360px): four boxes never fit side by
+         * side there, so the secondary three have already folded into the chevron and
+         * the bar stays one row — instead of wrapping into a two-tier stack.
          */
         narrowBar: Object.assign({}, base, {
             steps: [

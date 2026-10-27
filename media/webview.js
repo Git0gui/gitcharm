@@ -1838,6 +1838,14 @@ function syncFilterBadges() {
     setFilterBadge('f-author', !!appliedFilters.author);
     setFilterBadge('f-path', !!appliedFilters.path);
     setFilterBadge('date-range', !!appliedFilters.from || !!appliedFilters.to);
+    // Folded away, those boxes are invisible — the chevron has to say that one of
+    // them is still narrowing the list, or the rows have no visible explanation.
+    var more = document.getElementById('btn-more-filters');
+    if (more) {
+        var folded = !!(filterUi && filterUi.compact);
+        more.classList.toggle('on', folded && !!(appliedFilters.author || appliedFilters.path
+            || appliedFilters.from || appliedFilters.to));
+    }
 }
 
 function setFilterBadge(id, on) {
@@ -1881,6 +1889,11 @@ function applyFilterMirror(m) {
     fillFilterBox('f-search', 'clr-search', f.text || '');
     fillFilterBox('f-author', 'clr-author', f.author || '');
     fillFilterBox('f-path', 'clr-path', f.path || '');
+    // The two search switches are modes, not drafts: whatever the host listed with
+    // is what the buttons must show, or a lit ".*" could mean "not applied".
+    searchMode.regex = !!f.regex;
+    searchMode.caseSensitive = !!f.caseSensitive;
+    syncSearchModeButtons();
     var from = f.from ? String(f.from).slice(0, 10) : '';
     var to = f.to ? String(f.to).slice(0, 10) : '';
     if (!dateRange.from && !dateRange.to) {
@@ -1890,6 +1903,140 @@ function applyFilterMirror(m) {
         syncDateClr();
     }
     recordAppliedFilters({ text: f.text, author: f.author, path: f.path, from: from, to: to });
+}
+
+/* ---------- search modes (IDEA's ".*" and "Cc") ---------- */
+/* Literal by default: -F still matches a substring, it only stops reading ( . *
+   as syntax, which is what the box has always effectively offered. ".*" hands the
+   text to git as an extended regex, "Cc" drops the case folding. Both live on the
+   host with the rest of the filter, so a hidden-and-restored panel agrees. */
+var searchMode = { regex: false, caseSensitive: false };
+
+function syncSearchModeButtons() {
+    var r = document.getElementById('tg-regex');
+    var c = document.getElementById('tg-case');
+    if (r) {r.classList.toggle('on', searchMode.regex);}
+    if (c) {c.classList.toggle('on', searchMode.caseSensitive);}
+}
+
+/* ---------- narrow-column filter overflow ---------- */
+/* Below this the four boxes cannot stay legible side by side, so the secondary
+   three move into a popover behind the chevron — the same nodes, not clones, so
+   their values, listeners and dropdown state travel with them. */
+var COMPACT_CENTER_W = 500;
+var filterUi = { pop: null, compact: false, open: false };
+
+function buildFilterPopover() {
+    var pop = document.createElement('div');
+    pop.className = 'filter-pop';
+    var title = document.createElement('div');
+    title.className = 'filter-pop-title';
+    title.textContent = T('ui.filterMore');
+    pop.appendChild(title);
+    document.body.appendChild(pop);
+    return pop;
+}
+
+function secondaryFilterBoxes() {
+    return ['f-author', 'f-path', 'date-range'].map(function (id) {
+        var el = document.getElementById(id);
+        if (!el) {return null;}
+        return el.classList.contains('tb') ? el : el.closest('.tb');
+    }).filter(Boolean);
+}
+
+function setFilterCompact(on) {
+    var cbar = document.getElementById('cbar');
+    if (!cbar || on === filterUi.compact) {return;}
+    filterUi.compact = on;
+    var pop = filterUi.pop || (filterUi.pop = buildFilterPopover());
+    var boxes = secondaryFilterBoxes();
+    if (on) {
+        boxes.forEach(function (b) {pop.appendChild(b);});
+        cbar.classList.add('compact');
+    } else {
+        // Back into the bar in their original order, ahead of the action buttons.
+        var anchor = document.getElementById('btn-reflog');
+        boxes.forEach(function (b) {cbar.insertBefore(b, anchor);});
+        closeFilterPopover();
+        cbar.classList.remove('compact');
+    }
+    syncFilterBadges();
+}
+
+function positionFilterPopover() {
+    var btn = document.getElementById('btn-more-filters');
+    var pop = filterUi.pop;
+    if (!btn || !pop) {return;}
+    var r = btn.getBoundingClientRect();
+    pop.style.left = Math.max(4, r.left) + 'px';
+    pop.style.top = (r.bottom + 6) + 'px';
+    // Place first, then correct against the rect that was actually rendered: under
+    // a zoomed host a CSS px and a measured px are different scales.
+    for (var i = 0; i < 2; i++) {
+        var got = pop.getBoundingClientRect();
+        var dx = got.right > window.innerWidth - 4 ? got.right - window.innerWidth + 4 : 0;
+        var dy = got.bottom > window.innerHeight - 4 ? got.bottom - window.innerHeight + 4 : 0;
+        if (!dx && !dy) {break;}
+        pop.style.left = (parseFloat(pop.style.left) - dx) + 'px';
+        pop.style.top = (parseFloat(pop.style.top) - dy) + 'px';
+    }
+}
+
+function openFilterPopover() {
+    if (!filterUi.compact) {return;}
+    var pop = filterUi.pop || (filterUi.pop = buildFilterPopover());
+    filterUi.open = true;
+    pop.classList.add('open');
+    positionFilterPopover();
+    var btn = document.getElementById('btn-more-filters');
+    if (btn) {btn.classList.add('open');}
+    if (window._hideTooltip) {window._hideTooltip();}
+}
+
+function closeFilterPopover() {
+    if (!filterUi.open) {return;}
+    filterUi.open = false;
+    if (filterUi.pop) {filterUi.pop.classList.remove('open');}
+    var btn = document.getElementById('btn-more-filters');
+    if (btn) {btn.classList.remove('open');}
+}
+
+function initFilterOverflow() {
+    var center = document.getElementById('center');
+    var btn = document.getElementById('btn-more-filters');
+    if (!center || !btn) {return;}
+    var measure = function () {
+        var w = center.clientWidth;
+        // A hidden webview measures 0; that is not a narrow column.
+        if (w <= 0) {return;}
+        setFilterCompact(w < COMPACT_CENTER_W);
+        if (filterUi.open) {positionFilterPopover();}
+    };
+    measure();
+    if (window.ResizeObserver) {
+        new ResizeObserver(measure).observe(center);
+    } else {
+        window.addEventListener('resize', measure);
+    }
+    btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (filterUi.open) {closeFilterPopover();} else {openFilterPopover();}
+    });
+    document.addEventListener('mousedown', function (e) {
+        if (!filterUi.open) {return;}
+        if (filterUi.pop && filterUi.pop.contains(e.target)) {return;}
+        // The calendar is opened from inside this popover and lives on body: a press
+        // on it must not close the popover that holds its trigger.
+        if (dateUi && dateUi.pop && dateUi.pop.contains(e.target)) {return;}
+        closeFilterPopover();
+    });
+    document.addEventListener('keydown', function (e) {
+        // Capture phase, so this runs before the calendar's own Escape handler:
+        // one press closes the topmost layer only. In the bubble phase the calendar
+        // has already reported itself closed and both popovers would go.
+        if (e.key === 'Escape' && filterUi.open && !(dateUi && dateUi.isOpen)) {closeFilterPopover();}
+    }, true);
 }
 
 /* ---------- events ---------- */
@@ -1907,6 +2054,8 @@ function pushFilters() {
     vscode.postMessage({
         command: 'setFilters',
         text: text,
+        regex: searchMode.regex,
+        caseSensitive: searchMode.caseSensitive,
         author: author,
         path: path,
         from: fromFormatted,
@@ -1914,6 +2063,19 @@ function pushFilters() {
     });
 }
 var debounce;
+document.getElementById('tg-regex').addEventListener('click', function () {
+    searchMode.regex = !searchMode.regex;
+    syncSearchModeButtons();
+    // Re-query straight away: with a word already in the box, the switch is the
+    // answer to "why didn't that match", and making the user press Enter again
+    // hides it.
+    pushFilters();
+});
+document.getElementById('tg-case').addEventListener('click', function () {
+    searchMode.caseSensitive = !searchMode.caseSensitive;
+    syncSearchModeButtons();
+    pushFilters();
+});
 document.getElementById('f-search').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
         pushFilters();
@@ -1946,6 +2108,7 @@ document.getElementById('f-author').addEventListener('blur', function() {
 // endpoints typed into native date fields, whose calendar popup the theme cannot
 // reach (same reason the author box got its own dropdown).
 initDateRange();
+initFilterOverflow();
 document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
 });

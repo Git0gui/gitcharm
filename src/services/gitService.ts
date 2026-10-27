@@ -102,6 +102,10 @@ export interface GraphData {
 
 export interface LogFilters {
     text?: string;
+    /** Search `text` as a regular expression instead of a literal substring. */
+    regex?: boolean;
+    /** Leave `text` case-sensitive (the default search ignores case, like IDEA's "Cc"). */
+    caseSensitive?: boolean;
     author?: string;
     from?: string;
     to?: string;
@@ -2489,7 +2493,7 @@ export class GitService {
         const limit = opts.limit ?? 20;
         const skip = opts.skip ?? 0;
         const f = opts.filters ?? {};
-        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${opts.excludeAncestorsOf ?? ''}|${f.text ?? ''}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}|${f.path ?? ''}`;
+        const key = `${this._repositoryPath ?? ''}|${opts.branch ?? '__all__'}|${limit}|${skip}|${opts.excludeAncestorsOf ?? ''}|${f.text ?? ''}|${f.regex ? 'R' : '-'}${f.caseSensitive ? 'C' : '-'}|${f.author ?? ''}|${f.from ?? ''}|${f.to ?? ''}|${f.path ?? ''}`;
         if (!opts.force) {
             const hit = this._graphCache.get(key);
             if (hit) {return hit;}
@@ -2537,8 +2541,14 @@ export class GitService {
             }
             a.push('--topo-order');
             if (searchText && !forHash) {
-                // Use --grep for commit message search without --fixed-strings to allow partial matching
-                a.push('--regexp-ignore-case', `--grep=${searchText}`);
+                // The search box's two inline toggles (".*" and "Cc"). -F still matches
+                // a substring, so literal mode keeps the fuzzy behaviour the panel has
+                // always had — it only stops treating ( . * as syntax. These flags are
+                // global to the rev walk, so they reach --author too, which was already
+                // case-insensitive here.
+                a.push(f.regex ? '-E' : '-F');
+                if (!f.caseSensitive) {a.push('-i');}
+                a.push(`--grep=${searchText}`);
             }
             if (f.author) {a.push(`--author=${f.author}`);}
             if (f.from) {

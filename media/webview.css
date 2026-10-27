@@ -153,6 +153,37 @@ svg { flex: none; }
 .tb.on {
     border-color: var(--gc-sel-accent);
 }
+/* IDEA's two inline switches inside the search field: ".*" searches as a regular
+   expression, "Cc" keeps the case. They are modes, not filters, so they stay lit
+   while the box is empty — the next word typed is searched the same way. */
+.mode-btn {
+    flex: none;
+    min-width: 20px;
+    height: 18px;
+    padding: 0 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--vscode-descriptionForeground, #888);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.mode-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+    color: var(--vscode-foreground);
+}
+.mode-btn.on {
+    background: var(--vscode-list-activeSelectionBackground, rgba(0, 127, 212, 0.22));
+    color: var(--vscode-textLink-foreground, #4ea3ff);
+    box-shadow: inset 0 0 0 1px var(--gc-sel-accent);
+}
 .tb input, .tb select {
     flex: 1;
     min-width: 0;
@@ -421,7 +452,7 @@ svg { flex: none; }
     color: var(--vscode-foreground);
     transform: scale(1.1);
 }
-#btn-refresh, #btn-reflog, #tg-graph {
+#btn-refresh, #btn-reflog, #tg-graph, #btn-more-filters {
     flex: none;
     width: 30px;
     height: 26px;
@@ -434,6 +465,42 @@ svg { flex: none; }
     color: var(--vscode-foreground);
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* IDEA's overflow chevron: once the commit column is too narrow for four boxes,
+   the secondary filters move into a popover behind this button instead of
+   squeezing the search field to nothing (webview.js: applyFilterCompact). */
+#btn-more-filters { display: none; }
+#cbar.compact #btn-more-filters { display: flex; }
+#btn-more-filters:hover {
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+    transform: translateX(1px);
+}
+#btn-more-filters.open {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    color: var(--vscode-textLink-foreground, #4ea3ff);
+}
+.filter-pop {
+    position: fixed;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    width: 300px;
+    max-width: calc(100vw - 16px);
+    padding: 8px;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-panel-border, #454545);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    /* Below the date calendar (9000) and the tooltip (10000): the calendar is
+       opened from inside this popover and must never sit under it. */
+    z-index: 8500;
+}
+.filter-pop.open { display: flex; }
+.filter-pop .tb { flex: none; width: 100%; }
+.filter-pop-title {
+    color: var(--vscode-descriptionForeground, #888);
+    font-size: 11px;
+    padding: 0 2px 2px;
 }
 #btn-refresh:hover { 
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);

@@ -1103,6 +1103,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     try {
                         this._filters = {
                             text: (message.text || '').trim() || undefined,
+                            regex: !!message.regex,
+                            caseSensitive: !!message.caseSensitive,
                             author: (message.author || '').trim() || undefined,
                             from: message.from || undefined,
                             to: message.to || undefined,
@@ -2046,7 +2048,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         const dropped = this._dropVanishedBranch();
         const rev = this._listRev();
         logger.debug(`[GitCharm] _collect called with branch=${rev || 'all'}, force=${force}`);
-        logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}`);
+        logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}, regex=${this._filters.regex ? 1 : 0}, case=${this._filters.caseSensitive ? 1 : 0}`);
         const [first, details] = await Promise.all([
             this._firstPageRows(force),
             // A vanished branch must also disappear from the tree immediately;
@@ -2537,11 +2539,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         <div class="resizer" id="resizer-left"></div>
         <div id="center">
             <div id="cbar">
-                <label class="tb">
+                <div class="tb search-tb">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14.5" y2="14.5"/></svg>
                     <input id="f-search" type="text" placeholder="${t('ui.searchCommits')}">
                     <button class="clr" style="display:none" id="clr-search" title="${t('ui.clear')}" type="button">&#10005;</button>
-                </label>
+                    <button class="mode-btn" id="tg-regex" type="button" data-title="${t('ui.searchRegex')}">.*</button>
+                    <button class="mode-btn" id="tg-case" type="button" data-title="${t('ui.searchCase')}">Cc</button>
+                </div>
+                <button id="btn-more-filters" type="button" data-title="${t('ui.filterMore')}">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5L10.5 8L6 12.5"/></svg>
+                </button>
                 <div class="tb author-dropdown-wrapper">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="5" r="3"/><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/></svg>
                     <input id="f-author" type="text" placeholder="${t('ui.author')}" autocomplete="off">
