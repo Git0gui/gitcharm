@@ -2,7 +2,22 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
-## [0.1.6] - 2026-10-27
+## [0.1.7] - 2026-10-27
+
+本版只做一件事：把"压缩提交"从"整段并块 + amend HEAD"改成"按相邻段就地折叠"。用户报的现象是压缩早期提交会覆盖到 HEAD 的记录，实测下来这条链上有三个独立缺陷（消息落点、未选提交被挪位、todo 少写一行等于删提交），外加共用排序原语的一处隐性失效，全部有验收用例钉住。
+
+### 修复
+
+- **压缩提交不得改动没选中的提交**（新增 `src/services/squash.ts`，服务层入口换成 `GitService.planSquash()` / `squashGroups()`，命令层 `src/commands/commitCommands.ts` 的 `idea-git.squashCommits`）。旧算法两步都错：① 把选中项从原位置摘出来拼成一个连续块（`others.splice(insertAt, 0, ...squashed)`），中间那些**没被选中**的提交被推到折叠结果之后——实测 4 行的 todo 跑 6 条提交的范围，留下 4 条且 git 不给任何警告；② 编辑好的消息用 `getHeadHash()` + `amendMessage()` 按在 **HEAD** 上，于是压缩 `y`、`z` 改的是最新那条提交的记录，这就是用户看到的"覆盖所有提交到 HEAD"。跨未选提交时更糟：被挪位的提交内容撞上冲突，仓库停在半路的 rebase 里。
+- **新做法**：`planSquashGroups()` 先把选中项按历史顺序排好（`orderHistoryOldestFirst()`），切成"紧挨着的一段一段"（`splitContiguousGroups()` + `foldableGroups()`，长度为 1 的段不成组），每段一次 `rebase -i`：`buildGroupTodo()` 把这一段写成 `pick` + `squash`…，**其余一律留在原位继续 `pick`**（包括段之上到 HEAD 的全部尾巴——todo 不列就是删提交）。段从**新到旧**执行，因为一次 pass 会重写它之后的所有提交，先跑旧的段才能让还没跑的段的哈希继续有效；每段执行前重新读一遍范围（尾巴可能是上一次 pass 刚造出来的新哈希）。选中段起点是根提交时用 `rebase -i --root`（`parentOf()` 返回 null，`x~1` 是 fatal）。
+- **每段一条消息**：`GIT_EDITOR="cp <该段的消息文件>"` —— 一次 pass 里只有那条 `squash` 会打开消息编辑器（纯 `pick` 复用提交自己的消息），所以"一个文件对一段"是成立的，不需要 `exec`（等于往 shell 里塞第二条命令面）也不需要 `edit` 停下再改（一个提交不能在 todo 里出现两次，停下时 HEAD 是**新哈希**，按 sha 对不回原来的段）。命令层**先把所有段的消息问齐再动历史**，中途取消等于没做过。编辑器路径一律走新增的 `shSingleQuote()`（`src/services/gitUtils.ts`）：git 是通过它自带的 sh 启动编辑器的，而本机 `os.tmpdir()` 是 `C:\Users\刘归\AppData\Local\Temp`——单引号让 `$`、反引号、反斜杠全部变成普通字符，POSIX 的 `'` 用 `'\''` 收尾再重开。
+- **压缩消息对话框去掉 60s 墙钟超时**（`GraphViewProvider.showSquashMessageDialog`）。逐段提问之后，旧的回退会变成"用户写到第 61 秒，输入被静默丢掉、操作停在半路"；改成与推送对话框同一套生命周期结算（答案到达／面板隐藏／webview dispose）。
+- **多选提交的早晚不看点击顺序**（`GitService.orderCommitsByHistory()` 现在委托 `orderHistoryOldestFirst()`，仍按文档返回新→旧，7 个调用点契约不变）。它原先依赖 `git rev-list --no-walk --topo-order`，而 `--no-walk` 把"要排的 walk"取消了，git 基本按传入顺序返回——实测线性历史上喂 `b z a y` 得 `b z a y`，喂 7 条得 `b c x y z w a`。也就是说 7 个调用点拿到的是点击顺序，压缩起点、回退顺序、多选差异的左右端点都可能取反。真走一遍 walk（`rev-list --topo-order -n K <roots>`，窗口 200 → 2000 → 不限）再按 wanted 集合筛，才是历史顺序；起点用选中提交本身而不是 HEAD，面板正在看别的分支时同样成立。
+
+### 新增
+
+- **验收测试套件** `src/test/squashAcceptance.test.ts`（node:test + 真实临时仓库，直接跑 `runGit`，无 vscode）。 golden 用例覆盖用户给的两个示例（`x y z w a b c` 里压 `y+z` 得 `x (y+z) w a b c`；跨未选 `w` 压 `y z a b` 得 `x (y+z) w (a+b) c`）、选中到 HEAD、从根提交开始、全选七条、倒着点四个、每段各自的消息（不给消息的段用 git 合并出来的消息）、三条拒绝路径（不相邻／少于两个／不在当前分支历史里），每条都额外断言"历史没被动过"。**还有一组用例专门留档旧算法的错误行为**（消息落在 tip、未选提交被挪到折叠之后、todo 少一行就丢提交），改坏了会立刻撞车。测试夹具按"一个提交一个文件"造历史——都改同一个文件时，被挪位的提交会撞冲突，反而把"顺序错了"这个现象盖住。
+
 
 本版是中间那条筛选栏的对齐批次：搜索框长出 IDEA 自己的两个模式开关，窄列不再叠排而是把二级筛选搬进 `>` 浮层，另加"筛选删空"的出口与只读历史版本入口。选中态加强是同批里最先落地的一条，也先于这批改了工具栏的行内密度。
 
