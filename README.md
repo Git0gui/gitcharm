@@ -9,7 +9,7 @@
 GitCharm provides a three-panel Git log view:
 
 - **Left · Branch tree** — hierarchical tree grouped by `HEAD / Local / Remote`, plus stash and worktree sections at the bottom, ahead/behind arrows (▲▼) and commit-count badges; a toolbar button narrows the tree to the branches you favorited
-- **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / path / date-range filters
+- **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / path / date-range filters (the search box carries `.*` and `Cc` switches for regex and case-sensitive matching)
 - **Right · Commit details** — full commit info, changed file list (added/deleted line counts) and diff entry
 
 ## Screenshots
@@ -54,7 +54,7 @@ GitCharm provides a three-panel Git log view:
 - **Tags**: create lightweight or annotated tags on a commit, delete local tags, push a tag to the remote; annotated tags now resolve through the tag object, so their badges show up on the right commit
 - **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes (optionally including untracked files), and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically; click a stash to list its files (untracked included) in the right pane and preview any file's diff before applying
 - **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes
-- **Files**: compare file with another branch, compare with the local working copy, show the current file against its last commit (editor / Explorer right-click), pick a single file from a commit, jump to the file in your working tree (entries for files that no longer exist there are greyed out), open the file's cross-branch history in the editor's Timeline, view diff introduced by a single commit
+- **Files**: compare file with another branch, compare with the local working copy, show the current file against its last commit (editor / Explorer right-click), pick a single file from a commit, jump to the file in your working tree (entries for files that no longer exist there are greyed out), **open the file exactly as it stood in that commit — read-only and scrolled to the first line the commit touched**, which is how you read code the working tree no longer has, open the file's cross-branch history in the editor's Timeline, view diff introduced by a single commit
 - **Blame**: inline annotation of last author & date per line, full commit info on hover, and clicking an annotation re-roots the commit list on that commit — its children above, its ancestors below, the commit itself selected in the middle. With word wrap on, the annotation sits at the end of each line so wrapped continuations stay aligned; with it off it stays in a fixed left column
 
 ### Performance
@@ -72,13 +72,16 @@ GitCharm provides a three-panel Git log view:
 - **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list
 - **Keyboard navigation**: Tab moves between the branch tree, commit list and file pane; arrows walk rows, Home / End / PageUp / PageDown jump, Enter opens the diff, and Shift+arrows extend a commit range
 - **Favorites**: mark branches from the branch row's context menu, then use the toolbar button to narrow the tree to just those — the button stays highlighted while the filter is on, and tells you how to mark a branch when nothing is favorited yet
+- **IDEA-style search box**: `.*` treats the keyword as an extended regular expression and `Cc` makes it case-sensitive, both living inside the box so the rule you are searching under is visible while you type. The default is a literal substring match — `( . *` are characters, not syntax — and both switches are part of the filter, so they survive re-showing the panel, a branch switch and a cached page
+- **The filter bar never wraps**: when the commit column narrows, author / path / date move into a `>` popover instead of stacking into two rows and eating a screenful of the list. The chevron lights up when a filter you cannot currently see is still in effect, and the commit column has a minimum width the splitter will not let you squeeze past
+- **An exit for an empty result**: nothing matched means the empty state hands you a "clear all filters" button, and every filter that is actually applied puts an accent edge on its own toolbar control — a short list always has a reason
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
 - **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs; the header (count + switch) stays pinned while scrolling in any direction
 - **Collapsible details**: in the push and compare dialogs the info pane below the files folds into a single bar with one click, handing its height to the file list; the fold is remembered per dialog for the current session
 - **Theme-aware file icons**: changed files borrow the icons of the active file-icon theme — installed themes as well as the built-in one, font-based and SVG-based alike; folders use a matching two-tone glyph, and the checked-out branch gets a filled branch icon
 - **Never squeezed out**: the graph column is capped and can be hidden entirely (persisted), so repositories with many branches still show full commit messages
 - **Works without a repository**: the panel and the status bar entry are always present; a folder without `.git` gets a guided page that can run `git init` for you
-- **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges
+- **IDEA-style visuals**: 6–12px radii, smooth transitions, hover micro-animations, yellow tag badges — and a selected row you cannot miss: over the theme's selection colour come a blue wash, an accent bar on the reading side and a bolder label, which matters in light themes where the selection colour almost equals the editor background
 - **Pre-rebase check**: detects uncommitted changes before rebasing to avoid failures
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts are detected in one place, a persistent top status bar offers Continue / Abort, and the conflicted files are opened directly in the editor (up to 10 tabs) so the built-in merge-conflict code lenses can be used — the panel never switches you into another view
 - **The panel follows real git state**: resolve the conflicts and commit in your own terminal and the operation bar retracts on its own once git's state files are gone, while the commit list reloads as soon as the displayed branch tip moves — keeping your selection, detail panel, folds and scroll position instead of jumping back to the top
@@ -111,7 +114,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 1. Open a workspace containing a Git repository — a folder without one still opens the panel and offers `git init`
 2. Click the **GitCharm** tab in the bottom panel to reveal the three-panel log view
 3. Tree nodes: single-click folders to expand, **double-click a branch to switch**; right-click a node or commit row for context actions
-4. Toolbar filters (message / author / path / date range) apply on Enter, and the boxes always show what is actually in effect: re-showing the panel no longer leaves empty boxes over a still-filtered list, and clearing a box back to empty applies immediately
+4. Toolbar filters (message / author / path / date range) apply on Enter, and the boxes always show what is actually in effect: re-showing the panel no longer leaves empty boxes over a still-filtered list, and clearing a box back to empty applies immediately. The search box carries its own `.*` / `Cc` switches, and when the column gets narrow the other three move behind `>`
 
 ### Common Actions
 
@@ -127,6 +130,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | Drop / Amend commit | Right-click commit row (only near HEAD) |
 | Compare file with branch | Editor / Explorer right-click → GitCharm → Compare with Branch |
 | Compare a file's change in a commit | Commit detail (third panel) → double-click a file (images, jars and other binary files get a note instead of a text diff) |
+| Read a file as it stood in a commit | Commit detail (third panel) → right-click a file → Open Historical Version (Read-only) — lands on the first line the commit touched, and works for files the working tree no longer has |
 | Compare file with local copy | Commit detail (third panel) → right-click a file → Compare with Local File |
 | Show a file's uncommitted changes | Editor / Explorer right-click → Show Changes |
 | Pick a file from a commit | Commit detail (third panel) → right-click a file → Cherry-Pick File |
@@ -180,7 +184,7 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 GitCharm 提供一个三栏式的 Git 日志面板：
 
 - **左栏 · 分支树**：按 `HEAD / 本地 / 远程` 分组的层级树，底部另列贮藏与工作树，带超前/落后箭头（▲▼）与提交数徽标；工具栏可把树收窄到收藏的分支
-- **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 路径 / 日期区间筛选
+- **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 路径 / 日期区间筛选（搜索框内嵌 `.*` 正则与 `Cc` 区分大小写两个开关）
 - **右栏 · 提交详情**：选中提交的完整信息、变更文件列表（增删行数）与差异入口
 
 ## 界面截图
@@ -225,7 +229,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **标签**：在提交上新建轻量或附注标签、删除本地标签、推送标签到远端；附注标签会穿过 tag 对象解析到真正的提交，徽章不再贴错位置
 - **贮藏（Stash）**：分支树第三分区列出贮藏栈，工具栏一键贮藏当前改动（可选择一并收走未跟踪文件），行上可应用 / 弹出 / 删除；在终端里 `git stash` 也会自动跟上；单击贮藏即可在第三栏列出其文件（含未跟踪文件），应用或弹出前先预览差异
 - **工作树（Worktree）**：分支树底部列出同一仓库的所有检出，双击在新窗口打开、右键移除；非当前本地分支可一键检出到新工作树。移除前按 git 登记校验，工作树含未提交改动时需再次确认才强制删除
-- **文件**：与其他分支对比此文件、与当前本地文件对比、查看当前文件与最后一次提交的差异（编辑器 / 资源管理器右键）、从提交中挑选单个文件、跳转到工作区中的该文件（工作区已不存在的文件菜单项灰显）、跨分支查看该文件的全部历史提交（打开编辑器的文件时间线）、查看单次提交引入的差异
+- **文件**：与其他分支对比此文件、与当前本地文件对比、查看当前文件与最后一次提交的差异（编辑器 / 资源管理器右键）、从提交中挑选单个文件、跳转到工作区中的该文件（工作区已不存在的文件菜单项灰显）、**按那次提交的版本只读打开这个文件并停在本次改动的第一行**（工作区里早已删掉的代码也能读）、跨分支查看该文件的全部历史提交（打开编辑器的时间线）、查看单次提交引入的差异
 - **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击把提交列表改根到那条提交——上面是它之后的提交、下面是导致它的提交，选中行落在中间，两个方向都能滚动。开启自动换行时注解显示在行尾，折行的续行不会错位；关闭换行时保持左侧固定列
 
 ### 性能
@@ -243,13 +247,16 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口）
 - **三栏键盘导航**：Tab 在分支树、提交列表与文件列表之间切换；方向键选行，Home / End / PageUp / PageDown 跳转，Enter 打开差异，Shift+方向键扩展提交范围
 - **收藏分支**：分支行右键打星，工具栏"只看收藏的分支"按钮把树收窄到这些项，筛选生效时按钮高亮；一个都还没收藏时直接告诉你怎么收藏
+- **IDEA 式搜索框**：`.*` 把关键词当正则表达式匹配、`Cc` 区分大小写，两个开关长在框里——正在按什么规则搜，输入的时候就看得到。默认是字面子串匹配，`( . *` 是字符不是语法，不再因为一个左括号报正则错误；开关与关键词同属筛选条件，重新显示面板、换分支、复用缓存页都不会拿到错的那份答案
+- **筛选栏不再叠排**：提交列变窄时提交人 / 路径 / 日期收进 `>` 浮层，而不是换成两排把列表挤掉一屏；看不见的筛选还在生效时 `>` 会亮。分隔条也不允许把提交列压到没有内容可看
+- **筛空了要给出口**：一条都不剩时，空态直接提供"清除全部筛选"按钮；真正在生效的筛选会在自己的控件上亮一条强调边——列表为什么这么短总有答案
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
 - **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换；表头（数量 + 切换按钮）在任意方向滚动时保持吸附
 - **详情可收起**：推送与对比对话框下方的详情区点一下折成一条，腾出的高度交给文件列表；收起状态在本次会话内按对话框记住
 - **文件图标跟随主题**：变更文件直接使用当前文件图标主题的图标（已安装主题与内置主题通用，字体型与 SVG 型都支持），文件夹用配套的双色图标，当前分支则显示实心分支图标
 - **不再挤压信息列**：提交图列宽封顶且可整体隐藏（持久化），分支再多的仓库也能看全提交信息
 - **无仓库也能用**：面板与状态栏入口常驻，没有 `.git` 的文件夹会给出引导页，并可一键执行 `git init`
-- **IDEA 风格视觉**：圆角 6–12px、平滑过渡、悬停微动效、tag 黄色徽章
+- **IDEA 风格视觉**：圆角 6–12px、平滑过渡、悬停微动效、tag 黄色徽章；选中行也绝不会再看不出来——主题选中色之上再叠一层蓝色渐洗、阅读侧一条强调边并把标签加粗，浅色主题里选中色与编辑器底色几乎同色时也能一眼认出
 - **变基前检查**：自动检测未提交更改，避免变基失败
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部常驻状态栏提供"继续 / 终止"，冲突文件直接在编辑器打开（上限 10 个 tab）用内置 merge-conflict 代码透镜解决，面板不会把用户切去其他视图
 - **面板跟着真实 git 状态走**：在自己终端里解决冲突并提交，操作状态栏会在 git 状态文件清掉后自动收起；提交列表也在所选分支 tip 移动时自动重载，并保留当前选中项、第三栏详情、折叠状态与滚动位置，不再跳回顶部
@@ -282,7 +289,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 1. 打开一个 Git 仓库工作区——没有 `.git` 的文件夹同样能打开面板，并会提供一键 `git init` 引导
 2. 在底部面板点击 **GitCharm** 标签，即可看到三栏日志视图
 3. 树节点：文件夹单击展开、分支**双击切换**；右键节点或提交行呼出对应操作菜单
-4. 工具栏筛选（消息 / 提交人 / 路径 / 日期区间）按回车生效，框里显示的就是当前真正生效的条件：重新显示面板不会再出现"框是空的、列表却还在按上次的词过滤"，把框删空则立刻按不过滤刷新
+4. 工具栏筛选（消息 / 提交人 / 路径 / 日期区间）按回车生效，框里显示的就是当前真正生效的条件：重新显示面板不会再出现"框是空的、列表却还在按上次的词过滤"，把框删空则立刻按不过滤刷新。搜索框自带 `.*` / `Cc` 两个开关，列宽不够时另外三格收进 `>` 浮层
 
 ### 常用操作
 
@@ -298,6 +305,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 删除 / 改提交信息 | 提交行右键（仅 HEAD 附近可用） |
 | 与其他分支对比文件 | 编辑器 / 资源管理器右键 → GitCharm → 与其他分支对比此文件 |
 | 看某文件在这次提交里的改动 | 第三栏变更文件双击（图片、jar 等二进制文件只给一句提示，不开文本对比） |
+| 读某文件在那次提交时的样子 | 第三栏变更文件右键 → 打开历史版本（只读），落在本次改动的第一行；工作区里已删除的文件同样能读 |
 | 与本地文件对比 | 第三栏变更文件右键 → 与当前本地文件对比 |
 | 看当前文件未提交的改动 | 编辑器 / 资源管理器右键 → 查看差异 |
 | 挑选提交中的单个文件 | 第三栏变更文件右键 → 挑选文件 |
