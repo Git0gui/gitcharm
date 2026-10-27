@@ -1,7 +1,16 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { runGit, splitNul, GitRunOptions } from './gitRunner';
+import {
+    executeSquashGroups,
+    orderHistoryOldestFirst,
+    planSquashGroups,
+    SquashFiles,
+    SquashGroup,
+    SquashRun
+} from './squash';
 import { RefsReader } from './refsReader';
 import { RecentBranchReader, RECENT_BRANCH_LIMIT } from './branchMarks';
 import { GitAskpass } from './askpass';
@@ -58,6 +67,7 @@ import {
     WorkingTreeSummary,
     EMPTY_TREE_HASH,
     parseDiffPreview,
+    shSingleQuote,
     DiffPreview
 } from './gitUtils';
 import { t } from '../i18n';
@@ -180,12 +190,14 @@ export interface CommitDetail {
     committerDate?: string;
 }
 
-function q(value: string): string {
-    return `"${value}"`;
-}
-
 /** Git dir writes arrive in bursts (one command touches several files). */
 const WATCH_DEBOUNCE_MS = 250;
+
+/**
+ * Temp files are named by the millisecond; a squash of several groups writes
+ * several of them inside one, so the counter keeps the names apart.
+ */
+let _tempSeq = 0;
 
 /** Top-level git dir files whose contents the caches depend on. */
 const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir']);
@@ -749,24 +761,17 @@ export class GitService {
      * picked the child as "oldest" and its own parent as "newest", so the file
      * comparison opened a commit against itself and looked silently broken.
      *
-     * `rev-list --no-walk --topo-order` answers this with one plumbing call and
-     * ignores the order the hashes were clicked in.
+     * This used to ask `rev-list --no-walk --topo-order`, which cannot answer the
+     * question: `--no-walk` removes the walk there is no ordering of, and git hands
+     * the commits back in the order it was given (measured on a linear history —
+     * `b z a y` in, `b z a y` out). That is click order, so every caller that read
+     * the two ends of this list was reading whichever commit happened to be clicked
+     * first. The walk-based ordering lives in squash.ts and is shared from there.
      */
     async orderCommitsByHistory(hashes: readonly string[]): Promise<string[]> {
-        const unique = [...new Set(hashes)];
-        unique.forEach(assertHash);
-        if (unique.length === 0) {
-            return [];
-        }
-        const output = await this.executeGitArgs(
-            ['rev-list', '--no-walk', '--topo-order', ...unique],
-            { timeoutMs: 20000 }
-        );
-        const ordered = output.split('\n').map(line => line.trim()).filter(Boolean);
-        // A rev git could not place stays at the end instead of vanishing —
-        // callers read the two ends of this list.
-        const placed = new Set(ordered);
-        return [...ordered, ...unique.filter(hash => !placed.has(hash))];
+        const run: SquashRun = args => this.executeGitArgs(args, { timeoutMs: 20000 });
+        const oldestFirst = await orderHistoryOldestFirst(run, hashes);
+        return [...oldestFirst].reverse();
     }
 
     /**
@@ -1056,13 +1061,11 @@ export class GitService {
      * content is preserved verbatim (no shell escaping, no character stripping).
      */
     private async _commitWithMessage(args: string[], message: string): Promise<string> {
-        const fs = require('fs');
-        const tempFile = require('path').join(require('os').tmpdir(), `idea-git-msg-${Date.now()}.txt`);
-        fs.writeFileSync(tempFile, message, 'utf8');
+        const tempFile = this._writeTempMessage('idea-git-msg', message);
         try {
             return await this._execMutate([...args, '-F', tempFile]);
         } finally {
-            try { fs.unlinkSync(tempFile); } catch {}
+            this._disposeTempMessage(tempFile);
         }
     }
 
@@ -1073,18 +1076,31 @@ export class GitService {
      * squashed-commit message template from opening an interactive editor.
      */
     private async _runRebaseWithTodo(upstream: string, todo: string): Promise<string> {
-        const fs = require('fs');
-        const tempFile = require('path').join(require('os').tmpdir(), `idea-git-todo-${Date.now()}.txt`);
-        fs.writeFileSync(tempFile, todo, 'utf8');
+        const tempFile = this._writeTempMessage('idea-git-todo', todo);
         try {
             const out = await this._execMutateWithEnv(
                 ['rebase', '-i', assertShellSafe(upstream, t('label.rebaseBase'))],
-                { GIT_SEQUENCE_EDITOR: `cp ${q(tempFile)}`, GIT_EDITOR: 'true' }
+                { GIT_SEQUENCE_EDITOR: `cp ${shSingleQuote(tempFile)}`, GIT_EDITOR: 'true' }
             );
             return out || t('op.rebaseCompleted');
         } finally {
-            try { fs.unlinkSync(tempFile); } catch {}
+            this._disposeTempMessage(tempFile);
         }
+    }
+
+    /**
+     * Temp file for git to read (commit messages, prepared rebase todos). Paths
+     * land inside a shell command line once git launches an editor, so they go
+     * through shSingleQuote, not through string concatenation of the content.
+     */
+    private _writeTempMessage(prefix: string, text: string): string {
+        const file = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${(++_tempSeq).toString(36)}.txt`);
+        fs.writeFileSync(file, text, 'utf8');
+        return file;
+    }
+
+    private _disposeTempMessage(file: string): void {
+        try { fs.unlinkSync(file); } catch { /* already gone */ }
     }
 
     /**
@@ -2895,66 +2911,45 @@ export class GitService {
     }
 
     /**
-     * Squash multiple commits into one
-     * @param upstream - the base commit before the range to squash
-     * @param commitHashes - array of commit hashes to squash together
+     * Which folds the selection really is: runs of adjacent commits, each folding
+     * into one commit in place, plus the ref each pass starts from.
+     *
+     * A gap in the selection is not an error any more — it means two folds, not
+     * one. Throws when no two selected commits are neighbours, because then the
+     * operation has nothing it is allowed to do.
      */
-    async squashCommits(upstream: string, commitHashes: string[], customMessage?: string): Promise<void> {
-        if (commitHashes.length < 2) {
+    async planSquash(selectedHashes: readonly string[]): Promise<SquashGroup[]> {
+        return await planSquashGroups(selectedHashes, this._squashRun());
+    }
+
+    /**
+     * Fold every planned group, oldest group first in the array, newest executed
+     * first (see squash.ts). `messages[i]` belongs to `plan[i]`; leave one out and
+     * git's own combined message for that group stands.
+     */
+    async squashGroups(plan: readonly SquashGroup[], messages: readonly (string | undefined)[]): Promise<void> {
+        if (plan.length === 0) {
             throw new Error(t('err.squashNeedTwo'));
         }
-        commitHashes.forEach(assertHash);
+        await executeSquashGroups(plan, messages, this._squashRun(), this._squashFiles());
+    }
 
-        const todos = await this.getRebaseTodo(upstream);
-        const selected = new Set(commitHashes);
-        if (commitHashes.some(h => !todos.some(t => t.hash === h))) {
-            throw new Error(t('err.squashNotInRange'));
-        }
+    /**
+     * The single door squash.ts talks through: argv in, stdout out, no shell.
+     * A command carrying an env overlay is a rebase, so volatile caches drop
+     * after it; the reads in between keep them.
+     */
+    private _squashRun(): SquashRun {
+        return (args, env) => (env
+            ? this._execMutateWithEnv(args, env)
+            : this.executeGitArgs(args));
+    }
 
-        // Keep unselected commits in place; move the selected ones into one
-        // contiguous block (at the oldest selected position) so squash applies.
-        const others: string[] = [];
-        const block: string[] = [];
-        let insertAt = -1;
-        for (const t of todos) {
-            if (selected.has(t.hash)) {
-                if (insertAt === -1) {insertAt = others.length;}
-                block.push(t.hash);
-            } else {
-                others.push(`pick ${t.hash}`);
-            }
-        }
-        const squashed = block.map((h, i) => `${i === 0 ? 'pick' : 'squash'} ${h}`);
-        others.splice(insertAt, 0, ...squashed);
-
-        // If custom message provided, use it as the final commit message after squash
-        if (customMessage && customMessage.trim()) {
-            // Use GIT_SEQUENCE_EDITOR to skip editor during rebase
-            // Then amend the final commit with custom message
-            const originalSequenceEditor = process.env.GIT_SEQUENCE_EDITOR;
-            try {
-                process.env.GIT_SEQUENCE_EDITOR = 'true'; // Skip sequence editor
-                
-                // Run rebase with squash todo
-                await this._runRebaseWithTodo(upstream, others.join('\n') + '\n');
-                
-                // After successful rebase, amend the last commit with custom message
-                const head = await this.getHeadHash();
-                if (head) {
-                    await this.amendMessage(head, customMessage);
-                }
-            } finally {
-                // Restore original GIT_SEQUENCE_EDITOR
-                if (originalSequenceEditor !== undefined) {
-                    process.env.GIT_SEQUENCE_EDITOR = originalSequenceEditor;
-                } else {
-                    delete process.env.GIT_SEQUENCE_EDITOR;
-                }
-            }
-        } else {
-            // No custom message, use default squash behavior
-            await this._runRebaseWithTodo(upstream, others.join('\n') + '\n');
-        }
+    private _squashFiles(): SquashFiles {
+        return {
+            write: (prefix, text) => this._writeTempMessage(prefix, text),
+            dispose: (file) => this._disposeTempMessage(file)
+        };
     }
 
     /**

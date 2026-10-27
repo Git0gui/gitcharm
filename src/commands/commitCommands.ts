@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitService, GitCommit, FileStat, assertHash } from '../services/gitService';
+import { SquashGroup } from '../services/squash';
 import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
@@ -731,72 +732,58 @@ export function registerCommitCommands(
                 return;
             }
             
-            // `selectedHashes` is already oldest → newest by history order, so the
-            // messages read the way the commits landed and the base ref below really
-            // is where the rebase starts from.
-            const commitDetails = await Promise.all(
-                selectedHashes.map(hash => gitService.getCommitDetail(hash))
-            );
-            
-            // Validate: check if selected commits are contiguous in history
-            const oldestCommit = commitDetails[0];
-            const parents = await gitService.getParents(oldestCommit.hash);
-            const baseRef = parents[0] || `${oldestCommit.hash}~1`;
-            
+            // Which folds this selection really is: runs of adjacent commits, each
+            // folding into one commit in place. A gap in the selection is not a
+            // refusal — it means two folds. Every commit outside a run keeps both its
+            // own message and its position, which is what the rebase-wide amend used
+            // to overwrite.
+            let plan: SquashGroup[];
             try {
-                const todos = await gitService.getRebaseTodo(baseRef);
-                const selectedSet = new Set(selectedHashes);
-                
-                // Find positions of selected commits in todo list
-                const positions: number[] = [];
-                for (let i = 0; i < todos.length; i++) {
-                    if (selectedSet.has(todos[i].hash)) {
-                        positions.push(i);
-                    }
-                }
-                
-                // Check if positions are contiguous (no gaps)
-                positions.sort((a, b) => a - b);
-                for (let i = 1; i < positions.length; i++) {
-                    if (positions[i] !== positions[i - 1] + 1) {
-                        // Found a gap - there are unselected commits between selected ones
-                        vscode.window.showErrorMessage(t('err.squashNotContiguous'));
-                        return;
-                    }
-                }
-            } catch {
-                // If we can't get rebase todo, skip this validation
+                plan = await gitService.planSquash(selectedHashes);
+            } catch (error) {
+                vscode.window.showErrorMessage(t('commit.squashFailed', { error: formatGitError(error) }));
+                return;
             }
             
-            // Build combined message with all commit messages separated by newlines
-            const combinedMessage = commitDetails.map(c => c.message).join('\n\n');
+            const foldedCount = plan.reduce((sum, group) => sum + group.hashes.length, 0);
+            const loneCount = selectedHashes.length - foldedCount;
             
-            // Show custom multi-line dialog for editing combined message
-            const finalMessage = await graphView.showSquashMessageDialog(
-                t('commit.squashMessagePrompt', { count: selectedHashes.length }),
-                combinedMessage,
-                t('commit.squashMessagePlaceHolder')
-            );
+            // One message per group, all of them collected BEFORE anything is
+            // rewritten: cancelling half way must not leave the branch half-folded.
+            const messages: string[] = [];
+            for (let index = 0; index < plan.length; index++) {
+                const group = plan[index];
+                const details = await Promise.all(
+                    group.hashes.map(hash => gitService.getCommitDetail(hash))
+                );
+                const message = await graphView.showSquashMessageDialog(
+                    plan.length === 1
+                        ? t('commit.squashMessagePrompt', { count: group.hashes.length })
+                        : t('commit.squashMessageGroupPrompt', {
+                            index: index + 1,
+                            total: plan.length,
+                            count: group.hashes.length
+                        }),
+                    details.map(detail => detail.message).join('\n\n'),
+                    t('commit.squashMessagePlaceHolder')
+                );
+                if (message === undefined || message.trim() === '') {return;}
+                messages.push(message);
+            }
             
-            if (finalMessage === undefined || finalMessage.trim() === '') {return;}
-            
-            // Execute squash using interactive rebase
             try {
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
-                    title: t('commit.squashing', { n: selectedHashes.length }),
+                    title: t('commit.squashing', { n: foldedCount }),
                     cancellable: false
                 }, async () => {
-                    // Find the oldest commit among selected ones to use as rebase base
-                    const oldestCommit = commitDetails[0];
-                    
-                    // Use the parent of the oldest commit as the rebase base
-                    const parents = await gitService.getParents(oldestCommit.hash);
-                    const baseRef = parents[0] || `${oldestCommit.hash}~1`;
-                    
-                    // Use interactive rebase with squash and custom message
-                    await gitService.squashCommits(baseRef, selectedHashes, finalMessage);
-                    vscode.window.showInformationMessage(t('commit.squashSuccess', { n: selectedHashes.length }));
+                    await gitService.squashGroups(plan, messages);
+                    const skipped = loneCount > 0
+                        ? ` ${t('commit.squashSkippedSingles', { n: loneCount })}`
+                        : '';
+                    vscode.window.showInformationMessage(
+                        t('commit.squashSuccess', { n: foldedCount }) + skipped
+                    );
                     graphView.refresh();
                 });
             } catch (error) {

@@ -43,6 +43,19 @@ export function assertHash(value: string): string {
 }
 
 /**
+ * Quote one path for the shell git uses to launch its editors.
+ *
+ * GIT_EDITOR / GIT_SEQUENCE_EDITOR are handed to a shell, so a value reaching
+ * them is re-interpreted: double quotes let `$VAR`, backticks and backslashes
+ * work, which a Windows temp path can easily contain. Inside POSIX single quotes
+ * every character is literal except the quote itself, which closes, escapes
+ * itself and reopens — so the path arrives at the shell unchanged.
+ */
+export function shSingleQuote(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
  * Why a tag name would be refused, or undefined when git accepts it.
  *
  * `assertRef` already covers the shared ref rules (illegal punctuation, `..`,
