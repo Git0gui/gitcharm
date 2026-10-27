@@ -8,6 +8,7 @@ import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
 import { EMPTY_TREE_HASH, isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
+import { openEditorDiff } from '../commands/helpers';
 import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { getLocale, t, webviewStrings } from '../i18n';
 
@@ -909,12 +910,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const oldest = ordered[ordered.length - 1];
             const oldestDetail = await this._gitService.getCommitDetail(oldest);
             const title = `${relativePath} (${oldestDetail.shortHash}^ ↔ ${newest.substring(0, 7)})`;
-            await vscode.commands.executeCommand(
-                'vscode.diff',
-                this._gitBlobUri(oldest + '^', relativePath),
-                this._gitBlobUri(newest, relativePath),
-                title
-            );
+            const baseRef = await this._gitService.getDiffBase(oldest);
+            await openEditorDiff(this._gitService, baseRef, newest, relativePath, title);
         } catch (error) {
             vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(error) }));
         }
@@ -977,11 +974,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private async _openFileDiff(hash: string, path: string): Promise<void> {
         try {
             const title = `${path} (${hash.substring(0, 7)})`;
-            // Use the same git blob URI scheme as the right-side commit file view
-            // This shows the diff between parent commit (hash^) and current commit (hash)
-            const beforeUri = this._gitBlobUri(hash + '^', path);
-            const afterUri = this._gitBlobUri(hash, path);
-            await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, title);
+            // The same pair of endpoints the panel's inline preview uses: the first
+            // parent, or the empty tree for the initial commit. Spelling it `hash^`
+            // instead is a fatal error on a root commit, and the content provider
+            // answers an error with an empty side — so the diff silently lost its
+            // left half exactly where a first commit has all of its content added.
+            const baseRef = await this._gitService.getDiffBase(hash);
+            await openEditorDiff(this._gitService, baseRef, hash, path, title);
         } catch (err) {
             vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
         }
@@ -991,12 +990,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private async _openStashFileDiff(index: number, path: string): Promise<void> {
         try {
             const { baseRef, targetRef } = await this._gitService.getStashDiffRefs(index, path);
-            await vscode.commands.executeCommand(
-                'vscode.diff',
-                this._gitBlobUri(baseRef, path),
-                this._gitBlobUri(targetRef, path),
-                `${path} (stash@{${index}})`
-            );
+            await openEditorDiff(this._gitService, baseRef, targetRef, path, `${path} (stash@{${index}})`);
         } catch (err) {
             vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
         }
@@ -1006,9 +1000,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private async _openRefFileDiff(baseRef: string, targetRef: string, path: string): Promise<void> {
         try {
             const title = `${path} (${baseRef === EMPTY_TREE_HASH ? t('view.emptyRef') : baseRef} ↔ ${targetRef})`;
-            const beforeUri = this._gitBlobUri(baseRef, path);
-            const afterUri = this._gitBlobUri(targetRef, path);
-            await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, title);
+            await openEditorDiff(this._gitService, baseRef, targetRef, path, title);
         } catch (err) {
             vscode.window.showErrorMessage(t('view.openDiffFailed', { error: formatGitError(err) }));
         }

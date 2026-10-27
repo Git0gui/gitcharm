@@ -17,6 +17,41 @@ export function gitBlobUri(ref: string, filePath: string): vscode.Uri {
 }
 
 /**
+ * Open a two-column editor diff of one file between two git refs.
+ *
+ * Every editor-diff entry point goes through here — the panel's double-click, a
+ * group of selected commits, a stash, the push/compare dialogs and the palette
+ * command — because they all hand the same kind of content to the same text
+ * diff, and a binary file makes that diff spin forever without ever answering.
+ * Git's own classification is the gate; the panel already says the same thing
+ * inline, so the two surfaces refuse for the same reason.
+ *
+ * Returns false when nothing was opened because the change is binary.
+ */
+export async function openEditorDiff(
+    gitService: GitService,
+    baseRef: string,
+    targetRef: string,
+    filePath: string,
+    title: string
+): Promise<boolean> {
+    // Not being able to classify the change is no reason to withhold the diff the
+    // user asked for: this gate exists to stop a hung editor, not to gate normal work.
+    const binary = await gitService.isBinaryChange(baseRef, targetRef, filePath).catch(() => false);
+    if (binary) {
+        vscode.window.showInformationMessage(t('file.binaryDiff', { path: filePath }));
+        return false;
+    }
+    await vscode.commands.executeCommand(
+        'vscode.diff',
+        gitBlobUri(baseRef, filePath),
+        gitBlobUri(targetRef, filePath),
+        title
+    );
+    return true;
+}
+
+/**
  * Extract branch name from tree item (handles different argument formats from click/context menu)
  */
 export function getBranchName(node: any): string | undefined {
