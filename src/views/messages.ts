@@ -1,4 +1,4 @@
-import { GraphCommit, CommitDetail, FileStat, StashEntry, ReflogEntry, RepositoryOption, WorktreeEntry } from '../services/gitService';
+import { GraphCommit, CommitDetail, FileStat, LogFilters, StashEntry, ReflogEntry, RepositoryOption, WorktreeEntry } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 import { DiffPreviewLine } from '../services/gitUtils';
 
@@ -76,6 +76,15 @@ export type ExtToWebviewMessage =
         /** External history change: re-render rows without clearing what is selected. */
         preserveSelection?: boolean;
         searchContext?: { query?: string; resultCount?: number };
+    }
+    | {
+        command: 'syncFilters';
+        /**
+         * The filter the host is actually listing with. The panel's boxes are DOM
+         * and the DOM is rebuilt on every re-show, so without this echo the list
+         * stays narrowed by a term the user can no longer see.
+         */
+        filters: LogFilters;
     }
     | {
         command: 'setBranches';

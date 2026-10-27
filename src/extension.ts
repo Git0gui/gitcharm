@@ -6,7 +6,7 @@ import { GitAskpass } from './services/askpass';
 import { logger } from './services/logger';
 import { GraphViewProvider } from './views/graphView';
 import { BlameProvider } from './services/blameProvider';
-import { gitBlobUri } from './commands/helpers';
+import { gitBlobUri, openEditorDiff } from './commands/helpers';
 import { registerBranchCommands } from './commands/branchCommands';
 import { registerCommitCommands } from './commands/commitCommands';
 import { registerOperationCommands } from './commands/operationCommands';
@@ -201,12 +201,8 @@ export function activate(ctx: vscode.ExtensionContext) {
             const fileName = filePath.split('/').pop() || filePath;
             const title = `${fileName} (${commitHash.substring(0, 7)})`;
             try {
-                await vscode.commands.executeCommand(
-                    'vscode.diff',
-                    gitBlobUri(`${commitHash}^`, filePath),
-                    gitBlobUri(commitHash, filePath),
-                    title
-                );
+                const baseRef = await gitService.getDiffBase(commitHash);
+                await openEditorDiff(gitService, baseRef, commitHash, filePath, title);
             } catch (e) {
                 vscode.window.showErrorMessage(t('ext.openDiffFailed', { error: formatGitError(e) }));
             }

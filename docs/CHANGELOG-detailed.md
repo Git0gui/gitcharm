@@ -2,6 +2,28 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.5] - 2026-10-27
+
+本版修两处都会被误判成"缓存没刷新"的错位：筛选条件只活在宿主、输入框随面板销毁而清空；二进制文件被当作文本交给编辑器对比，于是标签页永远转圈。另把差异左端从字面 `hash^` 换成真正解析出来的父提交。
+
+### 修复
+
+- **搜索框不再骗人：已生效的筛选条件回灌给面板**（`src/views/messages.ts` 新增 `syncFilters`；`views/graphView.ts` 的 `_postFilterMirror()` 在 `_collect` 与 `_loadAndDisplayCommits` 两条重绘路径各调一次；`media/webview.js` 的 `appliedFilters` / `recordAppliedFilters` / `fillFilterBox` / `applyFilterMirror`）。现象是"搜索过一次之后，框里没东西也刷不出别的"，刷新按钮看起来直接把空框当成了搜索词。两个成因：① `_filters` 在扩展宿主，输入框是 webview DOM，而 WebviewView 没有 `retainContextWhenHidden`——隐藏即销毁 DOM，重新显示后三个框全空、列表仍按上一次回车生效的词过滤；② 筛选只在回车时生效，手动把框删空后宿主还在按那个词筛。`syncFilters` 进了 `SCREEN_COMMANDS`，所以跟着 `ready` 握手一起重放，不会打进还没起跑的帧（与当年多仓库冷启动丢分支是同一个坑，反过来用）。webview **只在框为空时填**，既不覆盖也不清空已有文本——没按回车的草稿是用户还没说出口的话；日期区间同理只补空。**删空是唯一立刻生效的输入**：最后一个字符被删掉就 `pushFilters()`，因为这一步没有歧义（空 = 不过滤），✕ 按钮一直是这个行为。缓存这一侧核对过不用改：graph 缓存的键已含仓库路径 / branch / limit / skip 与全部筛选条件，筛与不筛不可能互相顶掉；换筛选走的 `_reload` 重置 `_loaded` 与 `_pendingCommits`，`_dataTicket` 作废在飞的旧页。
+- **二进制文件不再开成转圈的对比页**（`src/commands/helpers.ts` 的 `openEditorDiff`，配 `GitService.isBinaryChange` + `gitUtils.isBinaryNumstat`；`views/graphView.ts` 的 `_openFileDiff` / `_openCommitGroupFileDiff` / `_openStashFileDiff` / `_openRefFileDiff` 与 `extension.ts` 的 `idea-git.openFileDiff` 全部改走它）。现象：第三栏双击某些文件，对比页一直转圈、没有数据。把仓库里 514KB 的 `docs/preview/out/main.png` 按 utf8 解码：487,260 个字符中 208,828 个是替换字符 `U+FFFD`（43% 根本没解出来），全文只有 1601 个换行、最长"一行" 6,903 字符——文本对比对这种文档既读不出内容也算不完。第三栏的行内预览早就靠 `preview.binary` 拒绝预览二进制，编辑器侧此前一道判断都没有。现在先跑一次 `git diff --numstat base..target -- path`，git 自己写 `-\t-\t<路径>` 就只给一句提示、不开标签页（分类实测 29ms；判不出来时不误伤——`.catch(() => false)` 照常打开，这道闸是用来阻止挂死的，不是给正常使用设卡）。白名单里允许直接 `vscode.diff` 的只应是一侧为工作区真实文件的场景（`fileCompareLocal`、与分支/HEAD 对比），由 `src/test/binaryDiffGuard.test.ts` 按调用点计数守住。
+- **差异左端一律 `getDiffBase(hash)`，不再字面写 `hash^`**（`views/graphView.ts`、`extension.ts`）：`git show <root>^:path` 实测 exit 128 fatal，而虚拟文档 provider 把所有失败都 `catch → ''`，于是首个提交左半边的"空白"其实是一次被吞掉的读取失败，和"这一版确实是空的"完全分不清；换成空树 `EMPTY_TREE_HASH` 之后失败与真空在语义上分开，也和 `_postFilePreview` 注释里"两个界面共用同一对端点"这句话真正对齐（多选组同样走 `getDiffBase(oldest)`）。
+
+### 文档
+
+- README 中英：常用操作表把"看某文件在这次提交里的改动（第三栏双击）"与"与本地文件对比（右键）"拆成两行——此前同一行里把两个入口混为一谈；新增二进制文件不开文本对比的说明；使用方法列表加第 4 条说明筛选框显示的就是真正生效的条件。`docs/CSDN-GitCharm使用说明.md` 的三栏说明与操作表同步。
+- AGENTS.md：§7 加"已生效的筛选条件只活在宿主，隐藏面板会销毁 DOM，每次重绘必须回灌 + 删空即生效"；§8 加"双击文件开编辑器对比一律走 `openEditorDiff`（含实测解码数据）"与"差异左端一律 `getDiffBase`，禁止字面 `hash^`"。
+
+### 验证
+
+- compile / lint（0 error，74 warning 与基线一致）/ test 全绿，299 例（新增 `src/test/filterMirror.test.ts` 4 例、`src/test/binaryDiffGuard.test.ts` 6 例）。
+- 预览 harness（headless Chrome，`docs/preview/preview.html?scene=main`）实测筛选回灌：三个框与日期标签（`2026-10-01 → 2026-10-20`）全部回灌、草稿 `my-draft` 未被覆盖、清空框后发出的 `setFilters` 是 `text:""`、删到还剩字符不发请求、回车照旧。
+- stub-vscode Node harness 跑真实 git：`isBinaryChange(png)=true`（29ms）、`isBinaryChange(README.md)=false`、`getDiffBase(root)=4b825dc642cb6eb9a060e54bf8d69288fbee4904`；`openEditorDiff` 对 PNG 只发一条 info 提示、不触发 `vscode.diff`，对根提交的 README 正常发出左右两端（`ref=4b825dc…` / `ref=567c1bff…`）；`git show <empty-tree>:README.md` 71ms 内 fatal 返回，左半边是快的空白而不是等待。
+- 待复验（需要真实工作台）：重启开发宿主后双击一张图片应看到一句提示而非转圈标签页；隐藏再显示面板后输入框应仍带着上次生效的筛选词。
+
 ## [0.1.4] - 2026-10-25
 
 本版是打磨批次：blame 定位后的提交列表改成上下各 10 条、两个方向都能翻；blame 注解在自动换行下改放行尾；推送/对比对话框的详情区可以收起；启动即预取首屏；"跳转到源"回到工作区语义。

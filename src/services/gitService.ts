@@ -37,6 +37,7 @@ import {
     classifyGitNetworkFailure,
     isMissingGitBinary,
     parseDiffTreeRawNumstat,
+    isBinaryNumstat,
     redactUrlCredentials,
     gitFailureHost,
     pickFetchRemote,
@@ -1493,6 +1494,25 @@ export class GitService {
         const preview = parseDiffPreview(patch, maxLines);
         if (key) {this._previewCache.set(key, preview);}
         return preview;
+    }
+
+    /**
+     * Whether the change to one file between two refs has to be treated as
+     * binary. The editor diff is a *text* document: fed raw bytes, a 500KB image
+     * becomes a couple of thousand lines of several hundred thousand characters
+     * each — undecodable text the workbench will not finish comparing, so the tab
+     * keeps spinning with nothing readable in it. The panel's inline preview
+     * already refuses these files with a one-line note; the editor has to give
+     * the same answer instead of a hung pane.
+     */
+    async isBinaryChange(baseRef: string, targetRef: string, filePath: string): Promise<boolean> {
+        assertShellSafe(baseRef, t('label.ref'));
+        assertShellSafe(targetRef, t('label.ref'));
+        assertShellSafe(filePath, t('label.filePath'));
+        const numstat = await this.executeGitArgs([
+            'diff', '--numstat', `${baseRef}..${targetRef}`, '--', filePath
+        ]);
+        return isBinaryNumstat(numstat);
     }
 
     /**

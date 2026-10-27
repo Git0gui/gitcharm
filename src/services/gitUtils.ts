@@ -545,6 +545,15 @@ export function parseDiffPreview(patch: string, maxLines: number): DiffPreview {
 }
 
 /**
+ * Whether a `git diff --numstat` block says the change is binary. Git writes
+ * `-\t-\t<path>` for a file it refused to diff as text, which is one cheap line
+ * to read instead of asking for the patch and parsing it.
+ */
+export function isBinaryNumstat(numstat: string): boolean {
+    return numstat.split('\n').some(line => /^-\t-\t/.test(line));
+}
+
+/**
  * Merge the file lists of several commits into one row per path — what the panel
  * shows when the user selects a group of commits in the log.
  *
