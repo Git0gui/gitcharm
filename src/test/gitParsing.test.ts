@@ -1242,6 +1242,48 @@ describe('parseDiffPreview', () => {
         assert.equal(preview.binary, false);
     });
 
+    it('anchors at the first hunk of the target side', () => {
+        const preview = parseDiffPreview(patchOf(
+            '@@ -1,3 +1,3 @@',
+            ' a',
+            '-b',
+            '+B',
+            '@@ -80,2 +80,2 @@',
+            ' c'), 100);
+        assert.equal(preview.firstChangedLine, 1);
+        assert.equal(preview.firstChangedOldLine, 1);
+    });
+
+    it('anchors a late change at its own hunk, not at line 1', () => {
+        const preview = parseDiffPreview(patchOf(
+            'diff --git a/f.txt b/f.txt',
+            '@@ -240,4 +243,5 @@',
+            ' unchanged',
+            '+added far down'), 100);
+        assert.equal(preview.firstChangedLine, 243);
+        assert.equal(preview.firstChangedOldLine, 240);
+    });
+
+    it('falls back to line 1 when a side of the first hunk is empty', () => {
+        // Pure deletion: the target side has no lines, so the reader of the
+        // *pre-change* revision anchors on the old side instead.
+        const deleted = parseDiffPreview(patchOf('@@ -12,3 +11,0 @@', '-gone'), 100);
+        assert.equal(deleted.firstChangedLine, 11);
+        assert.equal(deleted.firstChangedOldLine, 12);
+        // File removed entirely: old side starts at 1, target side is empty (0 → 1).
+        const whole = parseDiffPreview(patchOf('@@ -1,3 +0,0 @@', '-gone'), 100);
+        assert.equal(whole.firstChangedLine, 1);
+        assert.equal(whole.firstChangedOldLine, 1);
+    });
+
+    it('stays at line 1 when the patch carries no hunk', () => {
+        const preview = parseDiffPreview(patchOf(
+            'diff --git a/x.png b/x.png',
+            'Binary files a/x.png and b/x.png differ'), 100);
+        assert.equal(preview.firstChangedLine, 1);
+        assert.equal(preview.firstChangedOldLine, 1);
+    });
+
     it('uses git\'s well-known empty tree as the root-commit base', () => {
         assert.equal(EMPTY_TREE_HASH, '4b825dc642cb6eb9a060e54bf8d69288fbee4904');
     });

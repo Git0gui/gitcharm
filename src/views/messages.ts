@@ -217,7 +217,7 @@ export type WebviewAction =
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
     | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove'
     | 'reflog'
-    | 'fileDiff' | 'fileJumpToSource' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
+    | 'fileDiff' | 'fileJumpToSource' | 'fileOpenRevision' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
 export type WebviewToExtMessage =

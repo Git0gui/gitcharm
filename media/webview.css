@@ -138,6 +138,11 @@ svg { flex: none; }
     border-color: var(--vscode-focusBorder, #007fd4);
     box-shadow: 0 0 0 2px rgba(0, 127, 212, 0.15);
 }
+/* An applied filter keeps an accent edge: the badge answers "which box is shaping
+   this list" at a glance, which the box text alone does not (grey on grey). */
+.tb.on {
+    border-color: var(--gc-sel-accent);
+}
 .tb input, .tb select {
     flex: 1;
     min-width: 0;
@@ -1295,6 +1300,20 @@ canvas.graph-canvas {
     color: var(--vscode-descriptionForeground, #888);
     animation: fadeIn 0.3s ease-out;
 }
+/* The way out of a filtered-to-nothing list: without it the user has to remember
+   which of the four boxes is holding the term that emptied the list. */
+.empty-btn {
+    margin-left: 10px;
+    padding: 2px 10px;
+    font-size: 12px;
+    color: var(--vscode-button-foreground, #fff);
+    background: var(--vscode-button-background, #0e639c);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.empty-btn:hover { background: var(--vscode-button-hoverBackground, #1177bb); }
 
 /* ---- skeleton loading animation ---- */
 .skeleton {

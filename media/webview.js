@@ -745,7 +745,11 @@ function renderRows(appendOnly) {
             document.getElementById('rows').innerHTML = renderCommitSkeleton(5);
             return;
         }
-        document.getElementById('rows').innerHTML = '<div class="empty">' + T('w.noMatch') + '</div>';
+        document.getElementById('rows').innerHTML = '<div class="empty">' + T('w.noMatch') +
+            (hasAppliedFilters()
+                ? ' <button class="empty-btn" id="clear-all-filters" type="button">' + T('filter.clearAll') + '</button>'
+                : '') +
+            '</div>';
         document.getElementById('rows').style.minWidth = '';
         removeGraphCanvas();
         return;
@@ -1774,12 +1778,55 @@ function initDateRange() {
    Hiding the panel destroys its DOM, so a re-show used to put empty boxes above a
    list still narrowed by the last search — which reads as "refresh ignores my
    empty search box". 'syncFilters' fills them back in. */
-var appliedFilters = { text: '', author: '', path: '' };
+var appliedFilters = { text: '', author: '', path: '', from: '', to: '' };
 
 function recordAppliedFilters(f) {
     appliedFilters.text = (f && f.text) || '';
     appliedFilters.author = (f && f.author) || '';
     appliedFilters.path = (f && f.path) || '';
+    appliedFilters.from = (f && f.from) || '';
+    appliedFilters.to = (f && f.to) || '';
+    syncFilterBadges();
+}
+
+/**
+ * A filter that is shaping the list right now keeps an accent edge on its control.
+ * Four grey boxes do not answer "why is this list short", and a draft typed into a
+ * box is not an applied filter — hence the applied record, not the box values.
+ */
+function syncFilterBadges() {
+    setFilterBadge('f-search', !!appliedFilters.text);
+    setFilterBadge('f-author', !!appliedFilters.author);
+    setFilterBadge('f-path', !!appliedFilters.path);
+    setFilterBadge('date-range', !!appliedFilters.from || !!appliedFilters.to);
+}
+
+function setFilterBadge(id, on) {
+    var el = document.getElementById(id);
+    if (!el) {return;}
+    var box = el.classList.contains('tb') ? el : el.closest('.tb');
+    if (box) {box.classList.toggle('on', on);}
+}
+
+function hasAppliedFilters() {
+    return !!(appliedFilters.text || appliedFilters.author || appliedFilters.path
+        || appliedFilters.from || appliedFilters.to);
+}
+
+/** Drop every filter and re-query: the exit out of the "no matching commits" state. */
+function clearAllFilters() {
+    ['f-search', 'f-author', 'f-path'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) {el.value = '';}
+    });
+    syncClr('f-search', 'clr-search');
+    syncClr('f-author', 'clr-author');
+    syncClr('f-path', 'clr-path');
+    dateRange.from = '';
+    dateRange.to = '';
+    syncDateTrigger();
+    syncDateClr();
+    pushFilters();
 }
 
 /** Fill one empty box from the host. A box with text is a draft: never overwritten, never cleared. */
@@ -1795,13 +1842,15 @@ function applyFilterMirror(m) {
     fillFilterBox('f-search', 'clr-search', f.text || '');
     fillFilterBox('f-author', 'clr-author', f.author || '');
     fillFilterBox('f-path', 'clr-path', f.path || '');
+    var from = f.from ? String(f.from).slice(0, 10) : '';
+    var to = f.to ? String(f.to).slice(0, 10) : '';
     if (!dateRange.from && !dateRange.to) {
-        dateRange.from = f.from ? String(f.from).slice(0, 10) : '';
-        dateRange.to = f.to ? String(f.to).slice(0, 10) : '';
+        dateRange.from = from;
+        dateRange.to = to;
         syncDateTrigger();
         syncDateClr();
     }
-    recordAppliedFilters(f);
+    recordAppliedFilters({ text: f.text, author: f.author, path: f.path, from: from, to: to });
 }
 
 /* ---------- events ---------- */
@@ -1815,7 +1864,7 @@ function pushFilters() {
     var fromFormatted = dateRange.from ? dateRange.from + 'T00:00:00' : '';
     var toFormatted = dateRange.to ? dateRange.to + 'T23:59:59' : '';
 
-    recordAppliedFilters({ text: text, author: author, path: path });
+    recordAppliedFilters({ text: text, author: author, path: path, from: dateRange.from, to: dateRange.to });
     vscode.postMessage({
         command: 'setFilters',
         text: text,
@@ -2227,6 +2276,10 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
 });
 
 document.getElementById('rows').addEventListener('click', function (e) {
+    if (e.target.closest('#clear-all-filters')) {
+        clearAllFilters();
+        return;
+    }
     var row = e.target.closest('.row');
     if (!row) return;
     
@@ -2404,15 +2457,19 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     if (window._hideTooltip) window._hideTooltip();
     var path = file.getAttribute('data-path');
     var items = [];
-    // "Source" is the checked-out branch's copy, not the commit's version. A path
-    // that no longer exists in the working tree has no source to open, so the
-    // entry is disabled rather than silently doing nothing or resurrecting a
-    // historical blob.
+    // Two distinct paths to the code. "Jump to Source" opens the checked-out
+    // branch's copy in the working tree — greyed when that path no longer exists
+    // there, since it must never resurrect history over the working file. "Open
+    // this commit's version" always works: it opens the historical blob in a
+    // read-only tab, so a file deleted since is still readable.
     if (state.selectedHashes.length <= 1) {
         var localPaths = state.detail && Array.isArray(state.detail.existingPaths)
             ? state.detail.existingPaths : null;
         var hasSource = !localPaths || localPaths.indexOf(path) >= 0;
-        items.push(['fileJumpToSource', T('menu.fileJumpToSource'), !hasSource]);
+        items.push(
+            ['fileJumpToSource', T('menu.fileJumpToSource'), !hasSource],
+            ['fileOpenRevision', T('menu.fileOpenRevision')]
+        );
     }
     items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],

@@ -9,6 +9,7 @@ import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from 
 import { resolveGitDir } from '../services/gitPaths';
 import { EMPTY_TREE_HASH, isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
 import { openEditorDiff } from '../commands/helpers';
+import { GitBlobFileSystemProvider } from '../services/blobFs';
 import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { getLocale, t, webviewStrings } from '../i18n';
 
@@ -871,6 +872,38 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 return;
             }
             vscode.window.showErrorMessage(t('file.jumpToSourceFailed', { error: formatGitError(error) }));
+        }
+    }
+
+    /**
+     * Open the file as it stood at this commit in a read-only editor tab, landed on
+     * the first line the commit touched — the "read the old code" path that Jump to
+     * Source cannot serve once the file is gone from the working tree.
+     *
+     * A file *deleted by* this commit has no blob at `hash`; its last content lives
+     * in the parent, so open that revision instead and anchor on the old-side line.
+     * Binary files get the same one-line refusal as the editor diff rather than a
+     * tab of undecodable bytes.
+     */
+    private async _openRevisionAtChange(hash: string, relativePath: string): Promise<void> {
+        try {
+            const base = await this._gitService.getDiffBase(hash);
+            const preview = await this._gitService.getFileDiffPreview(base, hash, relativePath);
+            if (preview.binary) {
+                vscode.window.showInformationMessage(t('file.binaryDiff', { path: relativePath }));
+                return;
+            }
+            const existsAtCommit = await this._gitService.blobExists(hash, relativePath);
+            const ref = existsAtCommit ? hash : base;
+            const line = existsAtCommit ? preview.firstChangedLine : preview.firstChangedOldLine;
+            const uri = GitBlobFileSystemProvider.uri(ref, relativePath);
+            const pos = new vscode.Position(Math.max(0, line - 1), 0);
+            await vscode.window.showTextDocument(uri, {
+                preview: false,
+                selection: new vscode.Range(pos, pos)
+            });
+        } catch (error) {
+            vscode.window.showErrorMessage(t('file.openRevisionFailed', { error: formatGitError(error) }));
         }
     }
 
@@ -1874,6 +1907,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     const relPath = message.path;
                     if (!relPath) { return; }
                     await this._openWorkingTreeFile(relPath);
+                    return;
+                }
+                case 'fileOpenRevision': {
+                    const hash = message.hash;
+                    const relPath = message.path;
+                    if (!hash || !relPath) { return; }
+                    await this._openRevisionAtChange(hash, relPath);
                     return;
                 }
                 case 'fileCompareLocal': {

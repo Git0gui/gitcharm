@@ -477,6 +477,16 @@ export interface DiffPreview {
     binary: boolean;
     /** The file has no textual hunk at all: nothing changed, or git declined to diff it. */
     empty: boolean;
+    /**
+     * 1-based line in the target image where the first hunk starts — where a reader
+     * opening that revision wants to land. 1 when the patch carries no hunk.
+     */
+    firstChangedLine: number;
+    /**
+     * Same anchor on the source image, for opening the *pre-change* revision: a
+     * deletion has no target-side line to point at, but its old side does.
+     */
+    firstChangedOldLine: number;
 }
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
@@ -500,6 +510,9 @@ export function parseDiffPreview(patch: string, maxLines: number): DiffPreview {
     let old = 0;
     let next = 0;
     let truncated = false;
+    let firstChangedLine = 1;
+    let firstChangedOldLine = 1;
+    let sawHunk = false;
 
     for (const raw of patch.split('\n')) {
         // Cosmetic blank lines between headers carry nothing; a blank line inside
@@ -512,6 +525,13 @@ export function parseDiffPreview(patch: string, maxLines: number): DiffPreview {
                 // side has no lines in this hunk at all.
                 old = Number.parseInt(m[1], 10);
                 next = Number.parseInt(m[3], 10);
+                if (!sawHunk) {
+                    sawHunk = true;
+                    // Each side is what a different reader opens, so anchor both;
+                    // a pure add/delete starts at 0 on the empty side and falls back to 1.
+                    firstChangedLine = Math.max(1, next);
+                    firstChangedOldLine = Math.max(1, old);
+                }
             }
             if (lines.length < maxLines) {lines.push({ kind: 'hunk', text: raw, old: undefined, next: undefined });}
             continue;
@@ -540,6 +560,8 @@ export function parseDiffPreview(patch: string, maxLines: number): DiffPreview {
         lines,
         truncated,
         binary,
+        firstChangedLine,
+        firstChangedOldLine,
         empty: !binary && lines.some(l => l.kind !== 'meta') === false
     };
 }
