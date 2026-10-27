@@ -645,25 +645,39 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /**
      * Show a squash message editor dialog with editable multi-line text.
      * Returns the edited message or undefined if cancelled.
+     *
+     * Squashing a selection with a gap opens this once per group, so a dialog left
+     * on screen cannot expire on a clock — the earlier 60s fallback silently threw
+     * away what the user was typing and stopped the operation half way through the
+     * questions. It settles when the answer arrives or when the frame holding the
+     * dialog dies (hiding the panel destroys its DOM, and the squash command must
+     * then get its undefined rather than await a promise nobody can resolve).
      */
     showSquashMessageDialog(prompt: string, initialValue: string, placeholder: string): Promise<string | undefined> {
         return new Promise((resolve) => {
-            if (!this._view) {
+            const view = this._view;
+            if (!view) {
                 resolve(undefined);
                 return;
             }
-            const handler = this._view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+            const subscriptions: vscode.Disposable[] = [];
+            let settled = false;
+            const settle = (message?: string) => {
+                if (settled) {return;}
+                settled = true;
+                while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+                resolve(message);
+            };
+            subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
                 if (msg.command === 'squashMessageResponse') {
-                    handler.dispose();
-                    resolve(msg.message);
+                    settle(msg.message);
                 }
-            });
+            }));
+            subscriptions.push(view.onDidChangeVisibility(() => {
+                if (!view.visible) {settle(undefined);}
+            }));
+            subscriptions.push(view.onDidDispose(() => settle(undefined)));
             this._post({ command: 'showSquashMessageDialog', prompt, initialValue, placeholder });
-            // Fallback: resolve after 60s in case user closes panel
-            setTimeout(() => {
-                handler.dispose();
-                resolve(undefined);
-            }, 60000);
         });
     }
 
