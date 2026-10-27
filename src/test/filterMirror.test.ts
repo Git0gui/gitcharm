@@ -57,4 +57,51 @@ describe('applied list filter stays visible', () => {
             'backspacing the last character is an unambiguous clear; waiting for Enter leaves the list filtered by nothing the box shows'
         );
     });
+
+    it('the two search switches ride along with the text filter', () => {
+        const push = webview.match(/function pushFilters\(\) \{[\s\S]*?\n\}/);
+        assert.ok(push, 'pushFilters must exist');
+        assert.ok(
+            /command: 'setFilters'[\s\S]*?regex: searchMode\.regex[\s\S]*?caseSensitive: searchMode\.caseSensitive/.test(push[0]),
+            'the .* / Cc switches are part of the query: a box that lights up without sending them shows a mode the list is not using'
+        );
+        const mirror = webview.match(/function applyFilterMirror\(m\) \{[\s\S]*?\n\}/);
+        assert.ok(mirror, 'applyFilterMirror must exist');
+        assert.ok(
+            /searchMode\.regex = !!f\.regex/.test(mirror[0]) && /searchMode\.caseSensitive = !!f\.caseSensitive/.test(mirror[0]),
+            'a mode is not a draft: the echo must set both switches, or a re-shown panel offers the opposite of what it searched with'
+        );
+        const store = source.match(/case 'setFilters':[\s\S]*?this\._filters = \{[\s\S]*?\};/);
+        assert.ok(store, "the 'setFilters' handler must exist");
+        assert.ok(
+            /regex: !!message\.regex/.test(store[0]) && /caseSensitive: !!message\.caseSensitive/.test(store[0]),
+            'the host is the owner of the applied filter, so it has to hold the switches too'
+        );
+    });
+});
+
+describe('git search honours the .* and Cc switches', () => {
+    const gitService = fs.readFileSync(path.join(ROOT, 'src', 'services', 'gitService.ts'), 'utf8');
+
+    it('literal by default, extended regex on request, case folding by default', () => {
+        const branch = gitService.match(/if \(searchText && !forHash\) \{[\s\S]*?\n {12}\}/);
+        assert.ok(branch, 'the grep branch of the log arguments must exist');
+        assert.ok(
+            /f\.regex \? '-E' : '-F'/.test(branch[0]),
+            '-F keeps substring matching while stopping ( . * from being syntax; -E is what the switch asks for'
+        );
+        assert.ok(
+            /if \(!f\.caseSensitive\) \{a\.push\('-i'\);\}/.test(branch[0]),
+            'case folding must be the default and must disappear when the user asks for Cc'
+        );
+    });
+
+    it('the graph cache knows which switches produced an entry', () => {
+        const key = gitService.match(/const key = `\$\{this\._repositoryPath \?\? ''\}\|\$\{opts\.branch[\s\S]*?`;/);
+        assert.ok(key, 'the graph cache key must exist');
+        assert.ok(
+            /f\.regex[\s\S]*f\.caseSensitive/.test(key[0]),
+            'the same words searched two ways are two different answers — a cache that ignores the switches serves the wrong list'
+        );
+    });
 });

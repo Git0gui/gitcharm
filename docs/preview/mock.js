@@ -212,6 +212,38 @@
             favorites: [],
             steps: [{ do: 'click', sel: '#fav-filter' }]
         }),
+        /**
+         * A search that matched nothing: the dead "no matching commits" line becomes
+         * an exit — a "clear all filters" button — and the toolbar box that caused it
+         * keeps an accent badge so the short list is explained instead of mysterious.
+         */
+        noMatch: Object.assign({}, base, {
+            steps: [
+                { msg: { command: 'syncFilters', filters: { text: 'nonexistent-term', author: '', path: '', from: '', to: '' } } },
+                { msg: { command: 'setCommits', commits: [], hasMore: false } }
+            ]
+        }),
+        /**
+         * IDEA's two switches lit inside the search field: the term is handed to git
+         * as an extended regex, case-sensitively. The echo from the host is what
+         * lights them, so the frame is the one a user actually sees after Enter.
+         */
+        searchModes: Object.assign({}, base, {
+            steps: [
+                { msg: { command: 'syncFilters', filters: { text: 'fix|优化', regex: true, caseSensitive: true, author: '', path: '', from: '', to: '' } } }
+            ]
+        }),
+        /**
+         * Commit column pinned at its minimum (360px): four boxes never fit side by
+         * side there, so the secondary three have already folded into the chevron and
+         * the bar stays one row — instead of wrapping into a two-tier stack.
+         */
+        narrowBar: Object.assign({}, base, {
+            steps: [
+                { do: 'style', sel: '#left', prop: 'width', value: '430px' },
+                { do: 'style', sel: '#right', prop: 'width', value: '600px' }
+            ]
+        }),
         /** Commit row context menu, single selection. */
         commitMenu: Object.assign({}, base, {
             select: '091e77ed2a299884c744ed094c735b7e71702521',

@@ -321,6 +321,29 @@ function applyRestoreNow() {
         savedPreview.style.flex = 'none';
     }
 
+    // The commit column may not be squeezed below this: the single-row filter bar
+    // has a hard floor (search + three shrunken boxes + three buttons) and wrapping
+    // is gone, so the divider stops instead of crushing it. Matches the CSS mins.
+    var CENTER_MIN_W = 360;
+
+    /**
+     * Widest a branch/detail panel may grow so the commit column between them
+     * keeps CENTER_MIN_W. A hidden detail pane (no-detail) counts as zero, and only
+     * visible resizers are subtracted, so the ceiling tracks the real layout.
+     */
+    function maxSidePanelWidth(panel) {
+        var main = document.getElementById('main');
+        if (!main) {return Infinity;}
+        var other = document.getElementById(panel.id === 'left' ? 'right' : 'left');
+        var otherW = (other && other.offsetParent) ? other.offsetWidth : 0;
+        var resizers = 0;
+        ['resizer-left', 'resizer-right'].forEach(function (id) {
+            var r = document.getElementById(id);
+            if (r && r.offsetParent) {resizers += r.offsetWidth;}
+        });
+        return Math.max(0, main.clientWidth - CENTER_MIN_W - otherW - resizers);
+    }
+
     function setup(resizerId, panelId, minW, invert) {
         var resizer = document.getElementById(resizerId);
         var panel = document.getElementById(panelId);
@@ -334,7 +357,9 @@ function applyRestoreNow() {
             function onMove(e) {
                 var delta = e.clientX - startX;
                 var newW = invert ? startW - delta : startW + delta;
-                panel.style.width = Math.max(minW, newW) + 'px';
+                // The panel's own min wins over the center floor when the window is
+                // too small to honor both — a stuck divider beats an unusable bar.
+                panel.style.width = Math.max(minW, Math.min(newW, maxSidePanelWidth(panel))) + 'px';
             }
             function onUp() {
                 document.removeEventListener('mousemove', onMove);
@@ -384,6 +409,20 @@ function applyRestoreNow() {
     setup('resizer-right', 'right', 180, true);
     setupV('resizer-info', 'd-files', 60, 'filesHeight');
     setupV('resizer-preview', 'd-preview', 80, 'previewHeight');
+
+    // A restored session can carry side widths that leave the commit column under
+    // its floor (the window shrank since they were saved). Pull the panels back in,
+    // detail first as the secondary pane — but only once the layout has a real width
+    // to measure, because a hidden webview reports clientWidth 0 and would collapse.
+    (function clampRestoredWidths() {
+        var main = document.getElementById('main');
+        if (!main || main.clientWidth <= CENTER_MIN_W) {return;}
+        [['right', 180], ['left', 120]].forEach(function (pair) {
+            var p = document.getElementById(pair[0]);
+            if (!p || !p.offsetParent) {return;}
+            p.style.width = Math.max(pair[1], Math.min(p.offsetWidth, maxSidePanelWidth(p))) + 'px';
+        });
+    })();
 })();
 
 var palette = ['#d060a0','#4a90d9','#4ab07a','#d9a04a','#8a6ad0','#4ab0a8','#d0704a','#7a8ab0','#e070b0','#60c0b0','#c0b060','#8070e0'];
@@ -745,7 +784,11 @@ function renderRows(appendOnly) {
             document.getElementById('rows').innerHTML = renderCommitSkeleton(5);
             return;
         }
-        document.getElementById('rows').innerHTML = '<div class="empty">' + T('w.noMatch') + '</div>';
+        document.getElementById('rows').innerHTML = '<div class="empty">' + T('w.noMatch') +
+            (hasAppliedFilters()
+                ? ' <button class="empty-btn" id="clear-all-filters" type="button">' + T('filter.clearAll') + '</button>'
+                : '') +
+            '</div>';
         document.getElementById('rows').style.minWidth = '';
         removeGraphCanvas();
         return;
@@ -1774,12 +1817,63 @@ function initDateRange() {
    Hiding the panel destroys its DOM, so a re-show used to put empty boxes above a
    list still narrowed by the last search — which reads as "refresh ignores my
    empty search box". 'syncFilters' fills them back in. */
-var appliedFilters = { text: '', author: '', path: '' };
+var appliedFilters = { text: '', author: '', path: '', from: '', to: '' };
 
 function recordAppliedFilters(f) {
     appliedFilters.text = (f && f.text) || '';
     appliedFilters.author = (f && f.author) || '';
     appliedFilters.path = (f && f.path) || '';
+    appliedFilters.from = (f && f.from) || '';
+    appliedFilters.to = (f && f.to) || '';
+    syncFilterBadges();
+}
+
+/**
+ * A filter that is shaping the list right now keeps an accent edge on its control.
+ * Four grey boxes do not answer "why is this list short", and a draft typed into a
+ * box is not an applied filter — hence the applied record, not the box values.
+ */
+function syncFilterBadges() {
+    setFilterBadge('f-search', !!appliedFilters.text);
+    setFilterBadge('f-author', !!appliedFilters.author);
+    setFilterBadge('f-path', !!appliedFilters.path);
+    setFilterBadge('date-range', !!appliedFilters.from || !!appliedFilters.to);
+    // Folded away, those boxes are invisible — the chevron has to say that one of
+    // them is still narrowing the list, or the rows have no visible explanation.
+    var more = document.getElementById('btn-more-filters');
+    if (more) {
+        var folded = !!(filterUi && filterUi.compact);
+        more.classList.toggle('on', folded && !!(appliedFilters.author || appliedFilters.path
+            || appliedFilters.from || appliedFilters.to));
+    }
+}
+
+function setFilterBadge(id, on) {
+    var el = document.getElementById(id);
+    if (!el) {return;}
+    var box = el.classList.contains('tb') ? el : el.closest('.tb');
+    if (box) {box.classList.toggle('on', on);}
+}
+
+function hasAppliedFilters() {
+    return !!(appliedFilters.text || appliedFilters.author || appliedFilters.path
+        || appliedFilters.from || appliedFilters.to);
+}
+
+/** Drop every filter and re-query: the exit out of the "no matching commits" state. */
+function clearAllFilters() {
+    ['f-search', 'f-author', 'f-path'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) {el.value = '';}
+    });
+    syncClr('f-search', 'clr-search');
+    syncClr('f-author', 'clr-author');
+    syncClr('f-path', 'clr-path');
+    dateRange.from = '';
+    dateRange.to = '';
+    syncDateTrigger();
+    syncDateClr();
+    pushFilters();
 }
 
 /** Fill one empty box from the host. A box with text is a draft: never overwritten, never cleared. */
@@ -1795,13 +1889,154 @@ function applyFilterMirror(m) {
     fillFilterBox('f-search', 'clr-search', f.text || '');
     fillFilterBox('f-author', 'clr-author', f.author || '');
     fillFilterBox('f-path', 'clr-path', f.path || '');
+    // The two search switches are modes, not drafts: whatever the host listed with
+    // is what the buttons must show, or a lit ".*" could mean "not applied".
+    searchMode.regex = !!f.regex;
+    searchMode.caseSensitive = !!f.caseSensitive;
+    syncSearchModeButtons();
+    var from = f.from ? String(f.from).slice(0, 10) : '';
+    var to = f.to ? String(f.to).slice(0, 10) : '';
     if (!dateRange.from && !dateRange.to) {
-        dateRange.from = f.from ? String(f.from).slice(0, 10) : '';
-        dateRange.to = f.to ? String(f.to).slice(0, 10) : '';
+        dateRange.from = from;
+        dateRange.to = to;
         syncDateTrigger();
         syncDateClr();
     }
-    recordAppliedFilters(f);
+    recordAppliedFilters({ text: f.text, author: f.author, path: f.path, from: from, to: to });
+}
+
+/* ---------- search modes (IDEA's ".*" and "Cc") ---------- */
+/* Literal by default: -F still matches a substring, it only stops reading ( . *
+   as syntax, which is what the box has always effectively offered. ".*" hands the
+   text to git as an extended regex, "Cc" drops the case folding. Both live on the
+   host with the rest of the filter, so a hidden-and-restored panel agrees. */
+var searchMode = { regex: false, caseSensitive: false };
+
+function syncSearchModeButtons() {
+    var r = document.getElementById('tg-regex');
+    var c = document.getElementById('tg-case');
+    if (r) {r.classList.toggle('on', searchMode.regex);}
+    if (c) {c.classList.toggle('on', searchMode.caseSensitive);}
+}
+
+/* ---------- narrow-column filter overflow ---------- */
+/* Below this the four boxes cannot stay legible side by side, so the secondary
+   three move into a popover behind the chevron — the same nodes, not clones, so
+   their values, listeners and dropdown state travel with them. */
+var COMPACT_CENTER_W = 500;
+var filterUi = { pop: null, compact: false, open: false };
+
+function buildFilterPopover() {
+    var pop = document.createElement('div');
+    pop.className = 'filter-pop';
+    var title = document.createElement('div');
+    title.className = 'filter-pop-title';
+    title.textContent = T('ui.filterMore');
+    pop.appendChild(title);
+    document.body.appendChild(pop);
+    return pop;
+}
+
+function secondaryFilterBoxes() {
+    return ['f-author', 'f-path', 'date-range'].map(function (id) {
+        var el = document.getElementById(id);
+        if (!el) {return null;}
+        return el.classList.contains('tb') ? el : el.closest('.tb');
+    }).filter(Boolean);
+}
+
+function setFilterCompact(on) {
+    var cbar = document.getElementById('cbar');
+    if (!cbar || on === filterUi.compact) {return;}
+    filterUi.compact = on;
+    var pop = filterUi.pop || (filterUi.pop = buildFilterPopover());
+    var boxes = secondaryFilterBoxes();
+    if (on) {
+        boxes.forEach(function (b) {pop.appendChild(b);});
+        cbar.classList.add('compact');
+    } else {
+        // Back into the bar in their original order, ahead of the action buttons.
+        var anchor = document.getElementById('btn-reflog');
+        boxes.forEach(function (b) {cbar.insertBefore(b, anchor);});
+        closeFilterPopover();
+        cbar.classList.remove('compact');
+    }
+    syncFilterBadges();
+}
+
+function positionFilterPopover() {
+    var btn = document.getElementById('btn-more-filters');
+    var pop = filterUi.pop;
+    if (!btn || !pop) {return;}
+    var r = btn.getBoundingClientRect();
+    pop.style.left = Math.max(4, r.left) + 'px';
+    pop.style.top = (r.bottom + 6) + 'px';
+    // Place first, then correct against the rect that was actually rendered: under
+    // a zoomed host a CSS px and a measured px are different scales.
+    for (var i = 0; i < 2; i++) {
+        var got = pop.getBoundingClientRect();
+        var dx = got.right > window.innerWidth - 4 ? got.right - window.innerWidth + 4 : 0;
+        var dy = got.bottom > window.innerHeight - 4 ? got.bottom - window.innerHeight + 4 : 0;
+        if (!dx && !dy) {break;}
+        pop.style.left = (parseFloat(pop.style.left) - dx) + 'px';
+        pop.style.top = (parseFloat(pop.style.top) - dy) + 'px';
+    }
+}
+
+function openFilterPopover() {
+    if (!filterUi.compact) {return;}
+    var pop = filterUi.pop || (filterUi.pop = buildFilterPopover());
+    filterUi.open = true;
+    pop.classList.add('open');
+    positionFilterPopover();
+    var btn = document.getElementById('btn-more-filters');
+    if (btn) {btn.classList.add('open');}
+    if (window._hideTooltip) {window._hideTooltip();}
+}
+
+function closeFilterPopover() {
+    if (!filterUi.open) {return;}
+    filterUi.open = false;
+    if (filterUi.pop) {filterUi.pop.classList.remove('open');}
+    var btn = document.getElementById('btn-more-filters');
+    if (btn) {btn.classList.remove('open');}
+}
+
+function initFilterOverflow() {
+    var center = document.getElementById('center');
+    var btn = document.getElementById('btn-more-filters');
+    if (!center || !btn) {return;}
+    var measure = function () {
+        var w = center.clientWidth;
+        // A hidden webview measures 0; that is not a narrow column.
+        if (w <= 0) {return;}
+        setFilterCompact(w < COMPACT_CENTER_W);
+        if (filterUi.open) {positionFilterPopover();}
+    };
+    measure();
+    if (window.ResizeObserver) {
+        new ResizeObserver(measure).observe(center);
+    } else {
+        window.addEventListener('resize', measure);
+    }
+    btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (filterUi.open) {closeFilterPopover();} else {openFilterPopover();}
+    });
+    document.addEventListener('mousedown', function (e) {
+        if (!filterUi.open) {return;}
+        if (filterUi.pop && filterUi.pop.contains(e.target)) {return;}
+        // The calendar is opened from inside this popover and lives on body: a press
+        // on it must not close the popover that holds its trigger.
+        if (dateUi && dateUi.pop && dateUi.pop.contains(e.target)) {return;}
+        closeFilterPopover();
+    });
+    document.addEventListener('keydown', function (e) {
+        // Capture phase, so this runs before the calendar's own Escape handler:
+        // one press closes the topmost layer only. In the bubble phase the calendar
+        // has already reported itself closed and both popovers would go.
+        if (e.key === 'Escape' && filterUi.open && !(dateUi && dateUi.isOpen)) {closeFilterPopover();}
+    }, true);
 }
 
 /* ---------- events ---------- */
@@ -1815,10 +2050,12 @@ function pushFilters() {
     var fromFormatted = dateRange.from ? dateRange.from + 'T00:00:00' : '';
     var toFormatted = dateRange.to ? dateRange.to + 'T23:59:59' : '';
 
-    recordAppliedFilters({ text: text, author: author, path: path });
+    recordAppliedFilters({ text: text, author: author, path: path, from: dateRange.from, to: dateRange.to });
     vscode.postMessage({
         command: 'setFilters',
         text: text,
+        regex: searchMode.regex,
+        caseSensitive: searchMode.caseSensitive,
         author: author,
         path: path,
         from: fromFormatted,
@@ -1826,6 +2063,19 @@ function pushFilters() {
     });
 }
 var debounce;
+document.getElementById('tg-regex').addEventListener('click', function () {
+    searchMode.regex = !searchMode.regex;
+    syncSearchModeButtons();
+    // Re-query straight away: with a word already in the box, the switch is the
+    // answer to "why didn't that match", and making the user press Enter again
+    // hides it.
+    pushFilters();
+});
+document.getElementById('tg-case').addEventListener('click', function () {
+    searchMode.caseSensitive = !searchMode.caseSensitive;
+    syncSearchModeButtons();
+    pushFilters();
+});
 document.getElementById('f-search').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
         pushFilters();
@@ -1858,6 +2108,7 @@ document.getElementById('f-author').addEventListener('blur', function() {
 // endpoints typed into native date fields, whose calendar popup the theme cannot
 // reach (same reason the author box got its own dropdown).
 initDateRange();
+initFilterOverflow();
 document.getElementById('btn-refresh').addEventListener('click', function () {
     vscode.postMessage({ command: 'refresh' });
 });
@@ -2227,6 +2478,10 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
 });
 
 document.getElementById('rows').addEventListener('click', function (e) {
+    if (e.target.closest('#clear-all-filters')) {
+        clearAllFilters();
+        return;
+    }
     var row = e.target.closest('.row');
     if (!row) return;
     
@@ -2404,15 +2659,19 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     if (window._hideTooltip) window._hideTooltip();
     var path = file.getAttribute('data-path');
     var items = [];
-    // "Source" is the checked-out branch's copy, not the commit's version. A path
-    // that no longer exists in the working tree has no source to open, so the
-    // entry is disabled rather than silently doing nothing or resurrecting a
-    // historical blob.
+    // Two distinct paths to the code. "Jump to Source" opens the checked-out
+    // branch's copy in the working tree — greyed when that path no longer exists
+    // there, since it must never resurrect history over the working file. "Open
+    // this commit's version" always works: it opens the historical blob in a
+    // read-only tab, so a file deleted since is still readable.
     if (state.selectedHashes.length <= 1) {
         var localPaths = state.detail && Array.isArray(state.detail.existingPaths)
             ? state.detail.existingPaths : null;
         var hasSource = !localPaths || localPaths.indexOf(path) >= 0;
-        items.push(['fileJumpToSource', T('menu.fileJumpToSource'), !hasSource]);
+        items.push(
+            ['fileJumpToSource', T('menu.fileJumpToSource'), !hasSource],
+            ['fileOpenRevision', T('menu.fileOpenRevision')]
+        );
     }
     items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],

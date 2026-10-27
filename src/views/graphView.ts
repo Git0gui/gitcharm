@@ -9,6 +9,7 @@ import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from 
 import { resolveGitDir } from '../services/gitPaths';
 import { EMPTY_TREE_HASH, isOperationStateFile, mergeCommitFileStats, repositoryKey, formatGitError } from '../services/gitUtils';
 import { openEditorDiff } from '../commands/helpers';
+import { GitBlobFileSystemProvider } from '../services/blobFs';
 import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { getLocale, t, webviewStrings } from '../i18n';
 
@@ -875,6 +876,38 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Open the file as it stood at this commit in a read-only editor tab, landed on
+     * the first line the commit touched — the "read the old code" path that Jump to
+     * Source cannot serve once the file is gone from the working tree.
+     *
+     * A file *deleted by* this commit has no blob at `hash`; its last content lives
+     * in the parent, so open that revision instead and anchor on the old-side line.
+     * Binary files get the same one-line refusal as the editor diff rather than a
+     * tab of undecodable bytes.
+     */
+    private async _openRevisionAtChange(hash: string, relativePath: string): Promise<void> {
+        try {
+            const base = await this._gitService.getDiffBase(hash);
+            const preview = await this._gitService.getFileDiffPreview(base, hash, relativePath);
+            if (preview.binary) {
+                vscode.window.showInformationMessage(t('file.binaryDiff', { path: relativePath }));
+                return;
+            }
+            const existsAtCommit = await this._gitService.blobExists(hash, relativePath);
+            const ref = existsAtCommit ? hash : base;
+            const line = existsAtCommit ? preview.firstChangedLine : preview.firstChangedOldLine;
+            const uri = GitBlobFileSystemProvider.uri(ref, relativePath);
+            const pos = new vscode.Position(Math.max(0, line - 1), 0);
+            await vscode.window.showTextDocument(uri, {
+                preview: false,
+                selection: new vscode.Range(pos, pos)
+            });
+        } catch (error) {
+            vscode.window.showErrorMessage(t('file.openRevisionFailed', { error: formatGitError(error) }));
+        }
+    }
+
+    /**
      * Which of these changed paths still exist on disk. The file menu greys out
      * "jump to source" for the rest: there is no working-tree file to open, and
      * silently doing nothing (or resurrecting a history version) is not an answer.
@@ -1070,6 +1103,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     try {
                         this._filters = {
                             text: (message.text || '').trim() || undefined,
+                            regex: !!message.regex,
+                            caseSensitive: !!message.caseSensitive,
                             author: (message.author || '').trim() || undefined,
                             from: message.from || undefined,
                             to: message.to || undefined,
@@ -1876,6 +1911,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await this._openWorkingTreeFile(relPath);
                     return;
                 }
+                case 'fileOpenRevision': {
+                    const hash = message.hash;
+                    const relPath = message.path;
+                    if (!hash || !relPath) { return; }
+                    await this._openRevisionAtChange(hash, relPath);
+                    return;
+                }
                 case 'fileCompareLocal': {
                     const hash = message.hash;
                     const relPath = message.path;
@@ -2006,7 +2048,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         const dropped = this._dropVanishedBranch();
         const rev = this._listRev();
         logger.debug(`[GitCharm] _collect called with branch=${rev || 'all'}, force=${force}`);
-        logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}`);
+        logger.debug(`[GitCharm] Filters: from=${this._filters.from}, to=${this._filters.to}, author=${this._filters.author}, text=${this._filters.text}, path=${this._filters.path}, regex=${this._filters.regex ? 1 : 0}, case=${this._filters.caseSensitive ? 1 : 0}`);
         const [first, details] = await Promise.all([
             this._firstPageRows(force),
             // A vanished branch must also disappear from the tree immediately;
@@ -2497,11 +2539,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         <div class="resizer" id="resizer-left"></div>
         <div id="center">
             <div id="cbar">
-                <label class="tb">
+                <div class="tb search-tb">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14.5" y2="14.5"/></svg>
                     <input id="f-search" type="text" placeholder="${t('ui.searchCommits')}">
                     <button class="clr" style="display:none" id="clr-search" title="${t('ui.clear')}" type="button">&#10005;</button>
-                </label>
+                    <button class="mode-btn" id="tg-regex" type="button" data-title="${t('ui.searchRegex')}">.*</button>
+                    <button class="mode-btn" id="tg-case" type="button" data-title="${t('ui.searchCase')}">Cc</button>
+                </div>
+                <button id="btn-more-filters" type="button" data-title="${t('ui.filterMore')}">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3.5L10.5 8L6 12.5"/></svg>
+                </button>
                 <div class="tb author-dropdown-wrapper">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="5" r="3"/><path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/></svg>
                     <input id="f-author" type="text" placeholder="${t('ui.author')}" autocomplete="off">

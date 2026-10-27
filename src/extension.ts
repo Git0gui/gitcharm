@@ -6,6 +6,7 @@ import { GitAskpass } from './services/askpass';
 import { logger } from './services/logger';
 import { GraphViewProvider } from './views/graphView';
 import { BlameProvider } from './services/blameProvider';
+import { GitBlobFileSystemProvider } from './services/blobFs';
 import { gitBlobUri, openEditorDiff } from './commands/helpers';
 import { registerBranchCommands } from './commands/branchCommands';
 import { registerCommitCommands } from './commands/commitCommands';
@@ -188,6 +189,16 @@ export function activate(ctx: vscode.ExtensionContext) {
                     return '';
                 }
             }
+        })
+    );
+
+    // A file at a historical revision as a real, read-only editor tab
+    const blobFs = new GitBlobFileSystemProvider(gitService);
+    ctx.subscriptions.push(
+        blobFs,
+        vscode.workspace.registerFileSystemProvider(GitBlobFileSystemProvider.scheme, blobFs, {
+            isReadonly: true,
+            isCaseSensitive: true
         })
     );
 

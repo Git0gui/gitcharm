@@ -2,6 +2,34 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.6] - 2026-10-27
+
+本版是中间那条筛选栏的对齐批次：搜索框长出 IDEA 自己的两个模式开关，窄列不再叠排而是把二级筛选搬进 `>` 浮层，另加"筛选删空"的出口与只读历史版本入口。选中态加强是同批里最先落地的一条，也先于这批改了工具栏的行内密度。
+
+### 新增
+
+- **搜索框内嵌 `.*` / `Cc` 两个模式开关**（`src/services/gitService.ts` 的 `LogFilters.regex` / `caseSensitive`，`_loadGraphData` 在 `--grep=` 前挂 `-E`/`-F` 并按需挂 `-i`；`views/graphView.ts` 的 `search-tb` 标记；`media/webview.js` 的 `searchMode` / `syncSearchModeButtons`；i18n `ui.searchRegex` / `ui.searchCase` / `ui.filterMore`）。此前固定挂 `--regexp-ignore-case`，用户打一个左括号就撞 `fatal: command line, '(优化': Unmatched ( or \(`（exit 128）——把语法错误当搜索词。默认改成 `-F`：**仍然是子串模糊匹配**，只是不再把 `( . *` 当语法，这一点必须写清，否则用户以为字面模式=精确匹配。`Cc` 打开时不再追加 `-i`。这几个旗标对整条 rev walk 生效，所以 `--author` 跟着变（它本来就忽略大小写，"区分大小写 + 提交人"因此是新的组合语义）。两个开关进 graph 缓存 key（`|${regex ? 'R' : '-'}${caseSensitive ? 'C' : '-'}`）：同一批词两种搜法是两份答案，不分家就会拿错列表。**开关是模式不是草稿**——`applyFilterMirror` 无条件赋值，框空着也保持点亮，否则下一次输入悄悄按另一种规则搜。
+- **文件右键"打开历史版本（只读）"**（`src/services/blobFs.ts` 的 `GitBlobFileSystemProvider`，scheme `idea-git-blob`，URI 形如 `idea-git-blob:/<仓库相对路径>?ref=<rev>`，在 `extension.ts` 用 `registerFileSystemProvider` 注册；入口 `GraphViewProvider._openRevisionAtChange`）。这条**恒可用**，因为 `跳转到源` 是工作区语义、对工作区已删除的文件只能灰显——老代码从此有读的路径。被本次提交删掉的文件在 `hash` 上没有 blob，回退到 `getDiffBase(hash)` 的父版本并按**旧侧**行号定位（`preview.firstChangedOldLine`；存在时用 `firstChangedLine`）。二进制沿用 `openEditorDiff` 那一句拒绝，不把解不出来的字节塞进标签页。锚点行号取自补丁的第一个 hunk，`src/test/gitParsing.test.ts` 用 4 例守住（晚改动不落在第 1 行、hunk 一侧为空、无 hunk）。
+- **筛选删空的出口 + 生效筛选的徽章**（`media/webview.js`：空态 `w.noMatch` 那行死文字换成"清除全部筛选"按钮，本地清空四个框再重查；`syncFilterBadges()` 在文本 / 提交人 / 路径 / 日期四个控件上点亮）。徽章读**已生效记录**而不是输入框草稿——没按回车的词不能让按钮亮，否则等于替用户承认了一次还没发生的搜索。
+
+### 变更
+
+- **选中态加强**（`media/webview.css`，提交行 / 分支与贮藏行 / 第三栏文件行 / 对话框提交行共用同一套）：有些主题的 `list-activeSelectionBackground` 与编辑器底色几乎同色，只靠填充等于看不出选了哪一行。现在底色上叠一层蓝色渐洗、阅读侧一条 3px 强调条（`--vscode-list-highlightForeground`）、标签加粗。阴影一律 `inset`——外投影会被列表边缘裁掉；`.sel.kcur` 保留键盘光标圈，两条线索叠在同一行时都在。
+- **工具栏保持单行**：`#cbar` 从 `flex-wrap: wrap` 改 `nowrap`，`.tb` 从 `1 1 110px / min-width 96px` 改成 `1 1 0 / min-width 0`——窄列时先吃掉二级框，搜索框单独保留最大份额与唯一真实的下限（`min-width: 90px`）。原来 `wrap` 的结果是工具栏占掉两排高度、列表少一屏，而 IDEA 那条工具栏始终是单行。
+- **窄列折叠进 `>` 浮层**（`COMPACT_CENTER_W = 500`、`buildFilterPopover` / `secondaryFilterBoxes` / `setFilterCompact` / `positionFilterPopover` / `initFilterOverflow`）：中列低于 500px 时把 `f-author` / `f-path` / `date-range` 三格的 `.tb` **原节点**搬进浮层，回来时按锚点 `#btn-reflog` 插回。搬的是同一批 DOM 而不是克隆：克隆会把 `applyFilterMirror` 的落点分成两处，值与监听各活一份。判断用 `#center.clientWidth` + `ResizeObserver`，**隐藏态量到 0 必须直接返回**（那不是窄列，把三格搬走等于让重新显示的面板少掉半截工具栏）。浮层 `position: fixed`、z-index 8500——日期日历是 9000，它从浮层内部打开，绝不能被压住。定位按"先摆再校"两趟：宿主可以开缩放，CSS px 与 `getBoundingClientRect()` 的 px 不是一个尺度，只按数值 clamp 的右边界会露出屏幕外。Escape 走**捕获阶段**且日历开着时不关这层——冒泡阶段日历已经报过"我关了"，两层会一起消失。
+- **提交列最小宽度**：拖分栏时钳制 `#left` / `#right` 的最大宽度，中间列不低于 360px（折叠后单行仍要放得下搜索框与 `>`）；隐藏详情栏按 0 宽计入，只有布局真有宽度时才判定；恢复历史会话留下的过宽面板在载入后回拉一次。
+
+### 文档
+
+- AGENTS.md：§7 加"已生效的筛选条件只活在宿主"一节的收尾——中间栏只有一行、模式开关无条件回灌、500px 折叠搬同一批 DOM 节点、隐藏态量到 0 直接返回、浮层 z-index 8500；§8 改写文本搜索那条（默认 `-F`、`.*`→`-E`、`Cc`→去掉 `-i`，两个开关是筛选条件的一部分，必须进 `_filters` / `syncFilters` / 缓存 key，且这些旗标对整个 rev walk 生效）。
+
+### 验证
+
+- compile / lint（0 error，74 warning 与基线一致）/ test 全绿，306 例（较 0.1.5 增 7 例：`filterMirror.test.ts` 3 例守两个开关的回灌与缓存分家，`gitParsing.test.ts` 4 例守历史版本的锚点行号）。
+- 真实浏览器（预览 harness，chrome-devtools）实测：`setFilters` 载荷 `{text:'', regex:true, caseSensitive:true}`、两个按钮都是 `mode-btn on`；中列 292px 时折叠成立，浮层 300×131 落在 (451, 38) 视口内，日期日历能从浮层内部打开；Escape 在日历开着时只关日历（`{calendar:false, pop:true}`）；展开后工具栏顺序回到 `f-search, btn-more-filters, f-author, f-path, date-range, btn-reflog, ...`。四种开关组合逐一与 git CLI 比对（`-F -i` / `-F` / `-E -i` / `-E`）。
+- 预览场景 `searchModes`（开关点亮）、`narrowBar`（折叠后的单行）、`noMatch`（空态出口 + 徽章）。**折叠交互本身不能用 headless 场景验收**：`--virtual-time-budget` 把定时器跑到渲染帧之前，`ResizeObserver` 还没交付第一帧，步骤里的点击永远发生在折叠之前——曾加过一个 `foldedBar` 场景，两次 `--dump-dom` 结果都不一致，已删除，改由真实浏览器验证。
+- 待复验（需要真实工作台）：本批全部（选中态、搜索框开关、折叠、只读历史版本、空态出口）＋ 0.1.5 遗留的两条（双击图片只给一句提示、隐藏再显示后输入框带着生效筛选词）。`media/` 改动后开发宿主跑旧代码，必须完全重启，必要时 bump 版本号让缓存失效。
+
 ## [0.1.5] - 2026-10-27
 
 本版修两处都会被误判成"缓存没刷新"的错位：筛选条件只活在宿主、输入框随面板销毁而清空；二进制文件被当作文本交给编辑器对比，于是标签页永远转圈。另把差异左端从字面 `hash^` 换成真正解析出来的父提交。

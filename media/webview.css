@@ -1,5 +1,18 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; }
+/*
+ * A selection must be visible even in themes whose list-activeSelectionBackground
+ * sits close to the editor background — there the fill alone reads as "nothing is
+ * selected". Every selected row therefore carries the same three cues: a wash over
+ * the fill, an accent bar on its reading edge, and a bolder label. Inset shadows
+ * only: a drop shadow paints outside the row and gets clipped by the list edge.
+ */
+:root {
+    --gc-sel-accent: var(--vscode-list-highlightForeground, var(--vscode-focusBorder, #4da3ff));
+    --gc-sel-wash: linear-gradient(90deg, rgba(96, 166, 255, .28), rgba(96, 166, 255, .12) 65%, rgba(96, 166, 255, .10));
+    --gc-sel-bar: inset 3px 0 0 0 var(--gc-sel-accent);
+    --gc-sel-ring: inset 0 0 0 1px var(--vscode-focusBorder, #007fd4);
+}
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--vscode-editor-background);
@@ -105,11 +118,15 @@ svg { flex: none; }
     background: var(--vscode-editorWidget-background, #252526);
     border-bottom: 1px solid var(--vscode-panel-border, #333);
     flex: none;
-    flex-wrap: wrap;
+    /* One row, always. Wrapping turned the filter bar into a two-tier stack the
+       moment the commit column narrowed; the boxes shrink instead (see the
+       center-column minimum width in webview.js), which is how IDEA's bar behaves. */
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 .tb {
-    flex: 1 1 110px;
-    min-width: 96px;
+    flex: 1 1 0;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -121,9 +138,51 @@ svg { flex: none; }
     color: var(--vscode-descriptionForeground);
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
+/* The search box is the primary filter: it keeps the largest share and the only
+   real floor, so narrowing the column eats the secondary boxes before it. */
+#cbar .tb:first-child {
+    flex: 2 1 0;
+    min-width: 90px;
+}
 .tb:focus-within { 
     border-color: var(--vscode-focusBorder, #007fd4);
     box-shadow: 0 0 0 2px rgba(0, 127, 212, 0.15);
+}
+/* An applied filter keeps an accent edge: the badge answers "which box is shaping
+   this list" at a glance, which the box text alone does not (grey on grey). */
+.tb.on {
+    border-color: var(--gc-sel-accent);
+}
+/* IDEA's two inline switches inside the search field: ".*" searches as a regular
+   expression, "Cc" keeps the case. They are modes, not filters, so they stay lit
+   while the box is empty — the next word typed is searched the same way. */
+.mode-btn {
+    flex: none;
+    min-width: 20px;
+    height: 18px;
+    padding: 0 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--vscode-descriptionForeground, #888);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.mode-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+    color: var(--vscode-foreground);
+}
+.mode-btn.on {
+    background: var(--vscode-list-activeSelectionBackground, rgba(0, 127, 212, 0.22));
+    color: var(--vscode-textLink-foreground, #4ea3ff);
+    box-shadow: inset 0 0 0 1px var(--gc-sel-accent);
 }
 .tb input, .tb select {
     flex: 1;
@@ -219,7 +278,7 @@ svg { flex: none; }
     font-size: 12px;
 }
 .tb select option { background: var(--vscode-dropdown-background, #3c3c3c); }
-.tb.date { flex: 1 1 150px; min-width: 132px; }
+.tb.date { flex: 1 1 0; min-width: 60px; }
 .tb.date.open {
     border-color: var(--vscode-focusBorder, #007fd4);
     box-shadow: 0 0 0 2px rgba(0, 127, 212, 0.15);
@@ -393,7 +452,7 @@ svg { flex: none; }
     color: var(--vscode-foreground);
     transform: scale(1.1);
 }
-#btn-refresh, #btn-reflog, #tg-graph {
+#btn-refresh, #btn-reflog, #tg-graph, #btn-more-filters {
     flex: none;
     width: 30px;
     height: 26px;
@@ -406,6 +465,42 @@ svg { flex: none; }
     color: var(--vscode-foreground);
     cursor: pointer;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* IDEA's overflow chevron: once the commit column is too narrow for four boxes,
+   the secondary filters move into a popover behind this button instead of
+   squeezing the search field to nothing (webview.js: applyFilterCompact). */
+#btn-more-filters { display: none; }
+#cbar.compact #btn-more-filters { display: flex; }
+#btn-more-filters:hover {
+    background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
+    transform: translateX(1px);
+}
+#btn-more-filters.open {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    color: var(--vscode-textLink-foreground, #4ea3ff);
+}
+.filter-pop {
+    position: fixed;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    width: 300px;
+    max-width: calc(100vw - 16px);
+    padding: 8px;
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-panel-border, #454545);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    /* Below the date calendar (9000) and the tooltip (10000): the calendar is
+       opened from inside this popover and must never sit under it. */
+    z-index: 8500;
+}
+.filter-pop.open { display: flex; }
+.filter-pop .tb { flex: none; width: 100%; }
+.filter-pop-title {
+    color: var(--vscode-descriptionForeground, #888);
+    font-size: 11px;
+    padding: 0 2px 2px;
 }
 #btn-refresh:hover { 
     background: var(--vscode-toolbar-hoverBackground, #3c3c3c);
@@ -667,8 +762,9 @@ svg { flex: none; }
 }
 .bitem.sel {
     background: var(--vscode-list-activeSelectionBackground, #094771);
+    background-image: var(--gc-sel-wash);
     color: var(--vscode-list-activeSelectionForeground, #fff);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--gc-sel-bar);
 }
 .bitem.sel .bname { color: inherit; font-weight: 600; }
 .bitem.cur .bname { color: var(--vscode-textLink-foreground, #4da3ff); font-weight: 600; }
@@ -696,8 +792,9 @@ svg { flex: none; }
 }
 .sitem.sel {
     background: var(--vscode-list-activeSelectionBackground, #094771);
+    background-image: var(--gc-sel-wash);
     color: var(--vscode-list-activeSelectionForeground, #fff);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--gc-sel-bar);
 }
 .sitem.sel .bname { color: inherit; font-weight: 600; }
 .sitem.sel .sdate { color: inherit; opacity: .8; }
@@ -847,11 +944,13 @@ svg { flex: none; }
     background: var(--vscode-list-hoverBackground, #2a2d2e);
     transform: translateX(2px);
 }
-.row.sel { 
-    background: var(--vscode-list-activeSelectionBackground, #094771); 
+.row.sel {
+    background: var(--vscode-list-activeSelectionBackground, #094771);
+    background-image: var(--gc-sel-wash);
     color: var(--vscode-list-activeSelectionForeground, #fff);
-    /* No box-shadow to prevent layout reflow flicker */
+    box-shadow: var(--gc-sel-bar);
 }
+.row.sel .cmsg { font-weight: 600; }
 .row.sel .cmsg, .row.sel .rauthor, .row.sel .rdate { color: inherit; }
 .garea { position: relative; flex: none; height: 30px; }
 canvas.graph-canvas { 
@@ -1234,6 +1333,17 @@ canvas.graph-canvas {
     background: var(--vscode-list-hoverBackground, #2a2d2e);
     transform: translateX(2px);
 }
+/* The file list's cursor row IS its selection (nothing else marks it), so it gets
+   the full treatment plus the focus ring — the ring is what tells it apart from a
+   keyboard cursor sitting on a non-selected row. */
+.frow.kcur {
+    background: var(--vscode-list-activeSelectionBackground, #094771);
+    background-image: var(--gc-sel-wash);
+    color: var(--vscode-list-activeSelectionForeground, #fff);
+    box-shadow: var(--gc-sel-bar), var(--gc-sel-ring);
+}
+.frow.kcur .fname { color: inherit; font-weight: 600; }
+.frow.kcur .fcount { color: inherit; opacity: .8; }
 /* Icons taken from the active workbench file-icon theme */
 .fi-wrap { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; }
 .fi {
@@ -1267,6 +1377,20 @@ canvas.graph-canvas {
     color: var(--vscode-descriptionForeground, #888);
     animation: fadeIn 0.3s ease-out;
 }
+/* The way out of a filtered-to-nothing list: without it the user has to remember
+   which of the four boxes is holding the term that emptied the list. */
+.empty-btn {
+    margin-left: 10px;
+    padding: 2px 10px;
+    font-size: 12px;
+    color: var(--vscode-button-foreground, #fff);
+    background: var(--vscode-button-background, #0e639c);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.empty-btn:hover { background: var(--vscode-button-hoverBackground, #1177bb); }
 
 /* ---- skeleton loading animation ---- */
 .skeleton {
@@ -1867,10 +1991,12 @@ body.dialog-resizing * {
     background: var(--vscode-list-hoverBackground, #2a2d2e);
     transform: translateX(2px);
 }
-.push-commit-row.sel { 
+.push-commit-row.sel {
     background: var(--vscode-list-activeSelectionBackground, #094771);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    background-image: var(--gc-sel-wash);
+    box-shadow: var(--gc-sel-bar);
 }
+.push-commit-row.sel .push-commit-msg { font-weight: 600; }
 .push-commit-hash {
     font-family: monospace;
     font-size: 11px;
@@ -1920,6 +2046,8 @@ body.dialog-resizing * {
 }
 .push-all-row.sel {
     background: var(--vscode-list-activeSelectionBackground, #094771);
+    background-image: var(--gc-sel-wash);
+    box-shadow: var(--gc-sel-bar);
 }
 .push-all-label { font-weight: 600; }
 .push-compare-sub {
@@ -2362,7 +2490,8 @@ body.dialog-resizing * {
  * The three panes are tab stops, so the ring only shows while the keyboard owns
  * focus (:focus-visible stays off after a mouse click). .kcur marks the row the
  * arrows are on: a border rather than a filled background, because the cursor is
- * not a second selection and must stay readable on top of .sel.
+ * not a second selection and must stay readable on top of .sel. The file list is
+ * the exception — its cursor row is also its selected row, so .frow.kcur fills.
  */
 #btree:focus-visible,
 #scroll:focus-visible,
@@ -2372,6 +2501,10 @@ body.dialog-resizing * {
 }
 .kcur {
     box-shadow: inset 0 0 0 1px var(--vscode-focusBorder, #007fd4);
+}
+/* A selected row the arrows are sitting on keeps both cues. */
+.sel.kcur {
+    box-shadow: var(--gc-sel-bar), var(--gc-sel-ring);
 }
 .bitem.kcur, .bfolder.kcur, .bsec.kcur, .sitem.kcur, .witem.kcur, .frow.kcur {
     border-radius: 6px;
