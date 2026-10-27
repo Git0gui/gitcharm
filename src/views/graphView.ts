@@ -42,7 +42,7 @@ const BRANCH_POLL_MS = 2000;
 const SCREEN_COMMANDS: ReadonlySet<ExtToWebviewMessage['command']> = new Set([
     'setData', 'setBranches', 'setStashes', 'setWorktrees', 'setRepoState', 'setFavorites',
     'setCommits', 'setHeadHash', 'setInProgress', 'setDivergence', 'setCurrentBranch',
-    'setDetail', 'setFileIconTheme'
+    'setDetail', 'setFileIconTheme', 'syncFilters'
 ]);
 
 export class GraphViewProvider implements vscode.WebviewViewProvider {
@@ -513,6 +513,19 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             repositories: this._gitService.listRepositories(),
             currentRepository: this._gitService.repositoryPath
         });
+    }
+
+    /**
+     * Tell the panel which filter produced the rows it is about to show.
+     * `_filters` lives here and survives, the input boxes live in a DOM that is
+     * destroyed on every hide — so a re-show repaints empty boxes over a list
+     * still narrowed by the last search. The user reads that as "refresh ignores
+     * my empty search box", which is exactly right: the box stopped describing
+     * the list. Buffering this as a screen message means the 'ready' handshake
+     * replays it along with the rows it belongs to.
+     */
+    private _postFilterMirror(): void {
+        this._post({ command: 'syncFilters', filters: this._filters });
     }
 
     /**
@@ -2043,6 +2056,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._revRoot.after = first.after;
         }
         this._loadedHashes = new Set(commits.map(c => c.hash));
+        this._postFilterMirror();
         const repoPath = this._gitService.repositoryPath;
         return {
             commits,
@@ -2363,6 +2377,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 commits: first.commits,
                 hasMore: this._hasMore
             });
+            this._postFilterMirror();
             const postTime = Date.now() - postStart;
             
             const totalTime = Date.now() - startTime;

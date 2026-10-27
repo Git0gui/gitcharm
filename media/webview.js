@@ -1769,19 +1769,58 @@ function initDateRange() {
     syncDateTrigger();
 }
 
+/* ---------- applied list filters ---------- */
+/* The host owns the filter that produced the rows; these boxes only describe it.
+   Hiding the panel destroys its DOM, so a re-show used to put empty boxes above a
+   list still narrowed by the last search — which reads as "refresh ignores my
+   empty search box". 'syncFilters' fills them back in. */
+var appliedFilters = { text: '', author: '', path: '' };
+
+function recordAppliedFilters(f) {
+    appliedFilters.text = (f && f.text) || '';
+    appliedFilters.author = (f && f.author) || '';
+    appliedFilters.path = (f && f.path) || '';
+}
+
+/** Fill one empty box from the host. A box with text is a draft: never overwritten, never cleared. */
+function fillFilterBox(inputId, clrId, value) {
+    var el = document.getElementById(inputId);
+    if (!el || el.value || !value) {return;}
+    el.value = value;
+    syncClr(inputId, clrId);
+}
+
+function applyFilterMirror(m) {
+    var f = m.filters || {};
+    fillFilterBox('f-search', 'clr-search', f.text || '');
+    fillFilterBox('f-author', 'clr-author', f.author || '');
+    fillFilterBox('f-path', 'clr-path', f.path || '');
+    if (!dateRange.from && !dateRange.to) {
+        dateRange.from = f.from ? String(f.from).slice(0, 10) : '';
+        dateRange.to = f.to ? String(f.to).slice(0, 10) : '';
+        syncDateTrigger();
+        syncDateClr();
+    }
+    recordAppliedFilters(f);
+}
+
 /* ---------- events ---------- */
 function pushFilters() {
     // Convert date format to include time for better git filtering
     // YYYY-MM-DD -> YYYY-MM-DDT00:00:00 (start of day)
     // YYYY-MM-DD -> YYYY-MM-DDT23:59:59 (end of day)
+    var text = document.getElementById('f-search').value;
+    var author = document.getElementById('f-author').value;
+    var path = document.getElementById('f-path').value;
     var fromFormatted = dateRange.from ? dateRange.from + 'T00:00:00' : '';
     var toFormatted = dateRange.to ? dateRange.to + 'T23:59:59' : '';
 
+    recordAppliedFilters({ text: text, author: author, path: path });
     vscode.postMessage({
         command: 'setFilters',
-        text: document.getElementById('f-search').value,
-        author: document.getElementById('f-author').value,
-        path: document.getElementById('f-path').value,
+        text: text,
+        author: author,
+        path: path,
         from: fromFormatted,
         to: toFormatted
     });
@@ -1843,11 +1882,18 @@ function syncClr(inputId, clrId) {
     var b = document.getElementById(clrId);
     if (i && b) b.style.display = i.value ? '' : 'none';
 }
-['f-search|clr-search', 'f-author|clr-author', 'f-path|clr-path', 'f-bfilter|clr-bfilter'].forEach(function (pair) {
+['f-search|clr-search|text', 'f-author|clr-author|author', 'f-path|clr-path|path', 'f-bfilter|clr-bfilter|'].forEach(function (pair) {
     var ids = pair.split('|');
     syncClr(ids[0], ids[1]);
     var i = document.getElementById(ids[0]);
-    if (i) i.addEventListener('input', function () { syncClr(ids[0], ids[1]); });
+    if (i) i.addEventListener('input', function () {
+        syncClr(ids[0], ids[1]);
+        // A typed term searches on Enter, but deleting one has nothing to wait
+        // for: leaving the host filtered while the box is empty is the bug the ✕
+        // button already avoids — by backspace the user deserves the same result.
+        // ids[2] is empty for the branch-tree filter, which never reaches the host.
+        if (ids[2] && !i.value.trim() && appliedFilters[ids[2]]) {pushFilters();}
+    });
 });
 function syncDateClr() {
     var on = !!(dateRange.from || dateRange.to);
@@ -3383,6 +3429,10 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'setHeadHash') {
         // Update head hash asynchronously
         state.headHash = m.headHash || '';
+    } else if (m.command === 'syncFilters') {
+        // The list is about to be (or already was) painted with this filter — make
+        // the boxes say the same thing, otherwise an empty box hides an active one.
+        applyFilterMirror(m);
     } else if (m.command === 'setCommits') {
         // Update commits after initial branch display
         state.commits = m.commits || [];
