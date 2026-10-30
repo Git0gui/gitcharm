@@ -1820,6 +1820,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // quick pick instead of pushing anything directly.
                     await vscode.commands.executeCommand('idea-git.pushTag', undefined);
                     return;
+                case 'remoteTags':
+                    await vscode.commands.executeCommand('idea-git.remoteTags');
+                    return;
                 case 'toggleFavorite': {
                     // A mark on the tree, not on git: nothing to reload, and the
                     // webview repaints from the list this posts back.

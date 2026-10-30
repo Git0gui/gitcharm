@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { GitService, TagPushResult, tagNameProblem } from '../services/gitService';
-import { formatGitError, redactUrlCredentials } from '../services/gitUtils';
+import { diffTagRefs, formatGitError, redactUrlCredentials, RemoteTagRef } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import { combineErrorText } from './helpers';
@@ -226,6 +226,131 @@ export function registerTagCommands(
                 () => gitService.pushTags(names),
                 error => t('tag.pushAllFailed', { error })
             );
+        }),
+
+        /**
+         * Compare local tags with what the remote advertises.
+         *
+         * git has no remote-tag namespace — fetching a tag simply creates a
+         * local one — so "I deleted it here" and "I never fetched it" leave the
+         * exact same local state. The list therefore describes the difference
+         * ("remote has it, local does not") and lets the user choose: fetch it
+         * back, delete it on the remote, or push a local-only tag.
+         */
+        vscode.commands.registerCommand('idea-git.remoteTags', async () => {
+            if (gitService.getRemoteNames().length === 0) {
+                vscode.window.showInformationMessage(t('tag.noRemote'));
+                return;
+            }
+
+            let info: { remote: string; tags: RemoteTagRef[] } | undefined;
+            try {
+                info = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('tag.remoteReading'),
+                    cancellable: false
+                }, () => gitService.listRemoteTags());
+            } catch (error) {
+                logger.error(`[GitCharm] remote tag listing failed: ${redactUrlCredentials(combineErrorText(error))}`);
+                showNetworkError(t('tag.remoteReadFailed', { error: formatGitError(error) }));
+                return;
+            }
+            if (!info) {return;}
+            const remote = info.remote;
+            const local = new Map(gitService.listTags().map(tag => [tag.name, tag.hash] as const));
+            const diff = diffTagRefs(local, info.tags);
+            if (diff.remoteOnly.length === 0 && diff.localOnly.length === 0 && diff.different.length === 0) {
+                vscode.window.showInformationMessage(t('tag.remoteInSync', {
+                    remote,
+                    count: info.tags.length
+                }));
+                return;
+            }
+
+            interface TagSyncItem extends vscode.QuickPickItem {
+                action: 'pull' | 'pullForce' | 'push' | 'deleteRemote';
+                name: string;
+            }
+            const items: TagSyncItem[] = [];
+            for (const name of diff.remoteOnly) {
+                items.push({ label: name, description: t('tag.remoteOnlyDesc'), detail: t('tag.actionPull'), action: 'pull', name });
+                items.push({ label: name, description: t('tag.remoteOnlyDesc'), detail: t('tag.actionDeleteRemote'), action: 'deleteRemote', name });
+            }
+            for (const name of diff.localOnly) {
+                items.push({ label: name, description: t('tag.localOnlyDesc'), detail: t('tag.actionPush'), action: 'push', name });
+            }
+            for (const name of diff.different) {
+                items.push({ label: name, description: t('tag.differentDesc'), detail: t('tag.actionPullOverwrite'), action: 'pullForce', name });
+                items.push({ label: name, description: t('tag.differentDesc'), detail: t('tag.actionDeleteRemote'), action: 'deleteRemote', name });
+            }
+
+            const picked = await vscode.window.showQuickPick(items, {
+                canPickMany: true,
+                title: t('tag.remoteDiffTitle', { remote }),
+                placeHolder: t('tag.remoteDiffPlaceHolder')
+            });
+            if (!picked || picked.length === 0) {return;}
+
+            // Overwriting a local tag and deleting a remote one both destroy
+            // something, so they get one explicit confirmation up front.
+            const risky = picked.filter(item => item.action !== 'pull' && item.action !== 'push');
+            if (risky.length > 0) {
+                const summary = risky
+                    .map(item => item.action === 'deleteRemote'
+                        ? `${t('tag.actionDeleteRemote')} ${item.name}`
+                        : `${t('tag.actionPullOverwrite')} ${item.name}`)
+                    .join(', ');
+                const confirm = await graphView.showDialog(
+                    t('tag.confirmDestructive', { items: summary }),
+                    [t('tag.runBtn'), t('common.cancel')],
+                    'warn'
+                );
+                if (confirm !== t('tag.runBtn')) {return;}
+            }
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: t('tag.syncingTags', { count: picked.length }),
+                cancellable: false
+            }, async () => {
+                let done = 0;
+                let pulled = false;
+                const skipped: string[] = [];
+                const failed: string[] = [];
+                let firstError = '';
+                for (const item of picked) {
+                    try {
+                        if (item.action === 'push') {
+                            const result = await gitService.pushTags([item.name], remote);
+                            if (result.pushed.length > 0) {done++;} else {skipped.push(item.name);}
+                        } else if (item.action === 'deleteRemote') {
+                            await gitService.deleteRemoteTag(item.name, remote);
+                            done++;
+                        } else {
+                            await gitService.fetchTag(item.name, remote, item.action === 'pullForce');
+                            pulled = true;
+                            done++;
+                        }
+                    } catch (error) {
+                        logger.error(`[GitCharm] tag sync failed (${item.action} ${item.name}): ${redactUrlCredentials(combineErrorText(error))}`);
+                        if (!firstError) {firstError = formatGitError(error);}
+                        failed.push(item.name);
+                    }
+                }
+
+                if (done > 0) {
+                    vscode.window.showInformationMessage(t('tag.syncDone', { count: done }));
+                }
+                if (skipped.length > 0) {
+                    vscode.window.showWarningMessage(t('tag.syncSkipped', { names: skipped.join(', ') }));
+                }
+                if (failed.length > 0) {
+                    showNetworkError(t('tag.syncFailed', { names: failed.join(', '), error: firstError }));
+                }
+                // Only a fetch changes local refs; pushes and remote deletions
+                // leave the badges exactly as they were.
+                if (pulled) {graphView.refresh();}
+            });
         })
     );
 }

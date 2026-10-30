@@ -38,6 +38,7 @@
     "cmd.deleteTag": "Delete Local Tag",
     "cmd.pushTag": "Push Tag to Remote",
     "cmd.pushAllTags": "Push All Tags to Remote",
+    "cmd.remoteTags": "Compare Local and Remote Tags",
     "cmd.stashSave": "Stash Current Changes",
     "cmd.stashApply": "Apply Stash (keep entry)",
     "cmd.stashPop": "Pop Stash (remove entry)",

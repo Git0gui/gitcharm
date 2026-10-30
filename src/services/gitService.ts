@@ -53,6 +53,8 @@ import {
     pickFetchRemote,
     remoteNameFromUpstream,
     refsTagsFirst,
+    parseLsRemoteTags,
+    RemoteTagRef,
     matchRemoteBranch,
     resolvePushTarget,
     collectRepositoryRoots,
@@ -2829,6 +2831,42 @@ export class GitService {
     async deleteTag(name: string): Promise<string> {
         assertRef(name, t('label.tag'));
         return this._execMutate(['tag', '-d', name]);
+    }
+
+    /**
+     * Tags the remote advertises, read with `ls-remote` (refs only, no objects
+     * transferred). A fetched tag becomes an ordinary local tag — git keeps no
+     * separate remote-tag namespace — so this listing is the only way to tell
+     * which tags the remote has that this clone does not.
+     */
+    async listRemoteTags(remote?: string): Promise<{ remote: string; tags: RemoteTagRef[] }> {
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        const output = await this._execNetwork(['ls-remote', '--tags', target]);
+        return { remote: target, tags: parseLsRemoteTags(output) };
+    }
+
+    /**
+     * Fetch one tag into the local ref. A tag that already exists locally with
+     * another commit needs `--force`; git refuses the ref update otherwise.
+     */
+    async fetchTag(name: string, remote?: string, overwrite = false): Promise<void> {
+        assertRef(name, t('label.tag'));
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        // A bare `refs/tags/x` fetch only writes FETCH_HEAD; the destination
+        // refspec is what actually creates the local tag.
+        await this._execNetwork([
+            'fetch', ...(overwrite ? ['--force'] : []), target, `refs/tags/${name}:refs/tags/${name}`
+        ]);
+    }
+
+    /** Delete a tag on the remote (`push :refs/tags/<name>`); the local ref stays. */
+    async deleteRemoteTag(name: string, remote?: string): Promise<void> {
+        assertRef(name, t('label.tag'));
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        await this._execNetwork(['push', target, `:refs/tags/${name}`]);
     }
 
     /**

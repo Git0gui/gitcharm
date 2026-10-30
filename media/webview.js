@@ -2432,7 +2432,8 @@ document.getElementById('tag-push').addEventListener('click', function () {
     var r = this.getBoundingClientRect();
     showMenu(r.left, r.bottom + 4, [
         ['pickPushTags', T('menu.pushTagPick')],
-        ['pushAllTags', T('menu.pushAllTags')]
+        ['pushAllTags', T('menu.pushAllTags')],
+        ['remoteTags', T('menu.remoteTags')]
     ], function (action) {
         vscode.postMessage({ command: 'action', action: action });
     });

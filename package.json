@@ -221,6 +221,11 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.remoteTags",
+        "title": "%cmd.remoteTags%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.stashSave",
         "title": "%cmd.stashSave%",
         "category": "GitCharm"

@@ -7,6 +7,8 @@ import {
     findStaleLock,
     parseLogLine,
     parseGraphLine,
+    parseLsRemoteTags,
+    diffTagRefs,
     refsTagsFirst,
     LruCache,
     stashRef
@@ -291,5 +293,80 @@ describe('refsTagsFirst', () => {
         const out = refsTagsFirst(refs, ['v1']);
         assert.notEqual(out, refs);
         assert.deepEqual(refs, ['main', 'v1']);
+    });
+});
+
+describe('parseLsRemoteTags', () => {
+    const light = 'a'.repeat(40);
+    const tagObject = 'b'.repeat(40);
+    const commit = 'c'.repeat(40);
+
+    it('reads lightweight tags as their commit', () => {
+        assert.deepEqual(
+            parseLsRemoteTags(`${light}\trefs/tags/v1.0.0\n`),
+            [{ name: 'v1.0.0', commit: light }]
+        );
+    });
+
+    it('peels annotated tags so the result matches the local ref reader', () => {
+        assert.deepEqual(
+            parseLsRemoteTags([
+                `${tagObject}\trefs/tags/v2.0.0`,
+                `${commit}\trefs/tags/v2.0.0^{}`,
+                ''
+            ].join('\n')),
+            [{ name: 'v2.0.0', commit }]
+        );
+    });
+
+    it('sorts tags and ignores non-tag refs', () => {
+        assert.deepEqual(
+            parseLsRemoteTags([
+                `${light}\trefs/tags/v2`,
+                `${commit}\trefs/heads/main`,
+                `${commit}\trefs/tags/v1`,
+                ''
+            ].join('\n')),
+            [
+                { name: 'v1', commit },
+                { name: 'v2', commit: light }
+            ]
+        );
+    });
+
+    it('ignores malformed and empty output', () => {
+        assert.deepEqual(parseLsRemoteTags(''), []);
+        assert.deepEqual(parseLsRemoteTags('HEAD\tnot-a-hash\n'), []);
+        assert.deepEqual(parseLsRemoteTags('garbage'), []);
+    });
+});
+
+describe('diffTagRefs', () => {
+    const a = 'a'.repeat(40);
+    const b = 'b'.repeat(40);
+    const c = 'c'.repeat(40);
+
+    it('splits the three kinds of difference', () => {
+        const diff = diffTagRefs(
+            new Map([['shared', a], ['moved', b], ['localOnly', c]]),
+            [
+                { name: 'shared', commit: a },
+                { name: 'moved', commit: c },
+                { name: 'remoteOnly', commit: a }
+            ]
+        );
+        assert.deepEqual(diff.remoteOnly, ['remoteOnly']);
+        assert.deepEqual(diff.localOnly, ['localOnly']);
+        assert.deepEqual(diff.different, ['moved']);
+    });
+
+    it('reports nothing when both sides agree', () => {
+        const diff = diffTagRefs(new Map([['v1', a]]), [{ name: 'v1', commit: a }]);
+        assert.deepEqual(diff, { remoteOnly: [], localOnly: [], different: [] });
+    });
+
+    it('treats an empty local side as everything being remote-only', () => {
+        const diff = diffTagRefs(new Map(), [{ name: 'v2', commit: a }]);
+        assert.deepEqual(diff, { remoteOnly: ['v2'], localOnly: [], different: [] });
     });
 });
