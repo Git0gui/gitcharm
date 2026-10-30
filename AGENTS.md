@@ -101,6 +101,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - 树节点：文件夹单击展开、分支双击切换；折叠指示器用内联 SVG chevron（`currentColor`），不用 ASCII；分支叶子只显示最后一段路径（`data-branch`/tooltip 保留全名，操作用完整 ref）。
 - 分支右键菜单按类型区分（远程精简、当前分支只给适用项），**收藏切换固定排在最后一项**，类型相关操作在前。操作记录（reflog）只从工具栏那个时钟按钮进入——它跟随提交列表所选分支，分支行菜单不再重复这一项（`action: 'reflog'` 的宿主分支与对话框都保留，别连带删掉）。
 - tag 显示为 IDEA 风格黄色徽章。
+- **第三栏提交卡片也展示该提交所在的分支与标签**：`CommitDetail.refs/tags` 由宿主提供（命中的 `_commitIndex` 直接复用行上的 refs，未命中时 `_refsAtCommit` 用一次 `for-each-ref` 比对 `objectname` 与 `*objectname`，轻量/附注标签都认），`renderDetail` 用同一个 `refChipHtml` 逐一列出（标签仍是黄色徽章），`HEAD` 过滤掉。卡片里全量列出、不折叠成 `+N`：这里空间够，用户是来读这个提交的。
 - 提交时间：<24h 显示相对时间，≥24h 显示 `YYYY-MM-DD HH:mm:ss`；**git log 一律用作者时间（%ai/%ar）**，不用 %ci/%cr（这只管**显示**哪一天；判一组提交谁先谁后见 §8 的 `orderCommitsByHistory`）；committer≠author 时详情额外显示"合入"行。
 - 确认对话框保持简洁（标题+按钮），不堆技术细节。
 
@@ -143,6 +144,8 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **后台 / 定时任务禁止走 `_execNetwork`**：它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框。自动 fetch 用 `fetchSilent()`（绕开 askpass + `GIT_TERMINAL_PROMPT=0` + 有限超时 + 失败只记 `logger.debug`），且先用 fs 读 `.git/config` 判断有没有远端——没远端一个子进程都不 spawn。这类任务还要绑"面板可见"条件，与分支 watcher 同起同停。
 - **删除标签让用户选目的地**：确认框的答案是「删除本地」「删除本地和远端」「取消」三选一（没有远端时只剩本地/取消，文案同时说明"此仓库没有配置远端，只能删除本地标签"），命令标题因此叫「删除标签」而不是「删除本地标签」。选"本地和远端"时**先删远端再删本地**——网络那一半失败（凭据、保护规则）不能把用户同样要求的本地清理一起中止；远端根本没这个标签（`remote ref does not exist`）不算失败，那是"本来就没得删"。**推送标签前先确认有远端**（`ensureRemote`）：本地仓库没有远端时提示"标签只能保存在本地"并给「管理远端」入口，不要让 `git push origin` 抛出一句看起来像仓库损坏的 fatal。
 - **工具栏标签菜单是「推送标签… / 删除标签… / 远端标签差异…」**：「推送全部标签」已从菜单撤掉（命令 `idea-git.pushAllTags` 只留在命令面板）。「删除标签…」（`idea-git.deleteTags`）先选标签、确认框明说本地与远端一起删，**只有每个远端删除都成功才动本地**——任何远端失败（凭据、保护规则）就整体中止并提示重试，不留下"远端删了、本地还在"的半截状态。这与徽章右键的三选一有意不同：那里是用户逐个决定，这里用户点的是"两边一起清掉"。
+- **标签很多时的提示语**：`summarizeNames`（tagCommands.ts）超过 3 个名字就写成"前 3 个… (N)"，用于推送/删除的确认框、进度标题与结果提示；只有一个标签时仍给完整名字。quick pick 仍列全量——那是选择器，不是提示。新增任何把标签名拼进通知的代码都要走它。
+- **远端标签差异对话框不先用远端校验挡住入口**（`idea-git.remoteTags`）：只要任意一侧有标签就打开；没配远端时跳过 `ls-remote`，表格是只读的本地标签清单（标题「本地标签」，无操作列/勾选框/统计/筛选），两侧都空才只给一句提示。有远端时把 `inSync` 行也列进来，但默认被「只看差异」筛掉（该复选框默认勾选，`inSync` 行不可勾选且「全选」跳过它们）。每行的本地/远端提交号是按钮，点击发 `tagSyncCommit`，宿主走主屏幕同一套 `setDetail`（带 `origin: 'tagSync'`，因此不校验 `selectedHash`）填第三栏。对话框遮罩的 `right` 收在 `#right` 左缘（`syncTagSyncBounds`），第三栏在对话框打开时仍可滚动、双击文件；第三栏隐藏后遮罩铺满，所以**对话框头部自带一个眼睛按钮**——`#right` 自己的眼睛会随列一起消失，没有这个镜像就再也点不回来。`CommitDetail` 现在带 `refs/tags`（见 §7）。远端标签指向的提交可能还没拉到本地（`git show` 报 `bad object`），此时提示"先拉取对应标签"，不要弹一句看起来像仓库损坏的 fatal。
 - **完整 stderr 必须落到输出通道**：通知条按 `formatGitError` 截断（4 行/400 字），排障需要的原文在 `GitCharm` OutputChannel 里。`logger` 的 sink 由 `extension.ts` 注入（服务层不 import vscode），命令 `idea-git.showLog` 打开；push/pull/fetch/update 的 catch 用 `logger.error` 记录**经 `redactUrlCredentials` 清洗**的原文，错误通知带"显示日志"按钮。
 
 ## 9. Git 工作流约束（AI 协作红线）

@@ -1261,6 +1261,8 @@ canvas.graph-canvas {
 }
 .crow { display: flex; align-items: center; margin-bottom: 8px; min-width: 0; }
 .crow:last-child { margin-bottom: 0; }
+/* Branch/tag badges on the detail card: all of them, wrapped, no +N fold. */
+.crefs > span { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .hashchip {
     font-family: monospace;
     font-size: 11px;
@@ -2317,8 +2319,10 @@ body.dialog-resizing * {
 }
 
 /* ---- tag differences dialog ---- */
+/* The overlay stops at the detail column while it is visible, so the box is a
+   percentage of that area rather than of the whole webview. */
 #tag-sync-dialog .push-dialog-box {
-    width: min(1060px, 94vw);
+    width: min(1060px, calc(100% - 24px));
 }
 .tag-sync-title {
     flex: 1;
@@ -2396,6 +2400,13 @@ body.dialog-resizing * {
     padding: 0 20px;
     min-width: 720px;
 }
+/* No remote, no actions: the list is a report, so the checkbox and ops
+   columns are gone instead of being drawn disabled. */
+.tag-sync-table.read-only .tag-sync-head,
+.tag-sync-table.read-only .tag-sync-row {
+    grid-template-columns: minmax(110px, 1.3fr) 146px 90px 90px;
+    min-width: 0;
+}
 .tag-sync-head {
     position: sticky;
     top: 0;
@@ -2443,6 +2454,7 @@ body.dialog-resizing * {
 .tag-sync-state.different { color: var(--vscode-editorWarning-foreground, #cca700); }
 .tag-sync-state.remoteOnly { color: var(--vscode-charts-blue, #3794ff); }
 .tag-sync-state.localOnly { color: var(--vscode-charts-green, #89d185); }
+.tag-sync-state.inSync { color: var(--vscode-descriptionForeground, #999); }
 .tag-sync-hash {
     min-width: 0;
     overflow: hidden;
@@ -2452,6 +2464,28 @@ body.dialog-resizing * {
     font-size: 11px;
     color: var(--vscode-descriptionForeground, #999);
 }
+/* Hashes are the way into the third panel. */
+button.tag-sync-hash.link {
+    justify-self: start;
+    max-width: 100%;
+    padding: 2px 5px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+}
+button.tag-sync-hash.link:hover {
+    color: var(--vscode-textLink-foreground, #3794ff);
+    background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, .3));
+    text-decoration: underline;
+}
+button.tag-sync-hash.on {
+    color: var(--vscode-textLink-foreground, #3794ff);
+    background: var(--vscode-list-inactiveSelectionBackground, rgba(55, 148, 255, .16));
+}
+.tag-sync-row.filtered-out { display: none; }
+.tag-sync-row.in-sync .tag-sync-name { color: var(--vscode-descriptionForeground, #999); }
 .tag-sync-ops {
     display: flex;
     flex-wrap: wrap;

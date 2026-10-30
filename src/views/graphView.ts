@@ -812,7 +812,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * dialog, the listener lives until it settles — a dialog left open stays
      * usable, and losing the view settles it so the command never hangs.
      */
-    showTagSyncDialog(remote: string, rows: TagSyncRow[]): Promise<TagSyncDecision[] | undefined> {
+    showTagSyncDialog(remote: string, rows: TagSyncRow[], readOnly = false): Promise<TagSyncDecision[] | undefined> {
         return new Promise((resolve) => {
             const view = this._view;
             if (!view) {
@@ -834,7 +834,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 if (!view.visible) {settle(undefined);}
             }));
             subscriptions.push(view.onDidDispose(() => settle(undefined)));
-            this._post({ command: 'showTagSyncDialog', remote, rows });
+            this._post({ command: 'showTagSyncDialog', remote, rows, readOnly });
         });
     }
 
@@ -1202,6 +1202,37 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         });
                     } catch (error) {
                         vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: formatGitError(error) }));
+                    } finally {
+                        this._postLoading('detail', false);
+                    }
+                    break;
+                case 'tagSyncCommit':
+                    // Same detail UI as a selected row, but the log selection
+                    // stays where it is: `origin` tells the webview to accept
+                    // the payload without a matching selected hash.
+                    this._postLoading('detail', true);
+                    try {
+                        const [commit, files] = await Promise.all([
+                            this._gitService.getCommitDetail(message.hash),
+                            this._gitService.getCommitFilesWithStats(message.hash)
+                        ]);
+                        this._post({
+                            command: 'setDetail',
+                            origin: 'tagSync',
+                            commit,
+                            files,
+                            existingPaths: await this._existingWorkingPaths(files)
+                        });
+                    } catch (error) {
+                        // A remote-only tag can point at a commit that was never
+                        // fetched; "bad object" is the expected answer there, not
+                        // a broken repository, so it gets its own next step.
+                        const text = error instanceof Error ? error.message : String(error);
+                        if (/bad object|unknown revision|not a valid object/i.test(text)) {
+                            vscode.window.showWarningMessage(t('tag.commitNotLocal'));
+                        } else {
+                            vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: formatGitError(error) }));
+                        }
                     } finally {
                         this._postLoading('detail', false);
                     }

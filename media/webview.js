@@ -1336,7 +1336,28 @@ function applyDetailVisibility() {
     var tg = document.getElementById('tg-files');
     tg.title = state.detailVisible ? T('w.hideDetail') : T('w.showDetail');
     tg.classList.toggle('off', !state.detailVisible);
+    var tagToggle = document.querySelector('.tag-sync-detail-toggle');
+    if (tagToggle) {
+        tagToggle.setAttribute('data-title', state.detailVisible ? T('w.hideDetail') : T('w.showDetail'));
+        tagToggle.classList.toggle('off', !state.detailVisible);
+    }
+    syncTagSyncBounds();
 }
+
+/** The tag-diff dialog leaves the detail column uncovered, so its hashes can
+ *  be clicked while the third panel shows what they point at. Hidden detail
+ *  column (or no dialog) means the overlay keeps the full width. */
+var tagSyncOverlay = null;
+function syncTagSyncBounds() {
+    if (!tagSyncOverlay) {return;}
+    var right = document.getElementById('right');
+    var edge = window.innerWidth;
+    if (state.detailVisible && right && right.offsetWidth > 0) {
+        edge = right.getBoundingClientRect().left;
+    }
+    tagSyncOverlay.style.right = Math.max(0, window.innerWidth - edge) + 'px';
+}
+window.addEventListener('resize', syncTagSyncBounds);
 
 /** The stash picked in the tree: its own card, then the files it carries. */
 function renderStashDetail(info, filesBox) {
@@ -1456,6 +1477,15 @@ function renderDetail() {
     var mh = '<div class="ccard" data-title="' + tip + '">';
     mh += '<div class="crow"><span class="hashchip">' + esc(c.shortHash) + '</span></div>';
     mh += '<div class="crow"><span class="cmsg">' + esc(c.message) + '</span></div>';
+    // Branches and tags the commit sits on. Same badge language as the log
+    // rows, but spelled out: the card has the room and the user is here to
+    // read the commit, not to scan a list.
+    var refNames = (c.refs || []).filter(function (name) { return name !== 'HEAD'; });
+    if (refNames.length > 0) {
+        mh += '<div class="crow crefs"><span>' + refNames.map(function (name) {
+            return refChipHtml(name, 0, c.tags || []);
+        }).join('') + '</span></div>';
+    }
     mh += '<div class="crow"><span class="avatar" style="background:' + avatarColor(c.author || '?') + '">' + esc((c.author || '?').charAt(0).toUpperCase()) + '</span>' +
          '<span class="cmeta">' + esc(c.author) + ' &lt;' + esc(c.authorEmail) + '&gt; · ' + esc(fmtRelativeTime(c.authorDate || c.date)) + '</span></div>';
     
@@ -3604,6 +3634,24 @@ window.addEventListener('message', function (ev) {
         // Keep hasMoreAbove for the same reason, on the upward side.
         setTopLoader(false);
     } else if (m.command === 'setDetail') {
+        if (m.origin === 'tagSync') {
+            // A commit picked in the tag-diff dialog, not in the log: the row
+            // selection stays as it was, but the card must not keep deferring
+            // to a stash or a multi-select group that is still remembered.
+            state.stashDetail = null;
+            state.multiCommits = null;
+            state.detail = {
+                commit: m.commit,
+                files: m.files,
+                existingPaths: m.existingPaths || []
+            };
+            if (!state.detailVisible) {
+                state.detailVisible = true;
+                applyDetailVisibility();
+            }
+            renderDetail();
+            return;
+        }
         // A slower answer for a commit the user already clicked away from must
         // not overwrite the panel (revealCommit / refreshFiles can interleave).
         if (!state.selectedHash || m.commit.hash !== state.selectedHash) { return; }
@@ -4804,13 +4852,15 @@ function showReflogDialog(scope, entries) {
 /* ---- tag differences dialog ---- */
 // Per-state verbs. A one-sided tag has an obvious default; a conflict starts on
 // "keep local" because pulling over it or deleting the remote one destroys work.
+// An agreeing tag has nothing to do — it is listed for context, not action.
 var TAG_SYNC_OPS = {
     different: [['keep', 'tag.actionKeepLocal'], ['pullForce', 'tag.actionPullOverwrite'], ['deleteRemote', 'tag.actionDeleteRemote']],
     remoteOnly: [['pull', 'tag.actionPull'], ['deleteRemote', 'tag.actionDeleteRemote']],
-    localOnly: [['push', 'tag.actionPush']]
+    localOnly: [['push', 'tag.actionPush']],
+    inSync: []
 };
 
-function showTagSyncDialog(remote, rows) {
+function showTagSyncDialog(remote, rows, readOnly) {
     var existing = document.getElementById('tag-sync-dialog');
     if (existing) { existing.remove(); }
 
@@ -4824,6 +4874,8 @@ function showTagSyncDialog(remote, rows) {
             checked: false
         };
     });
+    var diffItems = items.filter(function (item) { return item.state !== 'inSync'; });
+    var diffCount = diffItems.length;
 
     function shortHash(hash) {
         return hash ? hash.slice(0, 7) : '—';
@@ -4831,69 +4883,102 @@ function showTagSyncDialog(remote, rows) {
     function stateLabel(st) {
         return st === 'remoteOnly' ? T('tag.stateRemoteOnly')
             : st === 'localOnly' ? T('tag.stateLocalOnly')
+            : st === 'inSync' ? T('tag.stateInSync')
             : T('tag.stateDifferent');
     }
+    function hashHtml(hash) {
+        if (!hash) {
+            return '<span class="tag-sync-hash" data-title="' + esc(T('tag.syncAbsent')) + '">—</span>';
+        }
+        return '<button type="button" class="tag-sync-hash link" data-commit="' + esc(hash) +
+            '" data-title="' + esc(hash) + '\n' + esc(T('tag.syncOpenCommit')) + '">' +
+            esc(shortHash(hash)) + '</button>';
+    }
     function rowHtml(item, index) {
-        var ops = (TAG_SYNC_OPS[item.state] || []).map(function (op) {
+        var ops = readOnly ? '' : (TAG_SYNC_OPS[item.state] || []).map(function (op) {
             return '<button class="tag-sync-op' + (op[0] === 'deleteRemote' ? ' danger' : '')
                 + (op[0] === item.action ? ' on' : '') + '" data-op="' + op[0] + '">' + T(op[1]) + '</button>';
         }).join('');
-        return '<div class="tag-sync-row" data-index="' + index + '">' +
-            '<input class="tag-sync-check" type="checkbox" data-title="' + esc(T('tag.syncCheckRow')) + '">' +
+        var off = item.state === 'inSync' || readOnly;
+        // Read-only means no remote to act against, so the checkbox and the
+        // ops column are not rendered at all: disabled controls still suggest
+        // an action exists and merely cannot be reached.
+        return '<div class="tag-sync-row' + (item.state === 'inSync' ? ' in-sync' : '') + '" data-index="' + index + '">' +
+            (readOnly ? '' : '<input class="tag-sync-check" type="checkbox"' + (off ? ' disabled' : '') +
+            ' data-title="' + esc(item.state === 'inSync' ? T('tag.syncRowInSync') : T('tag.syncCheckRow')) + '">') +
             '<span class="tag-sync-name" data-title="' + esc(item.name) + '">' + esc(item.name) + '</span>' +
             '<span class="tag-sync-state ' + item.state + '">' + stateLabel(item.state) + '</span>' +
-            '<span class="tag-sync-hash" data-title="' + esc(item.localHash || T('tag.syncAbsent')) + '">' + esc(shortHash(item.localHash)) + '</span>' +
-            '<span class="tag-sync-hash" data-title="' + esc(item.remoteHash || T('tag.syncAbsent')) + '">' + esc(shortHash(item.remoteHash)) + '</span>' +
-            '<span class="tag-sync-ops">' + ops + '</span>' +
+            hashHtml(item.localHash) + hashHtml(item.remoteHash) +
+            (readOnly ? '' : '<span class="tag-sync-ops">' + ops + '</span>') +
             '</div>';
     }
 
     var overlay = document.createElement('div');
     overlay.className = 'push-dialog-overlay';
     overlay.id = 'tag-sync-dialog';
+    var title = remote ? T('tag.remoteDiffTitle', { remote: remote }) : T('tag.localTagsTitle');
     overlay.innerHTML = '<div class="push-dialog-box">' +
         '<div class="push-dialog-header">' +
-        '<span class="tag-sync-title" data-title="' + esc(T('tag.remoteDiffTitle', { remote: remote })) + '">' +
-        esc(T('tag.remoteDiffTitle', { remote: remote })) + '</span>' +
-        '<span class="tag-sync-found">' + esc(T('tag.syncFound', { count: items.length })) + '</span>' +
+        '<span class="tag-sync-title" data-title="' + esc(title) + '">' + esc(title) + '</span>' +
+        '<span class="tag-sync-found">' + esc(T('tag.syncFound', { count: diffCount })) + '</span>' +
+        // The detail column is reachable while this overlay is open, but its
+        // own eye toggle disappears with the column — once hidden it could not
+        // be brought back without closing the dialog. This mirror stays put.
+        '<button class="col-refresh no-spin tag-sync-detail-toggle' + (state.detailVisible ? '' : ' off') +
+        '" type="button" data-title="' + esc(state.detailVisible ? T('w.hideDetail') : T('w.showDetail')) + '">' +
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">' +
+        '<path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/>' +
+        '<circle cx="8" cy="8" r="2"/></svg></button>' +
         '</div>' +
         '<div class="push-dialog-body">' +
         '<div class="push-commits-list full">' +
-        '<div class="tag-sync-stats">' +
-        '<span class="tag-sync-stat diff"><b id="tag-sync-total">' + items.length + '</b>' + esc(T('tag.syncStatTotal')) + '</span>' +
+        (readOnly ? '' : '<div class="tag-sync-stats">' +
+        '<span class="tag-sync-stat diff"><b id="tag-sync-total">' + diffCount + '</b>' + esc(T('tag.syncStatTotal')) + '</span>' +
         '<span class="tag-sync-stat sel"><b id="tag-sync-selected">0</b>' + esc(T('tag.syncStatSelected')) + '</span>' +
-        '<span class="tag-sync-stat pending"><b id="tag-sync-pending">' + items.length + '</b>' + esc(T('tag.syncStatPending')) + '</span>' +
-        '</div>' +
+        '<span class="tag-sync-stat pending"><b id="tag-sync-pending">' + diffCount + '</b>' + esc(T('tag.syncStatPending')) + '</span>' +
+        '</div>') +
         '<div class="tag-sync-toolbar">' +
-        '<label class="tag-sync-all"><input type="checkbox" id="tag-sync-all">' + esc(T('tag.syncSelectAll')) + '</label>' +
-        '<span class="tag-sync-hint">' + esc(T('tag.syncHint')) + '</span>' +
+        (readOnly ? '' : '<label class="tag-sync-all"><input type="checkbox" id="tag-sync-all">' + esc(T('tag.syncSelectAll')) + '</label>') +
+        (readOnly ? '' : '<label class="tag-sync-all"><input type="checkbox" id="tag-sync-diff-only" checked>' + esc(T('tag.syncDiffOnly')) + '</label>') +
+        '<span class="tag-sync-hint">' + esc(readOnly ? T('tag.syncNoRemoteHint') : T('tag.syncHint')) + '</span>' +
         '</div>' +
-        '<div class="tag-sync-table">' +
+        '<div class="tag-sync-table' + (readOnly ? ' read-only' : '') + '">' +
         '<div class="tag-sync-head">' +
-        '<span></span>' +
+        (readOnly ? '' : '<span></span>') +
         '<span>' + esc(T('tag.colTag')) + '</span>' +
         '<span>' + esc(T('tag.colState')) + '</span>' +
         '<span>' + esc(T('tag.colLocal')) + '</span>' +
         '<span>' + esc(T('tag.colRemote')) + '</span>' +
-        '<span class="tag-sync-col-actions">' + esc(T('tag.colAction')) + '</span>' +
+        (readOnly ? '' : '<span class="tag-sync-col-actions">' + esc(T('tag.colAction')) + '</span>') +
         '</div>' +
         '<div class="tag-sync-list" id="tag-sync-list">' + items.map(rowHtml).join('') + '</div>' +
         '</div>' +
         '</div>' +
         '</div>' +
         '<div class="push-dialog-actions">' +
-        '<button class="dialog-btn secondary" data-action="cancel">' + T('common.cancel') + '</button>' +
-        '<button class="dialog-btn primary" data-action="apply" disabled>' + T('tag.syncApply') + '</button>' +
+        '<button class="dialog-btn ' + (readOnly ? 'primary' : 'secondary') + '" data-action="cancel">' + T('common.cancel') + '</button>' +
+        (readOnly ? '' : '<button class="dialog-btn primary" data-action="apply" disabled>' + T('tag.syncApply') + '</button>') +
         '</div></div>';
 
     document.body.appendChild(overlay);
+    tagSyncOverlay = overlay;
+    syncTagSyncBounds();
     attachDialogResize(overlay, 'tagsync');
 
     var listEl = overlay.querySelector('#tag-sync-list');
     var allBox = overlay.querySelector('#tag-sync-all');
+    var diffOnlyBox = overlay.querySelector('#tag-sync-diff-only');
     var applyBtn = overlay.querySelector('.push-dialog-actions [data-action="apply"]');
     var selectedEl = overlay.querySelector('#tag-sync-selected');
     var pendingEl = overlay.querySelector('#tag-sync-pending');
+
+    function applyFilter() {
+        var diffOnly = diffOnlyBox && diffOnlyBox.checked;
+        items.forEach(function (item, idx) {
+            var rowEl = listEl.querySelector('.tag-sync-row[data-index="' + idx + '"]');
+            if (rowEl) {rowEl.classList.toggle('filtered-out', !!(diffOnly && item.state === 'inSync'));}
+        });
+    }
 
     function paintRow(rowEl, item) {
         rowEl.classList.toggle('selected', item.checked);
@@ -4904,18 +4989,35 @@ function showTagSyncDialog(remote, rows) {
     }
 
     function updateStats() {
+        // "Differences" and "pending" count the rows that can be acted on, not
+        // the in-sync tags the filter is hiding by default.
         var selected = items.filter(function (item) { return item.checked; }).length;
-        selectedEl.textContent = String(selected);
-        pendingEl.textContent = String(items.length - selected);
-        allBox.checked = selected === items.length;
-        allBox.indeterminate = selected > 0 && selected < items.length;
-        applyBtn.disabled = selected === 0;
-        applyBtn.setAttribute('data-title', selected === 0 ? T('tag.syncNoneSelected') : '');
+        if (selectedEl) {selectedEl.textContent = String(selected);}
+        if (pendingEl) {pendingEl.textContent = String(Math.max(0, diffCount - selected));}
+        if (allBox) {
+            allBox.checked = diffCount > 0 && selected === diffCount;
+            allBox.indeterminate = selected > 0 && selected < diffCount;
+        }
+        if (applyBtn) {
+            applyBtn.disabled = selected === 0;
+            applyBtn.setAttribute('data-title', selected === 0 ? T('tag.syncNoneSelected') : '');
+        }
     }
 
     // Delegation: rows are static, but this keeps one handler per concern and
     // survives any future re-render of the list.
     listEl.addEventListener('click', function (e) {
+        var hashBtn = e.target.closest('.tag-sync-hash[data-commit]');
+        if (hashBtn) {
+            listEl.querySelectorAll('.tag-sync-hash.on').forEach(function (el) { el.classList.remove('on'); });
+            hashBtn.classList.add('on');
+            if (!state.detailVisible) {
+                state.detailVisible = true;
+                applyDetailVisibility();
+            }
+            vscode.postMessage({ command: 'tagSyncCommit', hash: hashBtn.getAttribute('data-commit') });
+            return;
+        }
         var opBtn = e.target.closest('.tag-sync-op');
         if (!opBtn) { return; }
         var rowEl = opBtn.closest('.tag-sync-row');
@@ -4936,19 +5038,33 @@ function showTagSyncDialog(remote, rows) {
         paintRow(rowEl, item);
         updateStats();
     });
-    allBox.addEventListener('change', function () {
-        var on = allBox.checked;
-        items.forEach(function (item) { item.checked = on; });
-        listEl.querySelectorAll('.tag-sync-row').forEach(function (rowEl, idx) {
-            paintRow(rowEl, items[idx]);
+    if (allBox) {
+        allBox.addEventListener('change', function () {
+            var on = allBox.checked;
+            // In-sync rows have nothing to run, so "select all" never touches them.
+            items.forEach(function (item) { if (item.state !== 'inSync') { item.checked = on; } });
+            listEl.querySelectorAll('.tag-sync-row').forEach(function (rowEl, idx) {
+                paintRow(rowEl, items[idx]);
+            });
+            updateStats();
         });
-        updateStats();
-    });
+    }
+    if (diffOnlyBox) {diffOnlyBox.addEventListener('change', applyFilter);}
+
+    var detailToggle = overlay.querySelector('.tag-sync-detail-toggle');
+    if (detailToggle) {
+        detailToggle.addEventListener('click', function () {
+            state.detailVisible = !state.detailVisible;
+            applyDetailVisibility();
+            saveViewState();
+        });
+    }
 
     overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var action = btn.getAttribute('data-action');
             overlay.remove();
+            tagSyncOverlay = null;
             if (action === 'apply') {
                 vscode.postMessage({
                     command: 'tagSyncConfirm',
@@ -4961,6 +5077,7 @@ function showTagSyncDialog(remote, rows) {
         });
     });
 
+    applyFilter();
     updateStats();
 }
 

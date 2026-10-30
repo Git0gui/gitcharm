@@ -32,6 +32,15 @@ export function registerTagCommands(
         return (await gitService.listTags()).map(tag => tag.name);
     };
 
+    /**
+     * A tag list that still reads as one line when the repository carries
+     * hundreds of them. Past three names the count says more than the tail.
+     */
+    const summarizeNames = (names: readonly string[]): string =>
+        names.length <= 3
+            ? names.join(', ')
+            : `${names.slice(0, 3).join(', ')}… (${names.length})`;
+
     /** Network failures stay short here; the full git output is in the log. */
     const showNetworkError = (message: string): void => {
         void vscode.window.showErrorMessage(message, t('log.showEntry')).then(choice => {
@@ -56,19 +65,19 @@ export function registerTagCommands(
         }
         if (result.upToDate.length > 0) {
             vscode.window.showInformationMessage(t('tag.alreadyOnRemote', {
-                names: result.upToDate.join(', '),
+                names: summarizeNames(result.upToDate),
                 remote: result.remote
             }));
         }
         if (result.skipped.length > 0) {
             vscode.window.showWarningMessage(t('tag.commitNotPushed', {
-                names: result.skipped.join(', '),
+                names: summarizeNames(result.skipped),
                 remote: result.remote
             }));
         }
         if (result.diverged.length > 0) {
             vscode.window.showWarningMessage(t('tag.divergedRemote', {
-                names: result.diverged.join(', '),
+                names: summarizeNames(result.diverged),
                 remote: result.remote
             }));
         }
@@ -237,7 +246,7 @@ export function registerTagCommands(
             const names = await pickTags(candidates, 'tag.pickDeletePlaceHolder');
             if (!names || names.length === 0) {return;}
 
-            const summary = names.length === 1 ? names[0] : `${names.length}: ${names.join(', ')}`;
+            const summary = summarizeNames(names);
             // Deleting on the remote is a separate answer, not a hidden extra: the
             // dialog offers both destinations. Without a remote there is nothing
             // to ask about, so it stays a local-only question.
@@ -291,11 +300,11 @@ export function registerTagCommands(
                     }
                 }
                 if (failed.length > 0) {
-                    vscode.window.showErrorMessage(t('tag.deleteFailed', { error: failed.join(', ') }));
+                    vscode.window.showErrorMessage(t('tag.deleteFailed', { error: summarizeNames(failed) }));
                 }
                 if (remoteFailed.length > 0) {
                     showNetworkError(t('tag.deleteRemoteFailed', {
-                        names: remoteFailed.join(', '),
+                        names: summarizeNames(remoteFailed),
                         remote,
                         error: remoteResult.error
                     }));
@@ -318,7 +327,7 @@ export function registerTagCommands(
             if (!names || names.length === 0) {return;}
 
             const remote = gitService.getFetchRemote();
-            const summary = names.length === 1 ? names[0] : `${names.length}: ${names.join(', ')}`;
+            const summary = summarizeNames(names);
             const confirmBtn = t('tag.deleteLocalRemoteBtn');
             const confirm = await graphView.showDialog(
                 t('tag.deleteBothConfirm', { names: summary, remote }),
@@ -335,7 +344,7 @@ export function registerTagCommands(
                 const remoteResult = await deleteRemoteTags(names, remote);
                 if (remoteResult.failed.length > 0) {
                     showNetworkError(t('tag.deleteRemoteAborted', {
-                        names: remoteResult.failed.join(', '),
+                        names: summarizeNames(remoteResult.failed),
                         remote,
                         error: remoteResult.error
                     }));
@@ -353,11 +362,11 @@ export function registerTagCommands(
                     }
                 }
                 if (deleted.length > 0) {
-                    vscode.window.showInformationMessage(t('tag.deletedBoth', { names: deleted.join(', ') }));
+                    vscode.window.showInformationMessage(t('tag.deletedBoth', { names: summarizeNames(deleted) }));
                     graphView.refresh();
                 }
                 if (failed.length > 0) {
-                    vscode.window.showErrorMessage(t('tag.deleteFailed', { error: failed.join(', ') }));
+                    vscode.window.showErrorMessage(t('tag.deleteFailed', { error: summarizeNames(failed) }));
                 }
             });
         }),
@@ -399,7 +408,7 @@ export function registerTagCommands(
                     ? t('tag.pushing', { name: names[0] })
                     : t('tag.pushingMultiple', { count: names.length }),
                 () => gitService.pushTags(names),
-                error => t('tag.pushFailed', { names: names.join(', '), error })
+                error => t('tag.pushFailed', { names: summarizeNames(names), error })
             );
             // Nothing about the local repository changed, so the panel must
             // not reload — the tags already have badges.
@@ -437,38 +446,44 @@ export function registerTagCommands(
          * back, delete it on the remote, or push a local-only tag.
          */
         vscode.commands.registerCommand('idea-git.remoteTags', async () => {
-            if (gitService.getRemoteNames().length === 0) {
-                vscode.window.showInformationMessage(t('tag.noRemote'));
-                return;
-            }
-
-            let info: { remote: string; tags: RemoteTagRef[] } | undefined;
-            try {
-                info = await vscode.window.withProgress({
-                    location: vscode.ProgressLocation.Notification,
-                    title: t('tag.remoteReading'),
-                    cancellable: false
-                }, () => gitService.listRemoteTags());
-            } catch (error) {
-                logger.error(`[GitCharm] remote tag listing failed: ${redactUrlCredentials(combineErrorText(error))}`);
-                showNetworkError(t('tag.remoteReadFailed', { error: formatGitError(error) }));
-                return;
-            }
-            if (!info) {return;}
-            const remote = info.remote;
             const local = new Map((await gitService.listTags()).map(tag => [tag.name, tag.hash] as const));
-            const diff = diffTagRefs(local, info.tags);
-            if (diff.remoteOnly.length === 0 && diff.localOnly.length === 0 && diff.different.length === 0) {
-                vscode.window.showInformationMessage(t('tag.remoteInSync', {
-                    remote,
-                    count: info.tags.length
-                }));
+            // The dialog is not gated on a remote check: it opens whenever there
+            // is at least one tag to look at. Without a configured remote the
+            // table is a read-only view of the local tags — no network call, no
+            // invented "in sync" conclusion — and only a repository with no tags
+            // on either side stays a notification.
+            const configured = gitService.getRemoteNames().length > 0;
+            let remote = gitService.getFetchRemote();
+            let remoteTags: RemoteTagRef[] = [];
+            if (configured) {
+                try {
+                    const info = await vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: t('tag.remoteReading'),
+                        cancellable: false
+                    }, () => gitService.listRemoteTags());
+                    if (!info) {return;}
+                    remote = info.remote;
+                    remoteTags = info.tags;
+                } catch (error) {
+                    logger.error(`[GitCharm] remote tag listing failed: ${redactUrlCredentials(combineErrorText(error))}`);
+                    showNetworkError(t('tag.remoteReadFailed', { error: formatGitError(error) }));
+                    return;
+                }
+            }
+            if (local.size === 0 && remoteTags.length === 0) {
+                vscode.window.showInformationMessage(t('tag.none'));
                 return;
             }
 
+            const diff = diffTagRefs(local, remoteTags);
+            const remoteCommits = new Map(remoteTags.map(tag => [tag.name, tag.commit] as const));
+            const inSync = [...local.keys()]
+                .filter(name => remoteCommits.get(name) === local.get(name))
+                .sort((a, b) => a.localeCompare(b));
             // Conflicts first: they are the rows that actually need a decision,
-            // while one-sided tags have an obvious default.
-            const remoteCommits = new Map(info.tags.map(tag => [tag.name, tag.commit] as const));
+            // while one-sided tags have an obvious default and agreeing tags
+            // have none at all (the differences-only filter hides them).
             const rows: TagSyncRow[] = [
                 ...diff.different.map(name => ({
                     name,
@@ -485,13 +500,19 @@ export function registerTagCommands(
                     name,
                     state: 'localOnly' as const,
                     localHash: local.get(name)
+                })),
+                ...inSync.map(name => ({
+                    name,
+                    state: 'inSync' as const,
+                    localHash: local.get(name),
+                    remoteHash: remoteCommits.get(name)
                 }))
             ];
 
             // The table keeps every tag visible with its own action, so the
             // user decides per row instead of reading a multi-action quick pick
             // where the same name appears once per possible verb.
-            const picked = await graphView.showTagSyncDialog(remote, rows);
+            const picked = await graphView.showTagSyncDialog(remote, rows, !configured);
             // "Keep local" is a decision that runs nothing: ticking such a row
             // only records that the conflict was reviewed.
             const actionable = (picked ?? []).filter(item => item.action !== 'keep');
@@ -501,11 +522,9 @@ export function registerTagCommands(
             // something, so they get one explicit confirmation up front.
             const risky = actionable.filter(item => item.action !== 'pull' && item.action !== 'push');
             if (risky.length > 0) {
-                const summary = risky
-                    .map(item => item.action === 'deleteRemote'
-                        ? `${t('tag.actionDeleteRemote')} ${item.name}`
-                        : `${t('tag.actionPullOverwrite')} ${item.name}`)
-                    .join(', ');
+                const summary = summarizeNames(risky.map(item => item.action === 'deleteRemote'
+                    ? `${t('tag.actionDeleteRemote')} ${item.name}`
+                    : `${t('tag.actionPullOverwrite')} ${item.name}`));
                 const confirm = await graphView.showDialog(
                     t('tag.confirmDestructive', { items: summary }),
                     [t('tag.runBtn'), t('common.cancel')],
@@ -566,16 +585,16 @@ export function registerTagCommands(
                     vscode.window.showInformationMessage(t('tag.syncDone', { count: done }));
                 }
                 if (skipped.length > 0) {
-                    vscode.window.showWarningMessage(t('tag.syncSkipped', { names: skipped.join(', ') }));
+                    vscode.window.showWarningMessage(t('tag.syncSkipped', { names: summarizeNames(skipped) }));
                 }
                 if (diverged.length > 0) {
                     vscode.window.showWarningMessage(t('tag.divergedRemote', {
-                        names: diverged.join(', '),
+                        names: summarizeNames(diverged),
                         remote
                     }));
                 }
                 if (failed.length > 0) {
-                    showNetworkError(t('tag.syncFailed', { names: failed.join(', '), error: firstError }));
+                    showNetworkError(t('tag.syncFailed', { names: summarizeNames(failed), error: firstError }));
                 }
                 // Only a fetch changes local refs; pushes and remote deletions
                 // leave the badges exactly as they were.

@@ -192,6 +192,10 @@ export interface CommitDetail {
     committer?: string;
     committerEmail?: string;
     committerDate?: string;
+    /** Branches and tags pointing at this commit, tags first. */
+    refs?: string[];
+    /** Subset of `refs` that are tags — what the badge colours are keyed on. */
+    tags?: string[];
 }
 
 /** Git dir writes arrive in bursts (one command touches several files). */
@@ -744,7 +748,9 @@ export class GitService {
                 authorDate: indexed.date,
                 committer: indexed.committer,
                 committerEmail: indexed.committerEmail,
-                committerDate: indexed.committerDate
+                committerDate: indexed.committerDate,
+                refs: indexed.refs,
+                tags: indexed.tags
             };
             this._detailCache.set(key, detail);
             return detail;
@@ -754,10 +760,13 @@ export class GitService {
         // same reason as the graph log: a subject may contain any other char.
         // %an=author name, %ae=author email, %ai=author date
         // %cn=committer name, %ce=committer email, %ci=committer date
-        const output = (await this.executeGitArgs([
-            'show', '-s', '--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci', hash
-        ])).trimEnd();
-        const parts = output.split('\0');
+        const [output, refs] = await Promise.all([
+            this.executeGitArgs([
+                'show', '-s', '--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci', hash
+            ]),
+            this._refsAtCommit(hash)
+        ]);
+        const parts = output.trimEnd().split('\0');
 
         const detail: CommitDetail = {
             hash: parts[0] || hash,
@@ -768,11 +777,35 @@ export class GitService {
             authorDate: parts[5] || '',
             committer: parts[6] || '',
             committerEmail: parts[7] || '',
-            committerDate: parts[8] || ''
+            committerDate: parts[8] || '',
+            refs: refs.refs,
+            tags: refs.tags
         };
         
         this._detailCache.set(key, detail);
         return detail;
+    }
+
+    /**
+     * Branches and tags that point at `hash`, in the same shape the log rows
+     * carry (tags first). One `for-each-ref` over all refs: annotated tags point
+     * at a tag object, so both the raw and the peeled hash have to be compared.
+     */
+    private async _refsAtCommit(hash: string): Promise<{ refs: string[]; tags: string[] }> {
+        const output = await this.executeGitArgs([
+            'for-each-ref', 'refs/heads/', 'refs/remotes/', 'refs/tags/',
+            '--format=%(refname)%09%(refname:short)%09%(objectname)%09%(*objectname)'
+        ]);
+        const tags: string[] = [];
+        const branches: string[] = [];
+        for (const line of output.split('\n')) {
+            if (!line.trim()) {continue;}
+            const [full, short, object, peeled] = line.split('\t');
+            if (object !== hash && peeled !== hash) {continue;}
+            if (full.startsWith('refs/tags/')) {tags.push(short);}
+            else {branches.push(short);}
+        }
+        return { refs: refsTagsFirst([...tags, ...branches], tags), tags };
     }
 
     /**
