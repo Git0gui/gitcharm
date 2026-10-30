@@ -987,14 +987,27 @@ canvas.graph-canvas {
 }
 /* Graph column hidden → branch/tag badges hidden with it (see renderRows). */
 #rows.no-refs .refs { display: none; }
+/* Subject and badges share the flexible cell, in that order. The subject keeps
+   its natural width and only yields — with an ellipsis — when the row is too
+   narrow for both, so badges are never clipped by a long message. */
+.msgline {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+}
 .refs { 
     display: flex; 
+    flex: none;
     gap: 4px; 
-    margin-right: 8px; 
-    max-width: 280px; /* Limit width to prevent squeezing commit message */
+    margin-left: 10px;
+    margin-right: 8px;
+    max-width: 280px;
     overflow: hidden;
     position: relative;
 }
+.refs:empty { display: none; }
 /* Fade-out gradient on the right when refs overflow */
 .refs::after {
     content: '';
@@ -1039,8 +1052,8 @@ canvas.graph-canvas {
 .chip.cur { background: #2d6da8; }
 .chip.remote { background: #5a4a7a; }
 .msg {
-    flex: 1;
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: 48px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2492,6 +2505,45 @@ body.dialog-resizing * {
 .custom-tooltip.visible {
     opacity: 1;
     transform: translateY(-2px);
+}
+
+/* ---- refs popover (branches and tags on a commit) ---- */
+.refs-popover {
+    position: fixed;
+    z-index: 9500; /* above the date picker, below the tooltip and menus */
+    display: none;
+    min-width: 140px;
+    max-width: 320px;
+    max-height: 260px;
+    overflow: auto;
+    padding: 4px;
+    background: var(--vscode-editorHoverWidget-background, rgba(45, 45, 45, 0.98));
+    color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+    border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.refs-popover.visible { display: block; }
+.refs-pop-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.refs-pop-ico {
+    display: flex;
+    flex: none;
+    color: var(--vscode-descriptionForeground, #999);
+}
+.refs-pop-row.rp-tag .refs-pop-ico { color: #f0ad4e; }
+.refs-pop-row.rp-remote .refs-pop-ico { color: #a58bd0; }
+.refs-pop-row.rp-branch .refs-pop-ico { color: #6cb6ff; }
+.refs-pop-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* ---- squash message dialog (multi-line editor) ---- */

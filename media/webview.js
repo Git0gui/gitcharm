@@ -519,6 +519,9 @@ var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stro
 // Same silhouette with filled nodes: the checked-out branch has to stand out in the tree.
 var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="4.5" cy="12.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="11.5" cy="5.5" r="2" fill="currentColor" stroke-width="1"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
+// A price tag lying on its side: the ref list uses it for refs/tags, so a name
+// is never mistaken for a branch.
+var I_TAG = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2.2 2.8h5.4l6 6-5.4 5.2-6-6z"/><circle cx="5.3" cy="5.3" r="1"/></svg>';
 // A trunk with two branches off it: the history of every branch at once.
 var I_ALL_BRANCHES = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 2.4v11.2"/><circle cx="3" cy="3.4" r="1.3"/><path d="M3 6.6h4.2"/><circle cx="8.9" cy="6.6" r="1.3"/><path d="M3 11h4.2"/><circle cx="8.9" cy="11" r="1.3"/></svg>';
 // Archive box: the lid, the body and the slot a stash is put through.
@@ -795,6 +798,8 @@ function markRefsOverflow(refsList) {
 }
 
 function renderRows(appendOnly) {
+    // A rebuild pulls the rows the popover is anchored to out from under it.
+    if (window._hideRefsPopover) {window._hideRefsPopover();}
     var list = state.commits;
     if (list.length === 0) {
         rowsPainted = { count: 0, graphW: -1 };
@@ -923,45 +928,19 @@ function renderRows(appendOnly) {
         // Line 2: Author and date
         commitTooltip += T('w.authorPrefix') + esc(c.author || '') + '\n';
         commitTooltip += T('w.timePrefix') + fmtDateTime(c.date) + '\n';
-        
-        // Add branch refs to tooltip if available
-        if (c.refs && c.refs.length > 0) {
-            var localBranches = [];
-            var remoteBranches = [];
-            c.refs.forEach(function(r) {
-                if (r === 'HEAD') return;
-                if (r.indexOf('/') !== -1) {
-                    remoteBranches.push(r);
-                } else {
-                    localBranches.push(r);
-                }
-            });
-            
-            if (localBranches.length > 0 || remoteBranches.length > 0) {
-                commitTooltip += '\n'; // Separator line
-                
-                // Local branches
-                if (localBranches.length > 0) {
-                    commitTooltip += T('w.localBranchesPrefix') + localBranches.map(esc).join(', ') + '\n';
-                }
+        // Branches and tags deliberately stay out of this tooltip: they belong to
+        // the badge cell, whose hover list shows every ref with its own icon.
 
-                // Remote branches (strip remote name prefix like origin/)
-                if (remoteBranches.length > 0) {
-                    var remoteNames = remoteBranches.map(function(rb) {
-                        var parts = rb.split('/');
-                        return parts.length > 1 ? parts.slice(1).join('/') : rb;
-                    });
-                    commitTooltip += T('w.remoteBranchesPrefix') + remoteNames.map(esc).join(', ') + '\n';
-                }
-            }
-        }
-
-        html += '<div class="row' + (c.hash === state.selectedHash ? ' sel' : '') + '" data-hash="' + esc(c.hash) + '">';
-        html += '<div class="garea" style="width:' + graphW + 'px"></div>';
-        html += '<div class="refs">' + chips + '</div>';
         // Display only first line of commit message in list
         var displayMessage = esc(c.message).split('\n')[0];
+        html += '<div class="row' + (c.hash === state.selectedHash ? ' sel' : '') + '" data-hash="' + esc(c.hash) + '">';
+        html += '<div class="garea" style="width:' + graphW + 'px"></div>';
+        // Subject first, badges after it — the order IDEA's log uses, so the
+        // message keeps its own column instead of being pushed aside by refs.
+        html += '<div class="msgline">';
         html += '<div class="msg" data-title="' + commitTooltip + '">' + displayMessage + '</div>';
+        html += '<div class="refs">' + chips + '</div>';
+        html += '</div>';
         html += '<div class="rauthor" data-title="' + commitTooltip + '">' + esc(c.author || '') + '</div>';
         html += '<div class="rdate" data-title="' + commitTooltip + '">' + esc(fmtRelativeTime(c.date)) + '</div>';
         html += '<div class="avatar" style="background:' + avatarColor(c.author || '?') + '">' + esc((c.author || '?').charAt(0).toUpperCase()) + '</div>';
@@ -5103,6 +5082,118 @@ function renderOperationStatus() {
             tooltip.style.top = (e.clientY + 10) + 'px';
         }
     });
+})();
+
+/**
+ * Ref badges give way to the subject when a row is narrow, and several refs run
+ * past the cell. Hovering the badge cell therefore opens the full list — one
+ * row per branch or tag with its own icon — the way IDEA's log does it.
+ */
+(function initRefsPopover() {
+    var pop = null;
+    var showTimer = null;
+    var hideTimer = null;
+
+    function ensure() {
+        if (pop) {return pop;}
+        pop = document.createElement('div');
+        pop.className = 'refs-popover';
+        pop.addEventListener('mouseenter', function() {
+            if (hideTimer) {clearTimeout(hideTimer); hideTimer = null;}
+        });
+        pop.addEventListener('mouseleave', scheduleHide);
+        document.body.appendChild(pop);
+        return pop;
+    }
+
+    function hide() {
+        if (showTimer) {clearTimeout(showTimer); showTimer = null;}
+        if (hideTimer) {clearTimeout(hideTimer); hideTimer = null;}
+        if (pop) {pop.classList.remove('visible');}
+    }
+    window._hideRefsPopover = hide;
+
+    function scheduleHide() {
+        if (hideTimer) {clearTimeout(hideTimer);}
+        hideTimer = setTimeout(hide, 120);
+    }
+
+    /** Tags are known by the host (it read refs/tags); a slash marks a remote ref. */
+    function rowsFor(commit) {
+        var tags = commit.tags || [];
+        var html = '';
+        (commit.refs || []).forEach(function(name) {
+            if (name === 'HEAD') {return;}
+            var kind = tags.indexOf(name) >= 0 ? 'tag' : (name.indexOf('/') >= 0 ? 'remote' : 'branch');
+            var icon = kind === 'tag' ? I_TAG : (kind === 'remote' ? I_CLOUD : (name === state.current ? I_BRANCH_CURRENT : I_BRANCH));
+            html += '<div class="refs-pop-row rp-' + kind + '">' +
+                '<span class="refs-pop-ico">' + icon + '</span>' +
+                '<span class="refs-pop-name">' + esc(name) + '</span></div>';
+        });
+        return html;
+    }
+
+    /** Place, then correct against the rendered box: CSS px and a zoomed rect
+     *  are different scales, so the first guess is not to be trusted. */
+    function place(cell) {
+        var col = cell.getBoundingClientRect();
+        var left = col.left;
+        var top = col.bottom + 4;
+        pop.style.left = left + 'px';
+        pop.style.top = top + 'px';
+        var box = pop.getBoundingClientRect();
+        if (box.right > window.innerWidth - 6) {
+            left = Math.max(6, window.innerWidth - 6 - box.width);
+            pop.style.left = left + 'px';
+        }
+        if (box.bottom > window.innerHeight - 6) {
+            top = col.top - box.height - 4;
+            if (top < 6) {top = Math.max(6, window.innerHeight - 6 - box.height);}
+            pop.style.top = top + 'px';
+        }
+    }
+
+    function showFor(cell) {
+        var row = cell.closest('.row');
+        var hash = row ? row.getAttribute('data-hash') : null;
+        if (!hash) {return;}
+        var commit = null;
+        var all = state.commits || [];
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].hash === hash) {commit = all[i]; break;}
+        }
+        if (!commit) {return;}
+        var html = rowsFor(commit);
+        if (!html) {return;}
+        ensure().innerHTML = html;
+        pop.classList.add('visible');
+        place(cell);
+    }
+
+    document.addEventListener('mouseover', function(e) {
+        var cell = e.target && e.target.closest ? e.target.closest('#rows .refs') : null;
+        if (!cell) {return;}
+        if (showTimer) {clearTimeout(showTimer); showTimer = null;}
+        if (hideTimer) {clearTimeout(hideTimer); hideTimer = null;}
+        if (pop && pop.classList.contains('visible')) {showFor(cell); return;}
+        showTimer = setTimeout(function() {
+            showTimer = null;
+            // The pointer may have left the cell while the delay ran.
+            if (cell.isConnected && cell.matches(':hover')) {showFor(cell);}
+        }, 150);
+    });
+
+    document.addEventListener('mouseout', function(e) {
+        var cell = e.target && e.target.closest ? e.target.closest('#rows .refs') : null;
+        if (!cell) {return;}
+        var to = e.relatedTarget;
+        if (to && (cell.contains(to) || (pop && pop.contains(to)))) {return;}
+        if (showTimer) {clearTimeout(showTimer); showTimer = null;}
+        scheduleHide();
+    });
+
+    document.getElementById('scroll').addEventListener('scroll', hide, { passive: true });
+    document.addEventListener('mousedown', hide, true);
 })();
 
 initPaneFocus();
