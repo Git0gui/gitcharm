@@ -213,6 +213,12 @@ export interface TagPushResult {
     /** Tags sitting on commits the remote does not have; pushing them would
      *  land the commit there without any remote branch pointing at it. */
     skipped: string[];
+    /** The remote already carries the same tag at the same commit. */
+    upToDate: string[];
+    /** The remote carries this tag at another commit. Sending it would be
+     *  rejected as a non-fast-forward, so it is left alone for the user to
+     *  resolve in the remote-diff dialog — a batch must not overwrite it. */
+    diverged: string[];
 }
 
 export class GitService {
@@ -2886,11 +2892,40 @@ export class GitService {
         // An unknown remote has no tracking refs; let `git push` report it
         // instead of blaming the tags for it.
         const configured = this.getRemoteNames().includes(target);
+        const local = new Map(this.listTags().map(tag => [tag.name, tag.hash] as const));
+        let onRemote: Map<string, string> | undefined;
+        if (configured) {
+            try {
+                onRemote = new Map(
+                    (await this.listRemoteTags(target)).tags.map(tag => [tag.name, tag.commit])
+                );
+            } catch {
+                // The listing is an optimisation, not a gate: without it the
+                // per-tag commit check still works, and `git push` will report
+                // the network error itself.
+                onRemote = undefined;
+            }
+        }
         const pushed: string[] = [];
         const skipped: string[] = [];
+        const upToDate: string[] = [];
+        const diverged: string[] = [];
         for (const name of names) {
             assertRef(name, t('label.tag'));
-            if (!configured || await this._isTagOnRemote(name, target)) {
+            if (!configured) {
+                pushed.push(name);
+                continue;
+            }
+            const remoteCommit = onRemote?.get(name);
+            if (remoteCommit !== undefined) {
+                if (remoteCommit === local.get(name)) {
+                    upToDate.push(name);
+                } else {
+                    diverged.push(name);
+                }
+                continue;
+            }
+            if (await this._isTagOnRemote(name, target)) {
                 pushed.push(name);
             } else {
                 skipped.push(name);
@@ -2901,7 +2936,7 @@ export class GitService {
             // the check go out, so a batch never sweeps the held-back ones along.
             await this._execNetwork(['push', target, ...pushed.map(name => `refs/tags/${name}`)]);
         }
-        return { remote: target, pushed, skipped };
+        return { remote: target, pushed, skipped, upToDate, diverged };
     }
 
     /**

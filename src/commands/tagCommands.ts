@@ -40,27 +40,36 @@ export function registerTagCommands(
     /**
      * A tag held back by the "commit must already be on the remote" rule is not
      * a git failure — no network call was made — so it reads as a warning that
-     * names the next step instead of an error with a log button.
+     * names the next step instead of an error with a log button. A remote that
+     * already carries the tag is not a failure either, and one that carries a
+     * different tag under the same name needs the user's decision.
      */
     const reportPush = (result: TagPushResult): void => {
-        if (result.pushed.length === 0) {
+        if (result.pushed.length > 0) {
+            vscode.window.showInformationMessage(
+                result.pushed.length === 1
+                    ? t('tag.pushed', { name: result.pushed[0] })
+                    : t('tag.pushedMultiple', { count: result.pushed.length })
+            );
+        }
+        if (result.upToDate.length > 0) {
+            vscode.window.showInformationMessage(t('tag.alreadyOnRemote', {
+                names: result.upToDate.join(', '),
+                remote: result.remote
+            }));
+        }
+        if (result.skipped.length > 0) {
             vscode.window.showWarningMessage(t('tag.commitNotPushed', {
                 names: result.skipped.join(', '),
                 remote: result.remote
             }));
-            return;
         }
-        vscode.window.showInformationMessage(
-            result.skipped.length > 0
-                ? t('tag.pushedSkipped', {
-                    count: result.pushed.length,
-                    names: result.skipped.join(', '),
-                    remote: result.remote
-                })
-                : result.pushed.length === 1
-                    ? t('tag.pushed', { name: result.pushed[0] })
-                    : t('tag.pushedMultiple', { count: result.pushed.length })
-        );
+        if (result.diverged.length > 0) {
+            vscode.window.showWarningMessage(t('tag.divergedRemote', {
+                names: result.diverged.join(', '),
+                remote: result.remote
+            }));
+        }
     };
 
     const runPush = async (
@@ -315,15 +324,18 @@ export function registerTagCommands(
             }, async () => {
                 let done = 0;
                 let pulled = false;
+                const toPush: string[] = [];
                 const skipped: string[] = [];
+                const diverged: string[] = [];
                 const failed: string[] = [];
                 let firstError = '';
                 for (const item of picked) {
+                    if (item.action === 'push') {
+                        toPush.push(item.name);
+                        continue;
+                    }
                     try {
-                        if (item.action === 'push') {
-                            const result = await gitService.pushTags([item.name], remote);
-                            if (result.pushed.length > 0) {done++;} else {skipped.push(item.name);}
-                        } else if (item.action === 'deleteRemote') {
+                        if (item.action === 'deleteRemote') {
                             await gitService.deleteRemoteTag(item.name, remote);
                             done++;
                         } else {
@@ -337,12 +349,33 @@ export function registerTagCommands(
                         failed.push(item.name);
                     }
                 }
+                // One push for the whole selection: `pushTags` already reads
+                // the remote list, so per-tag calls would repeat that network
+                // round trip once per row.
+                if (toPush.length > 0) {
+                    try {
+                        const result = await gitService.pushTags(toPush, remote);
+                        done += result.pushed.length + result.upToDate.length;
+                        skipped.push(...result.skipped);
+                        diverged.push(...result.diverged);
+                    } catch (error) {
+                        logger.error(`[GitCharm] tag sync failed (push ${toPush.join(', ')}): ${redactUrlCredentials(combineErrorText(error))}`);
+                        if (!firstError) {firstError = formatGitError(error);}
+                        failed.push(...toPush);
+                    }
+                }
 
                 if (done > 0) {
                     vscode.window.showInformationMessage(t('tag.syncDone', { count: done }));
                 }
                 if (skipped.length > 0) {
                     vscode.window.showWarningMessage(t('tag.syncSkipped', { names: skipped.join(', ') }));
+                }
+                if (diverged.length > 0) {
+                    vscode.window.showWarningMessage(t('tag.divergedRemote', {
+                        names: diverged.join(', '),
+                        remote
+                    }));
                 }
                 if (failed.length > 0) {
                     showNetworkError(t('tag.syncFailed', { names: failed.join(', '), error: firstError }));
