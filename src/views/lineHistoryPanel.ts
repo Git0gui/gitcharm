@@ -224,28 +224,32 @@ export class LineHistoryPanel {
      *
      * Blame names the commit that owns the lines today; `-L` walks the same
      * lines backwards and finds the rewrites before it — plus what each revision
-     * actually said. One `-L` range needs one start revision and one numbering,
-     * so this only runs when blame mapped the selection to a single commit;
-     * otherwise the blame list is already the whole answer.
+     * actually said.
      *
-     * All-uncommitted lines are the interesting exception: blame has no commit to
-     * name, yet the user still wants the history of the line they just edited, so
-     * the walk starts at HEAD on the lines the edit replaced.
+     * One `-L` range needs one start revision and one numbering. A single blamed
+     * commit supplies both (its original-side numbers). A selection owned by
+     * several commits has neither, but a clean buffer *is* HEAD's file, so today's
+     * numbers are HEAD's numbers and the walk can start there. Uncommitted lines
+     * are the remaining case: they have no commit to name, yet the user still
+     * wants the history of the line they just edited, so the range is mapped to
+     * the HEAD lines the edit replaced.
      *
      * It is an enrichment, not a prerequisite: the first paint never waits for
      * it, and a failure leaves the list exactly as blame delivered it.
      */
     private async _loadChain(blamed: readonly LineHistoryCommit[], ticket: number): Promise<void> {
+        const range: number[] = [];
+        for (let n = this._range.startLine + 1; n <= this._range.endLine + 1; n++) {range.push(n);}
+
         let anchor: Pick<LineHistoryCommit, 'hash' | 'path' | 'origLines'> | undefined;
         if (blamed.length === 1 && blamed[0].path && blamed[0].origLines.length > 0) {
             anchor = blamed[0];
         } else if (blamed.length === 0 && this._skipped > 0) {
-            anchor = {
-                hash: 'HEAD',
-                path: this._target.file,
-                origLines: await this._headLines(ticket)
-            };
-            if (ticket !== this._ticket || this._disposed || anchor.origLines.length === 0) {return;}
+            const mapped = await this._headLines(ticket);
+            if (ticket !== this._ticket || this._disposed || mapped.length === 0) {return;}
+            anchor = { hash: 'HEAD', path: this._target.file, origLines: mapped };
+        } else if (this._skipped === 0 && !this._error) {
+            anchor = { hash: 'HEAD', path: this._target.file, origLines: range };
         } else {
             return;
         }
