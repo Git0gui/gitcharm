@@ -36,6 +36,7 @@ import {
     parseWorktreeList,
     parsePathFilter,
     parseReflogList,
+    findStaleLock,
     operationFromStateFiles,
     remoteUrlToWebBase,
     parseGitConfigRemoteUrl,
@@ -962,7 +963,7 @@ export class GitService {
      * so subsequent reads reflect the new state.
      */
     private async _execMutate(args: string[], opts: Omit<GitRunOptions, 'cwd' | 'env'> = {}): Promise<string> {
-        const out = await this.executeGitArgs(args, opts);
+        const out = await this._execWithLockRecovery(args, opts);
         this.invalidateVolatile();
         return out.trim();
     }
@@ -973,9 +974,71 @@ export class GitService {
      * No timeout: interactive rebase/merge sequences can be slow on large repos.
      */
     private async _execMutateWithEnv(args: string[], extraEnv: Record<string, string>): Promise<string> {
-        const out = await this.executeGitArgs(args, { env: extraEnv, timeoutMs: 0 });
+        const out = await this._execWithLockRecovery(args, { env: extraEnv, timeoutMs: 0 });
         this.invalidateVolatile();
         return out.trim();
+    }
+
+    /**
+     * A failed write may be a leftover lock file rather than a real failure —
+     * the classic case is closing the editor in the middle of a checkout, which
+     * leaves `index.lock` behind and makes every later write fail the same way.
+     * Deleting it is the fix, but only the user can tell a dead lock from a git
+     * process that is genuinely still running, so this asks first, deletes
+     * exactly one file inside the git directory, and replays the command once.
+     */
+    private async _execWithLockRecovery(args: string[], opts: Omit<GitRunOptions, 'cwd'>): Promise<string> {
+        try {
+            return await this.executeGitArgs(args, opts);
+        } catch (error) {
+            const lock = this._lockFileFromError(error);
+            if (!lock) {throw error;}
+            const remove = t('lock.remove');
+            const answer = await vscode.window.showWarningMessage(
+                t('lock.stalePrompt', { path: lock.display }),
+                { modal: true, detail: t('lock.staleDetail') },
+                remove
+            );
+            if (answer !== remove) {throw error;}
+            try {
+                fs.unlinkSync(lock.path);
+            } catch (unlinkError) {
+                logger.warn(`[GitCharm] Could not remove stale lock ${lock.path}: ${String(unlinkError)}`);
+                throw error;
+            }
+            logger.info(`[GitCharm] Removed stale git lock ${lock.path}`);
+            return await this.executeGitArgs(args, opts);
+        }
+    }
+
+    /**
+     * The stale lock the failure names — only once it is proven to be a `.lock`
+     * file inside this repository's git directory. Nothing git prints is
+     * trusted with a delete: a path from elsewhere (or a ref name where a path
+     * was expected) is simply not offered.
+     */
+    private _lockFileFromError(error: unknown): { path: string; display: string } | undefined {
+        const fields = error as { message?: unknown; stderr?: unknown } | null | undefined;
+        const text = [fields?.message, fields?.stderr].filter((v): v is string => typeof v === 'string').join('\n');
+        const named = findStaleLock(text);
+        const repo = this._resolveRoot();
+        if (!named || !repo) {return undefined;}
+
+        const gitDir = resolveGitDir(repo);
+        const commonDir = gitDir ? resolveCommonDir(gitDir) : undefined;
+        const target = path.resolve(repo, named);
+        if (!target.toLowerCase().endsWith('.lock')) {return undefined;}
+        const flat = (value: string) => path.resolve(value).replace(/\\/g, '/').toLowerCase();
+        const inside = [gitDir, commonDir]
+            .filter((dir): dir is string => !!dir)
+            .some(dir => flat(target) === flat(dir) || flat(target).startsWith(`${flat(dir)}/`));
+        if (!inside) {return undefined;}
+        try {
+            if (!fs.statSync(target).isFile()) {return undefined;}
+        } catch {
+            return undefined;
+        }
+        return { path: target, display: path.relative(repo, target).replace(/\\/g, '/') };
     }
 
     /**
@@ -986,7 +1049,9 @@ export class GitService {
     private async _execNetwork(args: string[]): Promise<string> {
         const env = this._askpass ? await this._askpass.prepare() : {};
         try {
-            const out = await this.executeGitArgs(args, { env, timeoutMs: 0 });
+            // A fetch that updates remote-tracking refs takes the same ref locks
+            // a checkout does, so it deserves the same recovery.
+            const out = await this._execWithLockRecovery(args, { env, timeoutMs: 0 });
             this.invalidateVolatile();
             return out.trim();
         } catch (error) {

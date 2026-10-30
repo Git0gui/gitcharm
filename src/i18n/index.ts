@@ -467,6 +467,9 @@ const zh: Record<string, string> = {
     'view.loadBranchesFailed': '加载分支列表失败: {error}',
     'view.refreshBranchesFailed': '刷新分支列表失败: {error}',
     'view.branchGone': '分支「{name}」已不存在，已显示全部提交',
+    'lock.stalePrompt': '另一个 git 进程没有正常收尾（常见于检出过程中关掉了编辑器），锁文件还在：{path}',
+    'lock.staleDetail': '删除后会重试刚才的操作。若确实还有 git 进程在跑（比如终端里正在提交），请不要删除。',
+    'lock.remove': '删除锁文件并重试',
 
     // skeleton html (graphView template)
     'ui.filterBranches': '筛选分支',
@@ -1111,6 +1114,9 @@ const en: Record<string, string> = {
     'view.loadBranchesFailed': 'Failed to load branches: {error}',
     'view.refreshBranchesFailed': 'Failed to refresh branches: {error}',
     'view.branchGone': 'Branch "{name}" no longer exists; showing all commits',
+    'lock.stalePrompt': 'Another git process did not finish cleanly (closing the editor mid-checkout does this) and left its lock file behind: {path}',
+    'lock.staleDetail': 'Deleting it retries the operation. Do not delete it if a git process is really still running, e.g. a commit in a terminal.',
+    'lock.remove': 'Delete lock file and retry',
 
     // skeleton html
     'ui.filterBranches': 'Filter branches',
