@@ -143,6 +143,21 @@ export function registerTagCommands(
         }
     };
 
+    /**
+     * A local-only repository has no remote to push tags to. Letting the push
+     * run would end in "fatal: 'origin' does not appear to be a git repository",
+     * which reads like a broken repo instead of "add a remote first".
+     */
+    const ensureRemote = async (): Promise<boolean> => {
+        if (gitService.getRemoteNames().length > 0) {return true;}
+        const choice = await vscode.window.showInformationMessage(
+            t('tag.noRemotePush'),
+            t('remote.manageTitle')
+        );
+        if (choice) {void vscode.commands.executeCommand('idea-git.manageRemotes');}
+        return false;
+    };
+
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.createTag', async (node: any) => {
             const hash = node?.hash ?? node?.commit?.hash ?? gitService.selectedCommitHash;
@@ -204,7 +219,7 @@ export function registerTagCommands(
             const localBtn = t('tag.deleteLocalBtn');
             const bothBtn = t('tag.deleteLocalRemoteBtn');
             const confirm = await graphView.showDialog(
-                t('tag.deleteConfirm', { names: summary }),
+                t(remote ? 'tag.deleteConfirm' : 'tag.deleteConfirmNoRemote', { names: summary }),
                 remote
                     ? [localBtn, bothBtn, t('common.cancel')]
                     : [localBtn, t('common.cancel')],
@@ -282,6 +297,7 @@ export function registerTagCommands(
                 vscode.window.showInformationMessage(t('tag.none'));
                 return;
             }
+            if (!(await ensureRemote())) {return;}
 
             // Reading the remote once is what keeps the picker honest: tags the
             // remote already has at the same commit drop out (there is nothing
@@ -324,6 +340,7 @@ export function registerTagCommands(
                 vscode.window.showInformationMessage(t('tag.none'));
                 return;
             }
+            if (!(await ensureRemote())) {return;}
 
             const confirm = await graphView.showDialog(
                 t('tag.pushAllConfirm', { count: names.length }),
