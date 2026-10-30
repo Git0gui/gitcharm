@@ -111,6 +111,7 @@ GitCharm provides a three-panel Git log view:
 - **IDEA-style search box**: `.*` treats the keyword as an extended regular expression and `Cc` makes it case-sensitive, both living inside the box so the rule you are searching under is visible while you type. The default is a literal substring match — `( . *` are characters, not syntax — and both switches are part of the filter, so they survive re-showing the panel, a branch switch and a cached page
 - **The filter bar never wraps**: when the commit column narrows, author / path / date move into a `>` popover instead of stacking into two rows and eating a screenful of the list. The chevron lights up when a filter you cannot currently see is still in effect, and the commit column has a minimum width the splitter will not let you squeeze past
 - **An exit for an empty result**: nothing matched means the empty state hands you a "clear all filters" button, and every filter that is actually applied puts an accent edge on its own toolbar control — a short list always has a reason
+- **All branches in one list**: an "All branches" entry under HEAD in the branch tree puts every branch's commits into the same list, so a search spans all of them; when a single-branch filter finds nothing, the empty state offers "Search all branches" instead of sending you to find that option in the tree
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
 - **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs; the header (count + switch) stays pinned while scrolling in any direction
 - **Collapsible details**: in the push and compare dialogs the info pane below the files folds into a single bar with one click, handing its height to the file list; the fold is remembered per dialog for the current session
@@ -122,6 +123,7 @@ GitCharm provides a three-panel Git log view:
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts are detected in one place, a persistent top status bar offers Continue / Abort, and the conflicted files are opened directly in the editor (up to 10 tabs) so the built-in merge-conflict code lenses can be used — the panel never switches you into another view
 - **The panel follows real git state**: resolve the conflicts and commit in your own terminal and the operation bar retracts on its own once git's state files are gone, while the commit list reloads as soon as the displayed branch tip moves — keeping your selection, detail panel, folds and scroll position instead of jumping back to the top
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
+- **Stale lock files, handled with a question**: if a write hits a `.lock` file left behind by a killed git process, GitCharm asks once, then deletes it and retries the same command — no hand-cleaning inside the git directory
 - **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
 - **Full error detail on demand**: the error notification stays short, while the complete git output (credentials redacted) goes to the GitCharm output channel, reachable from a Show Log button on the notification
 - **Optional background fetch**: set `idea-git.autoFetchMinutes` and the panel fetches from the remote every N minutes while it is open, refreshing the branch tree and the ahead/behind arrows. Silent by design — no credential prompt, no error toast, and no subprocess at all when the repository has no remote
@@ -308,6 +310,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **IDEA 式搜索框**：`.*` 把关键词当正则表达式匹配、`Cc` 区分大小写，两个开关长在框里——正在按什么规则搜，输入的时候就看得到。默认是字面子串匹配，`( . *` 是字符不是语法，不再因为一个左括号报正则错误；开关与关键词同属筛选条件，重新显示面板、换分支、复用缓存页都不会拿到错的那份答案
 - **筛选栏不再叠排**：提交列变窄时提交人 / 路径 / 日期收进 `>` 浮层，而不是换成两排把列表挤掉一屏；看不见的筛选还在生效时 `>` 会亮。分隔条也不允许把提交列压到没有内容可看
 - **筛空了要给出口**：一条都不剩时，空态直接提供"清除全部筛选"按钮；真正在生效的筛选会在自己的控件上亮一条强调边——列表为什么这么短总有答案
+- **全部分支一起看**：分支树 HEAD 段下的「全部分支」把所有分支的提交放进同一个列表，搜索随之跨分支；单分支下筛不到结果时，空态直接给"在所有分支中搜索"，不用先去树里找那个选项
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
 - **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换；表头（数量 + 切换按钮）在任意方向滚动时保持吸附
 - **详情可收起**：推送与对比对话框下方的详情区点一下折成一条，腾出的高度交给文件列表；收起状态在本次会话内按对话框记住
@@ -319,6 +322,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部常驻状态栏提供"继续 / 终止"，冲突文件直接在编辑器打开（上限 10 个 tab）用内置 merge-conflict 代码透镜解决，面板不会把用户切去其他视图
 - **面板跟着真实 git 状态走**：在自己终端里解决冲突并提交，操作状态栏会在 git 状态文件清掉后自动收起；提交列表也在所选分支 tip 移动时自动重载，并保留当前选中项、第三栏详情、折叠状态与滚动位置，不再跳回顶部
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
+- **残留锁文件先问再删**：写操作撞上被杀掉的 git 进程留下的 `.lock` 文件时先问一句，同意后删除它并重试同一条命令，不必自己去 git 目录里手动清理
 - **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
 - **完整错误随时可查**：错误通知保持简短，完整的 git 输出（凭据已脱敏）写入 GitCharm 输出通道，通知条上的"显示日志"按钮可直接打开
 - **可选的后台定时 fetch**：设置 `idea-git.autoFetchMinutes` 后，面板打开期间每隔 N 分钟静默 fetch 一次，只更新分支树与超前/落后箭头。刻意保持安静：不弹凭据输入、不弹错误提示，仓库没有远端时一个子进程也不 spawn

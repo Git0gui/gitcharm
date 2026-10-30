@@ -2,6 +2,44 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.8] - 2026-10-30
+
+本版的主题是"历史看得更细"：新增一个独立面板，把 blame 那一行追溯到被改写的每一次，并把差异收敛到选中的几行；文件历史复用同一个面板；面板与对话框修掉三处排版问题；写操作撞上遗留锁文件不再只能手动清。
+
+### 新增
+
+- **选中行历史面板**（新增 `src/services/lineHistory.ts`、`src/views/lineHistoryPanel.ts`、`media/lineHistory.{js,css}`；入口 `idea-git.lineHistory`，键位 `Alt+H`，编辑器右键菜单同入口）。它**不是 `mainView` 的第四栏**，而是一个独立 `WebviewPanel`（`retainContextWhenHidden`：切回编辑器再回来不该重跑 blame）。四条硬规定写进了 AGENTS.md §8：
+  - **blame 跑在编辑器缓冲区上**（`git blame --porcelain --contents - -L a,b -- <rel>` + stdin = `doc.getText()`）。按磁盘文件跑 blame 时，未保存的修改会让行号错位；旧设计"把脏行从集合剔除"是错的——用户改了一行再看历史，会看到自己那行的上一版被标成别人的提交。
+  - **链条排序用 `committerTime` 降序**（`commitsForLines`）：作者时间被 rebase/amend 保留、落地顺序却相反，按 `authorTime` 排会把最新提交排到最后。
+  - **renames 靠 porcelain 每个提交的 `filename` 字段**：那是该提交时文件的名字，diff 必须用 `commit.path`。用当前路径去 diff 更早的提交，git 只会回一句"没有这个文件"，卡片无声空白。
+  - **下方差异默认只显示选中行的改动**：头部 `<sha> <orig> <final>` 里 **orig 行号**才是这些行在该提交里的位置（final 是今天缓冲区的行号，拿去 diff 会指错行），`parseUnifiedDiff` 只保留新侧区间覆盖这些行的 hunk，再按 ±3 行裁剪（`trimToHits`，缺口画 `⋯`）。初始导入是一个覆盖全文的 hunk，不裁剪的话"只选一行"仍然会画出整文件。头部按钮可切"整文件"，两种口径各自进缓存 key（`_diffKey`）。
+- **重写链**（`parseLineLog` / `buildLineLogArgs` / `mergeChain` + 单测 `src/test/lineHistory.test.ts`）：blame 只给出"最后是谁改的"，`git log -L a,b:<path>` 才能补出被再次改写、blame 已经看不见的那些提交，两者合并去重成一条链。
+- **未提交条目钉在最上面**（`worktreeEntry`）：与工作区对照，行内容预览显示当前缓冲区的文字。
+- **每条提交的行内容预览**：`git show <hash>:<path>` 取当时整份文件，截取对应的行段——列表因此读起来是"这一行的历史"，而不是"一串提交人"。
+- **面板单例 + 请求代次**：同文件再触发 = 换目标 + 清 diff 缓存 + 重载（不新开 tab），`_current` 在 `onDidDispose` 里清空；webview 侧 `requestId` 逐次自增，宿主回的 `lh.diff` 只认当前选中 + 当前 requestId（快速连点会乱序）。分页在 webview 内做（`PAGE = 10` + "加载更多"），宿主一次给全量提交集合。差异端点照旧 `getDiffBase(hash)` + `openEditorDiff`（二进制闸门也照旧）。
+- **文件历史复用同一面板**（`LineHistoryTarget.mode: 'lines' | 'file'`，新增 `src/services/fileHistory.ts` 的 `buildFileLogArgs` / `parseFileLog`；配置 `idea-git.fileHistory` 默认 `custom`，`native` 走 `files.openTimeline`）。列表来自一次 `git log --follow --name-status --no-merges --format=%x1e%H%x00%an%x00%at%x00%ct%x00%s -n 1000 -- <path>`，`parseFileLog` 取每个提交**当时**的文件名（重命名取 `Rxxx old new` 的新名，diff 必须用它），所以列表没有行号范围、diff 恒为整文件，webview 按 `mode` 隐藏范围标签与"整文件"开关。面板单例按模式各一个（`_current` 是 `Map<mode, panel>`），行历史与文件历史互不覆盖。
+- **「全部分支」作用域**（`media/webview.js`：分支树 HEAD 段下的条目 + 空态按钮；i18n `w.allBranches` / `w.allBranchesHint` / `filter.searchAllBranches`）：单击即把提交列表切到 `--all`，搜索随之跨分支；单分支下筛选无结果时，空态直接给「在所有分支中搜索」，不用先去树里找选项。
+- **遗留锁文件恢复**（`GitService._execWithLockRecovery` / `_lockFileFromError` + `gitUtils.findStaleLock`；单测 `src/test/gitService.test.ts` 的 `findStaleLock` 一组）：检出过程中关掉编辑器会留下 `index.lock` / `<ref>.lock`，之后每次写都是同一条 `fatal: Unable to create '<path>': File exists.`。`_execMutate` / `_execMutateWithEnv` / `_execNetwork` 一律经这层：`findStaleLock` 只认 `Unable to create '<path>':` 这一种形状，路径再解析进 `resolveGitDir()` / `commonDir` 之内、且确实是已存在的 `.lock` 文件，才弹一个写明"删除会重试、真有进程在跑就别删"的模态框；同意后 `unlink` 并把原命令重试一次，删不掉就把原错误抛回去。**禁止静默删除**；`cannot lock ref '…': is at … but expected …` 是并发更新，不动它。后台 `fetchSilent` 故意走裸路径，无人值守时不会弹框。
+
+### 变更
+
+- **行 / 文件历史列表压成一行一条**（`media/lineHistory.js` 的 `renderList` / `media/lineHistory.css`）：每条从"上哈希下作者"的双行改成单行 `.lh-row-main`（哈希或脏点 + 消息 + 作者 + 时间 + 改写行数），只有行模式的"当时内容"保留第二行；`#lh-head` 收到 `4px 10px 3px`、`#lh-list` 的 `max-height` 由 45% → 38% → 30%。实测 stub-vscode 渲染：文件模式 10 行约 185px，行模式（两行/条）约 35px/条，都在 30% 封顶内滚动，下方差异区拿回大半高度。移除 `.lh-row-top` / `.lh-row-bottom`。
+- **仓库名省略号**（`media/webview.css` 第三栏表头）：表头仓库名是任意长度的目录名，`min-content` 撑开后把眼睛/刷新按钮顶出面板；名字改单行省略号（完整名进自定义 tooltip），两个按钮 `flex: none`。
+- **操作历史对话框去掉空白条**：列表曾预留 200px 最小高度，五条记录下面留一条空白；改为由内容撑高，空态自己带高度。
+- **菜单项改名**：原「查看文件所有历史提交」「行历史：选中行（或当前行）的提交记录」太长，右键菜单里一眼读不完，改成「文件历史」「选中行历史」（`package.nls*.json`）。文件历史默认面板落地后，「文件历史(原生)」又改回「文件历史」——它现在有两种界面，名字里再带"原生"就只说了其中一种。
+
+### 文档
+
+- README 头部改成市场页常见的版式（居中图标 + 徽章 + 语言切换），新增 `## What's New` / `## 新增功能` 置顶，配行级历史实拍图 `resources/screenshots/line-history.png`；原三栏介绍收进 `## Overview` / `## 概览`。版本 / 安装量 / 评分徽章从 shields.io（其 `visual-studio-marketplace` 系列已下线，渲染成"retired badge"）换到 `vsmarketplacebadges.dev`。
+- README 中英 + `docs/CSDN-GitCharm使用说明.md` 同步本版的「全部分支」「文件历史默认面板」「选中行历史」条目；AGENTS.md §8 补三条（行历史面板的四条硬规定、文件历史复用面板、锁文件恢复；已在 §3 的锁恢复条目里写全）。
+
+### 验证
+
+- compile / lint（0 error，66 warning）/ test 全绿，372 例（新增 `src/test/lineHistory.test.ts` 守 porcelain blame、`git log -L` 解析与链条合并、diff 行裁剪，`src/test/fileHistory.test.ts` 守重命名与 `--follow` 解析，`gitService.test.ts` 增 `findStaleLock` 一组）。
+- stub-vscode Node harness 跑真实 `LineHistoryPanel` 构建：文件模式 10 行列表高度约 185px，行模式两行条约 35px/条；`parseFileLog` / `parseLineLog` / `mergeChain` / `trimToHits` 用例覆盖重命名、根提交、脏行、缺口裁剪。
+- 预览 harness（headless Chrome）检查行历史与文件历史的面板版式；README 用 `marked` + headless Chrome 渲染核对置顶内容与徽章。
+- 待复验（需要真实工作台）：选中行历史 / 文件历史面板本体、`Alt+H` 键位、全部分支作用域、锁文件询问框；`media/` 改动后开发宿主跑旧代码，必须完全重启，必要时 bump 版本号让缓存失效。
+
 ## [0.1.7] - 2026-10-27
 
 本版只做一件事：把"压缩提交"从"整段并块 + amend HEAD"改成"按相邻段就地折叠"。用户报的现象是压缩早期提交会覆盖到 HEAD 的记录，实测下来这条链上有三个独立缺陷（消息落点、未选提交被挪位、todo 少写一行等于删提交），外加共用排序原语的一处隐性失效，全部有验收用例钉住。
