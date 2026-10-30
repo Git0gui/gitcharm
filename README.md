@@ -1,8 +1,24 @@
-# GitCharm
+<h1 align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/icon.png" width="96" height="96" alt="GitCharm" />
+  <br />
+  GitCharm
+</h1>
 
-**English** | [简体中文](#简体中文)
+<p align="center">
+  <strong>Bring the IntelliJ IDEA Git UI and workflow to VS Code / Qoder.</strong>
+</p>
 
-> Bring the IntelliJ IDEA Git UI and workflow to VSCode / Qoder.
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Marketplace version" src="https://img.shields.io/visual-studio-marketplace/v/liugui.git-charm?style=flat-square&amp;label=marketplace"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Installs" src="https://img.shields.io/visual-studio-marketplace/i/liugui.git-charm?style=flat-square&amp;label=installs"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Rating" src="https://img.shields.io/visual-studio-marketplace/r/liugui.git-charm?style=flat-square&amp;label=rating"></a>
+  <img alt="VS Code 1.66+" src="https://img.shields.io/badge/VS%20Code-%E2%89%A51.66-007ACC?style=flat-square&amp;logo=visualstudiocode&amp;logoColor=white">
+  <img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square">
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="#简体中文">简体中文</a>
+</p>
 
 ![GitCharm three-panel git log UI](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
 
@@ -11,6 +27,21 @@ GitCharm provides a three-panel Git log view:
 - **Left · Branch tree** — hierarchical tree grouped by `HEAD / Local / Remote`, plus stash and worktree sections at the bottom, ahead/behind arrows (▲▼) and commit-count badges; a toolbar button narrows the tree to the branches you favorited
 - **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / path / date-range filters (the search box carries `.*` and `Cc` switches for regex and case-sensitive matching)
 - **Right · Commit details** — full commit info, changed file list (added/deleted line counts) and diff entry
+
+## What's New
+
+### Line History — the story of one line, not the whole file
+
+Select a line or a range in the editor, then press `Alt+H` or right-click → **GitCharm → Selected Lines History**. The panel is built around exactly those lines:
+
+- **Every commit that rewrote them**, newest first. Blame is only the starting set — `git log -L` adds the rewrites blame can no longer see, so a line that was edited and then moved still shows its whole chain.
+- **What the line said at that revision**, previewed under every row: the list reads as the history of a line, not as a list of committers.
+- **A diff scoped to the selection**: only the hunks that still cover the selected lines, with untouched stretches collapsed to `⋯`; one click switches to the whole file.
+- **Uncommitted work on top**: edits you have not committed yet sit as their own row, compared against the working tree.
+- **Blame runs on the editor buffer**, so unsaved edits do not shift the line numbers under your selection — and every commit is diffed under the file name it had back then, so renames are followed.
+- **Two hand-offs from the header**: re-root the main commit list on that commit (children above, ancestors below), or open the pair in VS Code's native diff.
+
+File History also opens GitCharm's own panel by default now — commit list plus the selected commit's changes — and `idea-git.fileHistory` switches it back to VS Code's Timeline.
 
 ## Screenshots
 
@@ -56,6 +87,7 @@ GitCharm provides a three-panel Git log view:
 - **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes
 - **Files**: compare file with another branch, compare with the local working copy, show the current file against its last commit (editor / Explorer right-click), pick a single file from a commit, jump to the file in your working tree (entries for files that no longer exist there are greyed out), **open the file exactly as it stood in that commit — read-only and scrolled to the first line the commit touched**, which is how you read code the working tree no longer has, open the file's cross-branch history in the editor's Timeline, view diff introduced by a single commit
 - **Blame**: inline annotation of last author & date per line, full commit info on hover, and clicking an annotation re-roots the commit list on that commit — its children above, its ancestors below, the commit itself selected in the middle. With word wrap on, the annotation sits at the end of each line so wrapped continuations stay aligned; with it off it stays in a fixed left column
+- **Line history**: select lines and press `Alt+H` for a panel listing every commit that rewrote them — each revision's text previewed, the diff scoped to those lines (whole file with one click), uncommitted edits pinned on top, and one click to re-root the commit list on that commit or open the native diff
 
 ### Performance
 
@@ -135,6 +167,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | Show a file's uncommitted changes | Editor / Explorer right-click → Show Changes |
 | Pick a file from a commit | Commit detail (third panel) → right-click a file → Cherry-Pick File |
 | View file history | Editor / Explorer right-click → GitCharm → File History — GitCharm's own panel by default (commit list + the selected commit's changes); `idea-git.fileHistory` switches it to VS Code's Timeline |
+| View history of selected lines | Select lines in the editor → `Alt+H`, or right-click → GitCharm → Selected Lines History |
 | Toggle blame | Editor right-click → Toggle Blame, or click the line-number area |
 
 ## Settings
@@ -188,6 +221,21 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 路径 / 日期区间筛选（搜索框内嵌 `.*` 正则与 `Cc` 区分大小写两个开关）
 - **右栏 · 提交详情**：选中提交的完整信息、变更文件列表（增删行数）与差异入口
 
+## 新增功能
+
+### 行级历史——只追一行，而不是整个文件
+
+在编辑器里选中一行或一段，按 `Alt+H`，或右键 → **GitCharm → 选中行历史**。面板只围绕这几行展开：
+
+- **改写这一行的全部提交**，从新到旧。blame 只是起点——`git log -L` 补上 blame 已经看不见的改写链条：一行被改写之后再被移动，历史也不会断。
+- **这一行在那一版是什么**：每行下方预览该提交时这一行的原文，列表读起来是"这一行的历史"，而不是一串提交人。
+- **只显示选中行的差异**：只保留仍覆盖选中行的 hunk，中间没变的区间收成 `⋯`；点一下即可切到整文件。
+- **未提交的改动钉在最上面**：还没提交的修改单独成行，与工作区里的内容直接对比。
+- **blame 跑在编辑器缓冲区上**：未保存的修改不会让选中行的行号错位；每个提交都按它当时的文件名做对比，重命名也会跟着追。
+- **面板头部两个去处**：把主面板的提交列表改根到那条提交（上面是它之后的提交、下面是它的祖先），或者把这一对版本交给 VS Code 原生对比。
+
+文件历史也改为默认打开 GitCharm 自带面板（提交列表 + 所选提交的改动），`idea-git.fileHistory` 可切回 VS Code 时间线。
+
 ## 界面截图
 
 **提交右键菜单（单选）**：提交行右键呼出 显示差异 / 精选提交 / 重置 / 新建分支，HEAD 附近另有 编辑提交信息 与 删除提交
@@ -232,6 +280,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **工作树（Worktree）**：分支树底部列出同一仓库的所有检出，双击在新窗口打开、右键移除；非当前本地分支可一键检出到新工作树。移除前按 git 登记校验，工作树含未提交改动时需再次确认才强制删除
 - **文件**：与其他分支对比此文件、与当前本地文件对比、查看当前文件与最后一次提交的差异（编辑器 / 资源管理器右键）、从提交中挑选单个文件、跳转到工作区中的该文件（工作区已不存在的文件菜单项灰显）、**按那次提交的版本只读打开这个文件并停在本次改动的第一行**（工作区里早已删掉的代码也能读）、跨分支查看该文件的全部历史提交（打开编辑器的时间线）、查看单次提交引入的差异
 - **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击把提交列表改根到那条提交——上面是它之后的提交、下面是导致它的提交，选中行落在中间，两个方向都能滚动。开启自动换行时注解显示在行尾，折行的续行不会错位；关闭换行时保持左侧固定列
+- **行级历史**：选中若干行后按 `Alt+H`，面板列出改写这些行的全部提交——每行预览该提交时的内容，下方差异默认只看选中行（可一键切整文件），未提交的改动钉在最上面，还能一键把提交列表改根到那条提交或交给原生对比
 
 ### 性能
 
@@ -311,6 +360,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 看当前文件未提交的改动 | 编辑器 / 资源管理器右键 → 查看差异 |
 | 挑选提交中的单个文件 | 第三栏变更文件右键 → 挑选文件 |
 | 文件历史 | 编辑器 / 资源管理器右键 → GitCharm → 文件历史——默认是 GitCharm 自带面板（提交列表 + 所选提交的改动），`idea-git.fileHistory` 可切到 VS Code 时间线 |
+| 查看选中行的历史 | 编辑器中选中若干行 → `Alt+H`，或右键 → GitCharm → 选中行历史 |
 | 显示 Blame | 编辑器右键 → 显示提交信息，或点击行号区域 |
 
 ## 设置项
