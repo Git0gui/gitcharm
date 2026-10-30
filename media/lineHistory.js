@@ -46,7 +46,9 @@
         diffRequest: 0,
         /* false: only the hunks that touch the selected lines (the default —
          * this tab exists to explain *those* lines). true: the whole file. */
-        full: false
+        full: false,
+        /* The `-L` chain arrived: the list now reaches past the blamed commits. */
+        chain: false
     };
 
     var listEl = document.getElementById('lh-list');
@@ -88,12 +90,25 @@
         return T('lineHistory.range', { start: state.startLine + 1, end: state.endLine + 1 });
     }
 
+    /* The worktree row is not a revision, so it never counts as one. */
+    function revisionCount() {
+        var count = 0;
+        for (var i = 0; i < state.commits.length; i++) {
+            if (!state.commits[i].dirty) { count++; }
+        }
+        return count;
+    }
+
     function renderHead() {
         fileEl.textContent = state.file;
         var parts = [];
         if (!state.loading) {
             parts.push(rangeLabel());
-            if (!state.error) { parts.push(T('lineHistory.summary', { count: state.commits.length })); }
+            if (!state.error) {
+                parts.push(T(state.chain ? 'lineHistory.revisions' : 'lineHistory.summary', {
+                    count: revisionCount()
+                }));
+            }
             if (state.skipped > 0) { parts.push(T('lineHistory.skipped', { count: state.skipped })); }
         }
         subEl.textContent = parts.join(' · ');
@@ -116,20 +131,36 @@
         }
 
         var limit = Math.min(state.shown, state.commits.length);
+        /* "2 行来自此提交" only means something when more than one line was
+         * selected; on a single line every row would just say 1. */
+        var showLines = state.scanned > 1;
         var html = [];
         for (var i = 0; i < limit; i++) {
             var c = state.commits[i];
+            var meta = c.dirty
+                ? '<span class="lh-author">' + esc(T('lineHistory.you')) + '</span>' +
+                    '<span class="lh-time">' + esc(T('lineHistory.justNow')) + '</span>'
+                : '<span class="lh-hash">' + esc(c.hash.substring(0, 8)) + '</span>' +
+                    '<span class="lh-author">' + esc(c.author) + '</span>' +
+                    '<span class="lh-time">' + esc(fmtTime(c.authorTime)) + '</span>' +
+                    (showLines && c.lines > 0
+                        ? '<span class="lh-lines">' + esc(T('lineHistory.linesCount', { count: c.lines })) + '</span>'
+                        : '');
+            var content = c.content && c.content.length
+                ? '<span class="lh-row-content">' + esc(c.content[0]) +
+                    (c.content.length > 1 ? ' …' : '') + '</span>'
+                : '';
             html.push(
-                '<button class="lh-row' + (c.hash === state.selected ? ' sel' : '') + '" type="button" data-hash="' + esc(c.hash) + '">' +
+                '<button class="lh-row' + (c.dirty ? ' lh-row-dirty' : '') +
+                    (c.hash === state.selected ? ' sel' : '') + '" type="button" data-hash="' + esc(c.hash) + '">' +
                     '<span class="lh-row-top">' +
-                        '<span class="lh-summary">' + esc(c.summary || T('lineHistory.noSummary')) + '</span>' +
+                        '<span class="lh-summary">' +
+                            (c.dirty ? '<span class="lh-dirty-dot"></span>' : '') +
+                            esc(c.dirty ? T('lineHistory.uncommitted') : (c.summary || T('lineHistory.noSummary'))) +
+                        '</span>' +
                     '</span>' +
-                    '<span class="lh-row-bottom">' +
-                        '<span class="lh-hash">' + esc(c.hash.substring(0, 8)) + '</span>' +
-                        '<span class="lh-author">' + esc(c.author) + '</span>' +
-                        '<span class="lh-time">' + esc(fmtTime(c.authorTime)) + '</span>' +
-                        '<span class="lh-lines">' + esc(T('lineHistory.linesCount', { count: c.lines })) + '</span>' +
-                    '</span>' +
+                    '<span class="lh-row-bottom">' + meta + '</span>' +
+                    content +
                 '</button>'
             );
         }
@@ -187,14 +218,19 @@
     function diffHeaderText() {
         var c = currentCommit();
         if (!c) { return ''; }
+        if (c.dirty) { return T('lineHistory.uncommitted') + '  ·  ' + T('lineHistory.vsHead'); }
         return c.hash.substring(0, 8) + '  ' + (c.summary || T('lineHistory.noSummary'));
     }
 
     function renderDiff() {
-        var hasCommit = !!currentCommit();
+        var commit = currentCommit();
+        var hasCommit = !!commit;
+        /* Uncommitted work is in no commit, so there is nothing to open or
+         * compare natively — only the working-tree diff git can produce. */
+        var isCommit = hasCommit && !commit.dirty;
         diffTitleEl.textContent = hasCommit ? diffHeaderText() : '';
-        revealBtn.style.display = hasCommit ? '' : 'none';
-        nativeBtn.style.display = hasCommit ? '' : 'none';
+        revealBtn.style.display = isCommit ? '' : 'none';
+        nativeBtn.style.display = isCommit ? '' : 'none';
         scopeBtn.style.display = hasCommit ? '' : 'none';
         renderScope();
         diffBodyEl.innerHTML = hasCommit ? diffBodyHtml(state.diff) : '';
@@ -325,6 +361,7 @@
             state.skipped = message.skipped || 0;
             state.scanned = message.scanned || 0;
             state.error = message.error;
+            state.chain = false;
             state.shown = Math.min(Math.max(PAGE, state.shown), Math.max(PAGE, state.commits.length));
 
             var stillThere = null;
@@ -343,6 +380,27 @@
                 state.selected = null;
                 renderDiff();
             }
+            return;
+        }
+
+        if (message.command === 'lh.chain') {
+            /* Same rows, plus the rewrites blame cannot see. Selection and page
+             * size survive: the diff below is already about a commit that is
+             * still in the list. */
+            var keepSelected = state.selected;
+            state.chain = true;
+            state.commits = message.commits || [];
+            state.shown = Math.min(Math.max(PAGE, state.shown), Math.max(PAGE, state.commits.length));
+            var present = false;
+            for (var j = 0; j < state.commits.length; j++) {
+                if (state.commits[j].hash === keepSelected) { present = true; break; }
+            }
+            if (!present) {
+                state.selected = state.commits.length > 0 ? state.commits[0].hash : null;
+            }
+            renderHead();
+            renderList();
+            if (!present && state.selected) { selectCommit(state.selected); }
             return;
         }
 

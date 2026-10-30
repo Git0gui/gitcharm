@@ -118,6 +118,45 @@ body {
     outline-offset: -1px;
 }
 
+/* What the line said at that revision: the difference between a list of
+ * committers and a history of the line. */
+.lh-row-content {
+    display: block;
+    margin-top: 2px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11.5px;
+    line-height: 1.35;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lh-row.sel .lh-row-content {
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+    opacity: 0.88;
+}
+
+/* Uncommitted work: pinned on top, and the one row whose colour says "not a
+ * commit yet". */
+.lh-row-dirty {
+    border-left-color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+}
+
+.lh-row-dirty .lh-row-content {
+    color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+}
+
+.lh-dirty-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+    margin-right: 6px;
+    vertical-align: 1px;
+}
+
 .lh-row-top {
     display: flex;
     align-items: baseline;

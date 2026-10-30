@@ -16,6 +16,12 @@ export const LINE_HISTORY_PAGE = 10;
 /** Rendering more than this is neither readable nor fast; the rest is a note. */
 export const MAX_DIFF_ROWS = 2000;
 
+/** How far back the `-L` walk goes; the rest is another "load more" away. */
+export const LINE_LOG_LIMIT = 60;
+
+/** Pseudo-commit pinned on top for lines git has never seen. */
+export const WORKTREE_COMMIT = 'worktree';
+
 export interface BlameLineInfo {
     hash: string;
     author: string;
@@ -101,6 +107,10 @@ export interface LineHistoryCommit {
     lines: number;
     /** Those same lines numbered in this commit's version (diff filtering). */
     origLines: number[];
+    /** What this revision wrote to the lines, shown as a one-line preview. */
+    content?: string[];
+    /** The synthetic entry for uncommitted work (no hash to blame). */
+    dirty?: boolean;
 }
 
 export interface LineHistorySelection {
@@ -161,6 +171,178 @@ export function commitsForLines(
     return { commits, skipped, scanned };
 }
 
+/**
+ * The synthetic list entry for uncommitted work.
+ *
+ * It is not a commit and must never be diffed like one, but the list needs a row
+ * that carries the buffer's own text — the same "the line looks like this now"
+ * preview every other row has.
+ */
+export function worktreeEntry(
+    file: string,
+    lines: number,
+    content: readonly string[]
+): LineHistoryCommit {
+    return {
+        hash: WORKTREE_COMMIT,
+        author: '',
+        authorTime: 0,
+        committerTime: 0,
+        summary: '',
+        path: file,
+        lines,
+        origLines: [],
+        content: [...content],
+        dirty: true
+    };
+}
+
+/** One revision of the tracked lines, as `git log -L` reports it. */
+export interface LineLogRevision {
+    hash: string;
+    author: string;
+    authorTime: number;
+    committerTime: number;
+    summary: string;
+    /** The name the file had at that revision; a rename changes it again. */
+    path: string;
+    /** The lines this revision wrote (the patch's added side). */
+    content: string[];
+    /** Those lines numbered in this revision's file (diff filtering). */
+    lines: number[];
+}
+
+const RECORD_SEPARATOR = '\x1e';
+const FIELD_SEPARATOR = '\x00';
+const HASH_LINE = /^[0-9a-f]{40}$/;
+
+/**
+ * Parse `git log -L` output into the revisions of the tracked lines.
+ *
+ * Each record is one commit: a `\x1e`-prefixed header line with NUL-separated
+ * fields, then that commit's patch. The patch is the only place the tracked
+ * lines' content and its position in that revision exist — the hunk header's
+ * new-side start plus the added lines give exactly that, which is the same
+ * numbering `diff base..commit` uses when the user opens the revision later.
+ */
+export function parseLineLog(output: string): LineLogRevision[] {
+    const revisions: LineLogRevision[] = [];
+
+    for (const record of output.split(RECORD_SEPARATOR)) {
+        const eol = record.indexOf('\n');
+        if (eol < 0) {continue;}
+        const fields = record.slice(0, eol).split(FIELD_SEPARATOR);
+        if (fields.length < 5) {continue;}
+        const [hash, author, authored, committed, summary] = fields;
+        if (!HASH_LINE.test(hash)) {continue;}
+
+        const content: string[] = [];
+        const lines: number[] = [];
+        let path = '';
+        let newLine = 0;
+        for (const line of record.slice(eol + 1).split('\n')) {
+            if (line.startsWith('+++ ')) {
+                const name = line.slice(4);
+                path = name.startsWith('b/') ? name.slice(2) : name;
+                continue;
+            }
+            const hunk = HUNK_HEADER.exec(line);
+            if (hunk) {
+                newLine = parseInt(hunk[3], 10);
+                continue;
+            }
+            if (line.startsWith('+')) {
+                content.push(line.slice(1));
+                lines.push(newLine);
+                newLine++;
+            } else if (line.startsWith(' ')) {
+                newLine++;
+            }
+        }
+
+        revisions.push({
+            hash,
+            author,
+            authorTime: parseInt(authored, 10) || 0,
+            committerTime: parseInt(committed, 10) || 0,
+            summary,
+            path,
+            content,
+            lines
+        });
+    }
+    return revisions;
+}
+
+/**
+ * The `-L` walk for a blamed commit.
+ *
+ * `-L` takes its range in the starting revision's numbering — which is what
+ * blame's original-side numbers already are — and its file name inline, since
+ * git accepts no pathspec next to `-L`. The name has to be the one that existed
+ * at that revision, or the walk starts on a file git cannot find.
+ */
+export function buildLineLogArgs(
+    commit: Pick<LineHistoryCommit, 'hash' | 'path' | 'origLines'>,
+    limit: number = LINE_LOG_LIMIT
+): string[] {
+    const from = Math.min(...commit.origLines);
+    const to = Math.max(...commit.origLines);
+    return [
+        'log',
+        '--format=%x1e%H%x00%an%x00%at%x00%ct%x00%s',
+        '--no-merges',
+        '-n', String(limit),
+        '-L', `${from},${to}:${commit.path}`,
+        commit.hash
+    ];
+}
+
+/**
+ * Fold the chain into the blame list.
+ *
+ * Blame answers "whose commit are these lines today"; the chain answers "how did
+ * they get here", so it also holds revisions blame can no longer see (the line
+ * was rewritten again later). Where both know a commit the blame entry wins: it
+ * carries the line count and the original-side provenance the diff filter needs.
+ * The worktree entry stays pinned on top — it is the present, not history.
+ */
+export function mergeChain(
+    commits: readonly LineHistoryCommit[],
+    revisions: readonly LineLogRevision[]
+): LineHistoryCommit[] {
+    const dirty = commits.filter(c => c.dirty);
+    const blamed = new Map<string, LineHistoryCommit>();
+    for (const commit of commits) {
+        if (!commit.dirty) {blamed.set(commit.hash, commit);}
+    }
+
+    const merged: LineHistoryCommit[] = [];
+    for (const revision of revisions) {
+        const known = blamed.get(revision.hash);
+        merged.push({
+            hash: revision.hash,
+            author: revision.author || known?.author || '',
+            authorTime: revision.authorTime || known?.authorTime || 0,
+            committerTime: revision.committerTime || known?.committerTime || 0,
+            summary: revision.summary || known?.summary || '',
+            path: revision.path || known?.path || '',
+            lines: known ? known.lines : 0,
+            origLines: known ? known.origLines : revision.lines,
+            content: revision.content
+        });
+        blamed.delete(revision.hash);
+    }
+    // A commit blame knows but `-L` skipped (merge simplification does this):
+    // keep it rather than silently shrinking the list the user just saw.
+    for (const commit of blamed.values()) {merged.push(commit);}
+
+    merged.sort((a, b) =>
+        b.committerTime - a.committerTime || (a.hash < b.hash ? -1 : 1)
+    );
+    return [...dirty, ...merged];
+}
+
 export type DiffRowType = 'hunk' | 'ctx' | 'add' | 'del';
 
 export interface DiffRow {
@@ -208,6 +390,11 @@ const GAP_TEXT = '⋯';
  * line that has not changed since then would otherwise still paint thousands of
  * rows. A `⋯` bar keeps the coordinates honest: the numbers on the next row
  * jump, and the reader can see why.
+ *
+ * A single change sits inside git's own three lines of context, so the ±3 window
+ * cuts off exactly that padding — nothing is lost, and a `⋯` there reads like
+ * the panel hid something. Padding-only stretches at the edges of the hunk are
+ * therefore dropped silently; anything else still gets the bar.
  */
 function trimToHits(body: DiffRow[]): DiffRow[] {
     const inside = body.map(() => false);
@@ -222,16 +409,26 @@ function trimToHits(body: DiffRow[]): DiffRow[] {
         if (inside[i]) {last = i; break;}
     }
 
-    const rows: DiffRow[] = [];
-    let gap = false;
-    for (let i = 0; i <= last; i++) {
-        if (inside[i]) {
-            rows.push(body[i]);
-            gap = false;
-        } else if (!gap) {
-            rows.push({ type: 'hunk', text: GAP_TEXT });
-            gap = true;
+    const padding = (from: number, to: number): boolean => {
+        if (from !== 0 && to !== body.length - 1) { return false; }
+        for (let i = from; i <= to; i++) {
+            if (body[i].type !== 'ctx') { return false; }
         }
+        return true;
+    };
+
+    const rows: DiffRow[] = [];
+    let gapFrom = -1;
+    for (let i = 0; i <= last; i++) {
+        if (!inside[i]) {
+            if (gapFrom < 0) {gapFrom = i;}
+            continue;
+        }
+        if (gapFrom >= 0 && !padding(gapFrom, i - 1)) {
+            rows.push({ type: 'hunk', text: GAP_TEXT });
+        }
+        gapFrom = -1;
+        rows.push(body[i]);
     }
     return rows;
 }
@@ -355,4 +552,45 @@ export function parseUnifiedDiff(
     flush();
 
     return { rows, truncated, binary: /^Binary files .* differ$/m.test(patch) };
+}
+
+/**
+ * Where buffer lines came from in HEAD's copy of the file.
+ *
+ * An edited line has no commit of its own — blame reports it as `0000…` — so the
+ * chain has to start at the line it replaced. The HEAD..worktree patch is the
+ * only mapping the panel can trust: it pairs a block of deletions with the block
+ * of additions that replaced them. The n-th addition of a block answers to the
+ * n-th deletion (clamped to the block's last line when the blocks differ in
+ * size), and an inserted line has no deletion at all — it inherits no history.
+ */
+export function mapToHeadLines(rows: readonly DiffRow[], lines: readonly number[]): number[] {
+    const wanted = new Set(lines);
+    const mapped = new Set<number>();
+
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.type !== 'add' || row.newLine === undefined || !wanted.has(row.newLine)) {continue;}
+
+        // git always prints a block's deletions before its additions, so walking
+        // back over both kinds reaches the block's first row.
+        let start = i;
+        while (start > 0 && (rows[start - 1].type === 'add' || rows[start - 1].type === 'del')) {start--;}
+
+        let firstOld = -1;
+        let lastOld = -1;
+        let rank = 0;
+        for (let k = start; k <= i; k++) {
+            const candidate = rows[k];
+            if (candidate.type === 'del' && candidate.oldLine !== undefined) {
+                if (firstOld < 0) {firstOld = candidate.oldLine;}
+                lastOld = candidate.oldLine;
+            } else if (candidate.type === 'add') {
+                rank++;
+            }
+        }
+        if (firstOld < 0) {continue;}
+        mapped.add(Math.min(firstOld + rank - 1, lastOld));
+    }
+    return [...mapped].sort((a, b) => a - b);
 }

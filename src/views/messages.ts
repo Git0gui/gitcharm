@@ -302,6 +302,15 @@ export type LineHistoryExtMessage =
         error?: string;
     }
     | {
+        /**
+         * The `-L` chain landed after the blame list: the same rows enriched
+         * with older rewrites and each revision's content. Sent as its own
+         * message so the first paint never waits for the walk.
+         */
+        command: 'lh.chain';
+        commits: LineHistoryCommit[];
+    }
+    | {
         command: 'lh.diff';
         hash: string;
         requestId: number;

@@ -9,6 +9,12 @@ import {
     commitsForLines,
     parseBlamePorcelain,
     parseUnifiedDiff,
+    mapToHeadLines,
+    parseLineLog,
+    mergeChain,
+    worktreeEntry,
+    buildLineLogArgs,
+    WORKTREE_COMMIT,
     MAX_DIFF_ROWS,
     LineHistoryCommit,
     ParsedPatch
@@ -136,7 +142,9 @@ export class LineHistoryPanel {
                 await this._openNativeDiff(message.hash);
                 return;
             case 'revealCommit':
-                this._onRevealCommit(message.hash, this._target.file);
+                if (message.hash !== WORKTREE_COMMIT) {
+                    this._onRevealCommit(message.hash, this._target.file);
+                }
                 return;
             case 'refresh':
                 this._diffCache.clear();
@@ -175,6 +183,7 @@ export class LineHistoryPanel {
         const startLine = Math.max(0, Math.min(this._target.startLine, lineCount - 1));
         const endLine = Math.max(startLine, Math.min(this._target.endLine, lineCount - 1));
         this._range = { startLine, endLine };
+        let blamed: LineHistoryCommit[] = [];
 
         try {
             const output = await this._blame(startLine, endLine);
@@ -184,7 +193,17 @@ export class LineHistoryPanel {
                 startLine,
                 endLine
             );
-            this._commits = selection.commits;
+            this._commits = selection.skipped > 0
+                ? [
+                    worktreeEntry(
+                        this._target.file,
+                        selection.skipped,
+                        this._target.text.split('\n').slice(startLine, endLine + 1)
+                    ),
+                    ...selection.commits
+                ]
+                : selection.commits;
+            blamed = selection.commits;
             this._skipped = selection.skipped;
             this._scanned = selection.scanned;
             this._error = undefined;
@@ -197,6 +216,73 @@ export class LineHistoryPanel {
             this._error = LineHistoryPanel._isNoHistory(error) ? undefined : formatGitError(error);
         }
         this._post(this._dataMessage());
+        void this._loadChain(blamed, ticket);
+    }
+
+    /**
+     * Extend the list past what blame can see.
+     *
+     * Blame names the commit that owns the lines today; `-L` walks the same
+     * lines backwards and finds the rewrites before it — plus what each revision
+     * actually said. One `-L` range needs one start revision and one numbering,
+     * so this only runs when blame mapped the selection to a single commit;
+     * otherwise the blame list is already the whole answer.
+     *
+     * All-uncommitted lines are the interesting exception: blame has no commit to
+     * name, yet the user still wants the history of the line they just edited, so
+     * the walk starts at HEAD on the lines the edit replaced.
+     *
+     * It is an enrichment, not a prerequisite: the first paint never waits for
+     * it, and a failure leaves the list exactly as blame delivered it.
+     */
+    private async _loadChain(blamed: readonly LineHistoryCommit[], ticket: number): Promise<void> {
+        let anchor: Pick<LineHistoryCommit, 'hash' | 'path' | 'origLines'> | undefined;
+        if (blamed.length === 1 && blamed[0].path && blamed[0].origLines.length > 0) {
+            anchor = blamed[0];
+        } else if (blamed.length === 0 && this._skipped > 0) {
+            anchor = {
+                hash: 'HEAD',
+                path: this._target.file,
+                origLines: await this._headLines(ticket)
+            };
+            if (ticket !== this._ticket || this._disposed || anchor.origLines.length === 0) {return;}
+        } else {
+            return;
+        }
+
+        try {
+            const output = await this._git.executeGitArgs(buildLineLogArgs(anchor), { timeoutMs: 30000 });
+            if (ticket !== this._ticket || this._disposed) {return;}
+            const revisions = parseLineLog(output);
+            if (revisions.length === 0) {return;}
+            this._commits = mergeChain(this._commits, revisions);
+            this._post({ command: 'lh.chain', commits: this._commits });
+        } catch (error) {
+            logger.debug('[GitCharm] Line history chain failed:', error);
+        }
+    }
+
+    /**
+     * The HEAD-side counterparts of the selected buffer lines.
+     *
+     * Only meaningful for uncommitted lines: the buffer's numbering is today's,
+     * and an edit moves everything below it. A `-U0` diff keeps one hunk per
+     * changed block, which is exactly the pairing `mapToHeadLines` needs.
+     */
+    private async _headLines(ticket: number): Promise<number[]> {
+        const lines: number[] = [];
+        for (let n = this._range.startLine + 1; n <= this._range.endLine + 1; n++) {lines.push(n);}
+        try {
+            const patch = await this._git.executeGitArgs(
+                ['diff', '--no-ext-diff', '--no-color', '--unified=0', 'HEAD', '--', this._target.file],
+                { timeoutMs: 30000 }
+            );
+            if (ticket !== this._ticket || this._disposed) {return [];}
+            return mapToHeadLines(parseUnifiedDiff(patch).rows, lines);
+        } catch (error) {
+            logger.debug('[GitCharm] Line history worktree mapping failed:', error);
+            return [];
+        }
     }
 
     private _dataMessage(): LineHistoryExtMessage {
@@ -249,6 +335,10 @@ export class LineHistoryPanel {
     }
 
     private async _postDiff(hash: string, requestId: number, full: boolean): Promise<void> {
+        if (hash === WORKTREE_COMMIT) {
+            await this._postWorktreeDiff(requestId, full);
+            return;
+        }
         const commit = this._commit(hash);
         if (!commit) {return;}
         const key = this._diffKey(commit, full);
@@ -270,6 +360,39 @@ export class LineHistoryPanel {
             this._post({
                 command: 'lh.diff',
                 hash,
+                requestId,
+                full,
+                rows: [],
+                truncated: false,
+                binary: false,
+                error: formatGitError(error)
+            });
+        }
+    }
+
+    /**
+     * Uncommitted work has no commit to diff against, so HEAD is the only
+     * meaningful left side. git reads the file from disk here — it cannot read
+     * the editor buffer — so a still-unsaved edit shows up only after a save.
+     * No cache: HEAD moves under us, and one spawn per click is what an
+     * uncached commit patch costs too.
+     */
+    private async _postWorktreeDiff(requestId: number, full: boolean): Promise<void> {
+        try {
+            const patch = await this._git.executeGitArgs([
+                'diff', '--no-ext-diff', '--no-color', '--unified=3', 'HEAD', '--', this._target.file
+            ]);
+            const lines: number[] = [];
+            for (let n = this._range.startLine + 1; n <= this._range.endLine + 1; n++) {
+                lines.push(n);
+            }
+            const diff = parseUnifiedDiff(patch, MAX_DIFF_ROWS, { lines, restrict: !full });
+            this._post({ command: 'lh.diff', hash: WORKTREE_COMMIT, requestId, full, ...diff });
+        } catch (error) {
+            logger.debug('[GitCharm] Worktree diff failed:', error);
+            this._post({
+                command: 'lh.diff',
+                hash: WORKTREE_COMMIT,
                 requestId,
                 full,
                 rows: [],
@@ -327,7 +450,7 @@ export class LineHistoryPanel {
 
     private async _openNativeDiff(hash: string): Promise<void> {
         const commit = this._commit(hash);
-        if (!commit) {return;}
+        if (!commit || commit.dirty) {return;}
         try {
             const base = await this._git.getDiffBase(commit.hash);
             const short = commit.hash.substring(0, 7);

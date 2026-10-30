@@ -4,7 +4,14 @@ import {
     parseBlamePorcelain,
     commitsForLines,
     parseUnifiedDiff,
-    MAX_DIFF_ROWS
+    mapToHeadLines,
+    parseLineLog,
+    mergeChain,
+    buildLineLogArgs,
+    worktreeEntry,
+    WORKTREE_COMMIT,
+    MAX_DIFF_ROWS,
+    LineHistoryCommit
 } from '../services/lineHistory';
 
 const A = 'a'.repeat(40);
@@ -246,5 +253,200 @@ describe('parseUnifiedDiff', () => {
 
         assert.deepEqual(rows.map(r => r.text), ['@@ -0,0 +1,30 @@', '⋯', 'l13', 'l14', 'l15', 'l16', 'l17', 'l18', 'l19']);
         assert.equal(rows.filter(r => r.hit).length, 1);
+    });
+
+    it('does not mark a gap when the trim only cuts git\'s own context', () => {
+        // One change plus three context lines anyway: the ±3 window reaches the
+        // edge of what git printed, so a `⋯` would claim something is missing.
+        const patch = [
+            '@@ -2,8 +2,8 @@',
+            ' c2',
+            ' c3',
+            ' c4',
+            '-v5',
+            '+V5',
+            ' c6',
+            ' c7',
+            ' c8'
+        ].join('\n');
+
+        const rows = parseUnifiedDiff(patch, MAX_DIFF_ROWS, { lines: [5], restrict: true }).rows;
+        assert.deepEqual(rows.map(r => r.text), ['@@ -2,8 +2,8 @@', 'c3', 'c4', 'v5', 'V5', 'c6', 'c7', 'c8']);
+    });
+});
+
+/* An uncommitted line has no commit of its own, so its chain has to start at the
+ * line it replaced — which only the HEAD..worktree patch can name. */
+describe('mapToHeadLines', () => {
+    it('pairs an edited line with the line it replaced', () => {
+        const patch = ['@@ -5,1 +5,1 @@', '-five', '+FIVE'].join('\n');
+        const rows = parseUnifiedDiff(patch).rows;
+        assert.deepEqual(mapToHeadLines(rows, [5]), [5]);
+    });
+
+    it('maps through a block whose size changed, clamping to its last line', () => {
+        const patch = ['@@ -4,2 +4,3 @@', '-four', '-five', '+FOUR', '+FIVE', '+five and a half'].join('\n');
+        const rows = parseUnifiedDiff(patch).rows;
+        assert.deepEqual(mapToHeadLines(rows, [5]), [5]);
+        assert.deepEqual(mapToHeadLines(rows, [4, 5, 6]), [4, 5]);
+    });
+
+    it('gives an inserted line no ancestor', () => {
+        const patch = ['@@ -4,0 +5,1 @@', '+brand new'].join('\n');
+        const rows = parseUnifiedDiff(patch).rows;
+        assert.deepEqual(mapToHeadLines(rows, [5]), []);
+    });
+
+    it('keeps blocks apart: a hit only answers to its own hunk', () => {
+        const patch = [
+            '@@ -2,1 +2,1 @@',
+            '-two',
+            '+TWO',
+            '@@ -9,1 +9,1 @@',
+            '-nine',
+            '+NINE'
+        ].join('\n');
+        const rows = parseUnifiedDiff(patch).rows;
+        assert.deepEqual(mapToHeadLines(rows, [9]), [9]);
+    });
+});
+
+/* `git log -L` records start with \x1e, carry NUL-separated fields, then the
+ * commit's patch — the patch is where the tracked lines' content lives. */
+function record(
+    hash: string,
+    author: string,
+    authored: number,
+    committed: number,
+    summary: string,
+    patch: string[]
+): string {
+    return ['\x1e' + [hash, author, authored, committed, summary].join('\0'), ...patch].join('\n');
+}
+
+describe('parseLineLog', () => {
+    it('reads each record into a revision with its content and position', () => {
+        const out = [
+            record(A, 'Alice', 100, 200, 'bump', [
+                'diff --git a/package.json b/package.json',
+                '--- a/package.json',
+                '+++ b/package.json',
+                '@@ -5,1 +5,1 @@',
+                '-  "version": "0.1.6",',
+                '+  "version": "0.1.7",'
+            ]),
+            record(B, 'Bob', 300, 400, 'initial', [
+                'diff --git a/package.json b/package.json',
+                '--- /dev/null',
+                '+++ b/package.json',
+                '@@ -0,0 +1,1 @@',
+                '+  "version": "0.1.0",'
+            ])
+        ].join('');
+
+        const revisions = parseLineLog(out);
+        assert.equal(revisions.length, 2);
+        assert.deepEqual(revisions[0], {
+            hash: A,
+            author: 'Alice',
+            authorTime: 100,
+            committerTime: 200,
+            summary: 'bump',
+            path: 'package.json',
+            content: ['  "version": "0.1.7",'],
+            lines: [5]
+        });
+        assert.deepEqual(revisions[1].lines, [1]);
+    });
+
+    it('numbers added lines past the context lines that survive them', () => {
+        const revision = parseLineLog(record(A, 'Alice', 1, 2, 'edit', [
+            'diff --git a/a.ts b/a.ts',
+            '+++ b/a.ts',
+            '@@ -10,2 +10,3 @@',
+            ' ctx',
+            '+new one',
+            '+new two',
+            '-gone'
+        ]))[0];
+
+        assert.deepEqual(revision.content, ['new one', 'new two']);
+        assert.deepEqual(revision.lines, [11, 12]);
+    });
+
+    it('keeps the name the file had at that revision', () => {
+        const revision = parseLineLog(record(A, 'Alice', 1, 2, 'rename', [
+            'diff --git a/src/old.ts b/src/new.ts',
+            'similarity index 90%',
+            'rename from src/old.ts',
+            'rename to src/new.ts',
+            '--- a/src/old.ts',
+            '+++ b/src/new.ts',
+            '@@ -3,1 +3,1 @@',
+            '-a',
+            '+b'
+        ]))[0];
+
+        assert.equal(revision.path, 'src/new.ts');
+    });
+
+    it('returns nothing for empty output or text that is not a record', () => {
+        assert.deepEqual(parseLineLog(''), []);
+        assert.deepEqual(parseLineLog('fatal: no such path\n'), []);
+    });
+});
+
+describe('buildLineLogArgs', () => {
+    it('spans the blamed lines in the blamed commit and ends at that revision', () => {
+        const commit: LineHistoryCommit = {
+            hash: A, author: '', authorTime: 0, committerTime: 0, summary: '',
+            path: 'src/app.ts', lines: 2, origLines: [9, 7]
+        };
+        const args = buildLineLogArgs(commit, 5);
+
+        assert.deepEqual(args.slice(-3), ['-L', '7,9:src/app.ts', A]);
+        assert.deepEqual(args.slice(0, 2), ['log', '--format=%x1e%H%x00%an%x00%at%x00%ct%x00%s']);
+        assert.deepEqual(args.slice(2, 5), ['--no-merges', '-n', '5']);
+    });
+});
+
+describe('mergeChain', () => {
+    const blamed: LineHistoryCommit[] = [
+        {
+            hash: A, author: 'Alice', authorTime: 100, committerTime: 300,
+            summary: 'a', path: 'src/app.ts', lines: 2, origLines: [3, 4]
+        },
+        {
+            hash: B, author: 'Bob', authorTime: 90, committerTime: 200,
+            summary: 'b', path: 'src/app.ts', lines: 1, origLines: [9]
+        }
+    ];
+
+    it('adds revisions blame cannot see and keeps the blamed metadata', () => {
+        const merged = mergeChain(blamed, [
+            {
+                hash: A, author: 'Alice', authorTime: 100, committerTime: 300,
+                summary: 'a', path: 'src/app.ts', content: ['x'], lines: [3]
+            },
+            {
+                hash: C, author: 'Carol', authorTime: 50, committerTime: 100,
+                summary: 'older rewrite', path: 'src/app.ts', content: ['y'], lines: [2]
+            }
+        ]);
+
+        assert.deepEqual(merged.map(c => c.hash), [A, B, C]);
+        assert.equal(merged[0].lines, 2);
+        assert.deepEqual(merged[0].origLines, [3, 4]);
+        assert.deepEqual(merged[0].content, ['x']);
+        assert.equal(merged[2].lines, 0);
+        assert.deepEqual(merged[2].origLines, [2]);
+        assert.deepEqual(merged[2].content, ['y']);
+    });
+
+    it('keeps the worktree entry pinned above history', () => {
+        const merged = mergeChain([worktreeEntry('src/app.ts', 1, ['now']), ...blamed], []);
+        assert.equal(merged[0].hash, WORKTREE_COMMIT);
+        assert.equal(merged[0].dirty, true);
+        assert.deepEqual(merged.map(c => c.hash).slice(1), [A, B]);
     });
 });
