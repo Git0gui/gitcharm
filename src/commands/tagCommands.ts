@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import { GitService, tagNameProblem } from '../services/gitService';
-import { formatGitError } from '../services/gitUtils';
+import { formatGitError, redactUrlCredentials } from '../services/gitUtils';
+import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
+import { combineErrorText } from './helpers';
 import { t } from '../i18n';
 
 /**
@@ -16,14 +18,44 @@ export function registerTagCommands(
     graphView: GraphViewProvider
 ): void {
     /**
-     * Which tags the caller means: the ones on the commit it clicked, or — with
-     * no commit in play — every tag in the repository. The webview only ever
-     * sends a hash, so name resolution stays on this side.
+     * Which tags the caller means: one badge right-clicked in the commit list
+     * (`{ tag }`), the tags on the commit it clicked, or — with no commit in
+     * play — every tag in the repository. The webview only ever sends a hash or
+     * a tag name, so resolution stays on this side.
      */
     const resolveTagNames = (node: any): string[] => {
+        if (typeof node?.tag === 'string' && node.tag) {return [node.tag];}
         const hash = node?.hash ?? node?.commit?.hash;
         if (hash) {return gitService.getTagsAt(hash);}
         return gitService.listTags().map(tag => tag.name);
+    };
+
+    /** Network failures stay short here; the full git output is in the log. */
+    const showNetworkError = (message: string): void => {
+        void vscode.window.showErrorMessage(message, t('log.showEntry')).then(choice => {
+            if (choice) {void vscode.commands.executeCommand('idea-git.showLog');}
+        });
+    };
+
+    const runPush = async (
+        title: string,
+        push: () => Promise<unknown>,
+        successMessage: string,
+        failureMessage: (error: string) => string
+    ): Promise<void> => {
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title,
+            cancellable: false
+        }, async () => {
+            try {
+                await push();
+                vscode.window.showInformationMessage(successMessage);
+            } catch (error) {
+                logger.error(`[GitCharm] tag push failed: ${redactUrlCredentials(combineErrorText(error))}`);
+                showNetworkError(failureMessage(formatGitError(error)));
+            }
+        });
     };
 
     const pickTags = async (names: string[], placeHolderKey: string): Promise<string[] | undefined> => {
@@ -140,31 +172,44 @@ export function registerTagCommands(
             const names = await pickTags(candidates, 'tag.pickPushPlaceHolder');
             if (!names || names.length === 0) {return;}
 
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: names.length === 1
+            await runPush(
+                names.length === 1
                     ? t('tag.pushing', { name: names[0] })
                     : t('tag.pushingMultiple', { count: names.length }),
-                cancellable: false
-            }, async () => {
-                try {
+                async () => {
                     for (const name of names) {
                         await gitService.pushTag(name);
                     }
-                    // Nothing about the local repository changed, so the panel must
-                    // not reload — the tags already have badges.
-                    vscode.window.showInformationMessage(
-                        names.length === 1
-                            ? t('tag.pushed', { name: names[0] })
-                            : t('tag.pushedMultiple', { count: names.length })
-                    );
-                } catch (error) {
-                    vscode.window.showErrorMessage(t('tag.pushFailed', {
-                        names: names.join(', '),
-                        error: formatGitError(error)
-                    }));
-                }
-            });
+                },
+                names.length === 1
+                    ? t('tag.pushed', { name: names[0] })
+                    : t('tag.pushedMultiple', { count: names.length }),
+                error => t('tag.pushFailed', { names: names.join(', '), error })
+            );
+            // Nothing about the local repository changed, so the panel must
+            // not reload — the tags already have badges.
+        }),
+
+        vscode.commands.registerCommand('idea-git.pushAllTags', async () => {
+            const names = gitService.listTags().map(tag => tag.name);
+            if (names.length === 0) {
+                vscode.window.showInformationMessage(t('tag.none'));
+                return;
+            }
+
+            const confirm = await graphView.showDialog(
+                t('tag.pushAllConfirm', { count: names.length }),
+                [t('tag.pushAllBtn'), t('common.cancel')],
+                'info'
+            );
+            if (confirm !== t('tag.pushAllBtn')) {return;}
+
+            await runPush(
+                t('tag.pushingAll', { count: names.length }),
+                () => gitService.pushAllTags(),
+                t('tag.pushedAll', { count: names.length }),
+                error => t('tag.pushAllFailed', { error })
+            );
         })
     );
 }

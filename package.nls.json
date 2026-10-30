@@ -37,6 +37,7 @@
     "cmd.createTag": "Create Tag on Commit (Lightweight or Annotated)",
     "cmd.deleteTag": "Delete Local Tag",
     "cmd.pushTag": "Push Tag to Remote",
+    "cmd.pushAllTags": "Push All Tags to Remote",
     "cmd.stashSave": "Stash Current Changes",
     "cmd.stashApply": "Apply Stash (keep entry)",
     "cmd.stashPop": "Pop Stash (remove entry)",

@@ -213,7 +213,7 @@ export type WebviewAction =
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
     | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
-    | 'newTag' | 'deleteTag' | 'pushTag'
+    | 'newTag' | 'deleteTag' | 'pushTag' | 'pushAllTags' | 'pickPushTags'
     | 'toggleFavorite'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
     | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove'
@@ -256,6 +256,8 @@ export type WebviewToExtMessage =
         hash?: string;
         hashes?: string[];
         path?: string;
+        /** Single tag a badge right-click asked about (`pushTag` / `deleteTag`). */
+        tag?: string;
         remainingHashes?: string[];
         /** Stash stack position (`stash@{n}`), for the stash tree section's actions. */
         stash?: number;

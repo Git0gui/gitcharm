@@ -216,6 +216,11 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.pushAllTags",
+        "title": "%cmd.pushAllTags%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.stashSave",
         "title": "%cmd.stashSave%",
         "category": "GitCharm"

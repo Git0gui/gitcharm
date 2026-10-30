@@ -52,6 +52,7 @@ import {
     gitFailureHost,
     pickFetchRemote,
     remoteNameFromUpstream,
+    refsTagsFirst,
     matchRemoteBranch,
     resolvePushTarget,
     collectRepositoryRoots,
@@ -2733,14 +2734,15 @@ export class GitService {
                 isMerge: parsed.parents.length > 1
             };
             
-            // Apply refs to this commit
+            // Apply refs to this commit. Tags are ordered in front of branch
+            // chips here, once, so every render path sees the same order.
             const refs = hashToRefs.get(parsed.hash);
-            if (refs && refs.length > 0) {
-                commit.refs = refs;
-            }
             const tags = hashToTags.get(parsed.hash);
             if (tags && tags.length > 0) {
                 commit.tags = tags;
+            }
+            if (refs && refs.length > 0) {
+                commit.refs = refsTagsFirst(refs, tags ?? []);
             }
             
             this._commitIndex.set(hash, commit);
@@ -2824,11 +2826,34 @@ export class GitService {
      * Push one tag to a remote. The explicit `refs/tags/…` form is what git
      * needs to push a tag rather than something that happens to share the name.
      */
-    async pushTag(name: string, remote = 'origin'): Promise<string> {
+    async pushTag(name: string, remote?: string): Promise<string> {
         assertRef(name, t('label.tag'));
-        assertRef(remote, t('label.remote'));
-        const output = await this._execNetwork(['push', remote, `refs/tags/${name}`]);
-        return output || t('tag.pushed', { name, remote });
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        const output = await this._execNetwork(['push', target, `refs/tags/${name}`]);
+        return output || t('tag.pushed', { name, remote: target });
+    }
+
+    /**
+     * Push every local tag in one command (`--tags`). Same remote choice as
+     * pushTag: a tag marks a spot on some branch line, so that branch's remote
+     * wins; a repository with a single remote has nothing to choose.
+     */
+    async pushAllTags(remote?: string): Promise<string> {
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        return this._execNetwork(['push', target, '--tags']);
+    }
+
+    /** Remote a tag goes to when the caller did not name one. */
+    private async _defaultRemoteForPush(): Promise<string> {
+        const names = this.getRemoteNames();
+        if (names.length === 0) {return 'origin';}
+        if (names.length === 1) {return names[0];}
+        const upstream = await this.getUpstream(await this.getCurrentBranch()).catch(() => undefined);
+        const fromUpstream = remoteNameFromUpstream(upstream);
+        if (fromUpstream && names.includes(fromUpstream)) {return fromUpstream;}
+        return names.includes('origin') ? 'origin' : names[0];
     }
 
     /**

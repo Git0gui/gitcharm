@@ -985,6 +985,8 @@ canvas.graph-canvas {
     pointer-events: none; 
     z-index: 1; 
 }
+/* Graph column hidden → branch/tag badges hidden with it (see renderRows). */
+#rows.no-refs .refs { display: none; }
 .refs { 
     display: flex; 
     gap: 4px; 

@@ -1807,10 +1807,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await vscode.commands.executeCommand('idea-git.createTag', commitNode);
                     return;
                 case 'deleteTag':
-                    await vscode.commands.executeCommand('idea-git.deleteTag', commitNode);
+                    await vscode.commands.executeCommand('idea-git.deleteTag', message.tag ? { ...commitNode, tag: message.tag } : commitNode);
                     return;
                 case 'pushTag':
-                    await vscode.commands.executeCommand('idea-git.pushTag', commitNode);
+                    await vscode.commands.executeCommand('idea-git.pushTag', message.tag ? { ...commitNode, tag: message.tag } : commitNode);
+                    return;
+                case 'pushAllTags':
+                    await vscode.commands.executeCommand('idea-git.pushAllTags');
+                    return;
+                case 'pickPushTags':
+                    // No node means "every tag in the repository", which opens the
+                    // quick pick instead of pushing anything directly.
+                    await vscode.commands.executeCommand('idea-git.pushTag', undefined);
                     return;
                 case 'toggleFavorite': {
                     // A mark on the tree, not on git: nothing to reload, and the
@@ -2543,6 +2551,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 </button>
                 <button class="col-refresh no-spin" id="stash-save" title="${t('ui.stashSave')}">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>
+                </button>
+                <button class="col-refresh no-spin" id="tag-push" title="${t('ui.tags')}">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2 2h5l7 7-5 5-7-7z"/><circle cx="4.6" cy="4.6" r="1"/></svg>
                 </button>
                 <button class="col-refresh" id="rf-branch" title="${t('ui.refreshBranches')}">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 1.5v3h-3"/></svg>

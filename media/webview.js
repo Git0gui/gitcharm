@@ -433,6 +433,16 @@ function laneColor(name) {
     }
     return laneColorCache[name];
 }
+// Ref shown first is now a tag (tags lead the row), but a lane's colour should
+// stay keyed to the branch line — tagging a commit must not repaint the graph.
+function branchColorSeed(c) {
+    var refs = (c.refs || []).filter(function (r) { return r !== 'HEAD'; });
+    var tags = c.tags || [];
+    for (var i = 0; i < refs.length; i++) {
+        if (tags.indexOf(refs[i]) < 0) {return refs[i];}
+    }
+    return refs[0];
+}
 function avatarColor(name) {
     var h = 0;
     for (var i = 0; i < name.length; i++) { h = (h * 31 + name.charCodeAt(i)) >>> 0; }
@@ -849,7 +859,7 @@ function renderRows(appendOnly) {
         var expecting = [];
         for (var k = 0; k < lanes.length; k++) if (lanes[k].pending === c.hash) expecting.push(k);
         var li = expecting.length ? expecting[0] : slotLane();
-        var refName = (c.refs || []).filter(function (r) { return r !== 'HEAD'; })[0];
+        var refName = branchColorSeed(c);
         if (!lanes[li].color) lanes[li].color = laneColor(refName || ('anon' + li));
         commitLane[c.hash] = li;
         laneLastRow[li] = i;
@@ -899,7 +909,8 @@ function renderRows(appendOnly) {
                 cls += ' remote';
             }
             
-            chips += '<span class="' + cls + '">' + esc(r) + '</span>';
+            chips += '<span class="' + cls + '"' +
+                (isTag ? ' data-tag="' + esc(r) + '"' : '') + '>' + esc(r) + '</span>';
         });
 
         // Build tooltip with all available info including branches
@@ -959,6 +970,9 @@ function renderRows(appendOnly) {
     });
 
     var wrap = document.getElementById('rows');
+    // The graph switch hides lane colours, and without lanes the branch badges
+    // are just a second copy of the tree on the left — they only cost message width.
+    wrap.classList.toggle('no-refs', state.graphVisible === false);
     if (from > 0) {
         // The canvas sits at index 0, so the appended rows are always the tail.
         var kids = wrap.children;
@@ -1214,8 +1228,7 @@ function drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, to
     // Draw commit dots
     list.forEach(function (c, i) {
         var li = commitLane[c.hash];
-        var refName = (c.refs || []).filter(function (r) { return r !== 'HEAD'; })[0];
-        var isHead = !!refName && (c.refs || []).indexOf(state.current) >= 0;
+        var isHead = !!state.current && (c.refs || []).indexOf(state.current) >= 0;
         var color = lanes[li].color || '#888';
         var x = lx(li);
         var y = ry(i);
@@ -2413,6 +2426,18 @@ document.getElementById('stash-save').addEventListener('click', function () {
     vscode.postMessage({ command: 'action', action: 'stashSave' });
 });
 
+// Tag actions are repo-wide, so they live next to stash-all rather than on a
+// commit row: pick which tags to push, or send every local tag in one go.
+document.getElementById('tag-push').addEventListener('click', function () {
+    var r = this.getBoundingClientRect();
+    showMenu(r.left, r.bottom + 4, [
+        ['pickPushTags', T('menu.pushTagPick')],
+        ['pushAllTags', T('menu.pushAllTags')]
+    ], function (action) {
+        vscode.postMessage({ command: 'action', action: action });
+    });
+});
+
 document.getElementById('tg-files').addEventListener('click', function () {
     state.detailVisible = !state.detailVisible;
     applyDetailVisibility();
@@ -2574,6 +2599,24 @@ document.getElementById('rows').addEventListener('click', function (e) {
 });
 
 document.getElementById('rows').addEventListener('contextmenu', function (e) {
+    // A tag badge carries its own two actions. Handle it before the row menu so
+    // right-clicking the badge never offers the whole-commit list.
+    var tagChip = e.target.closest('.refs .chip.tag');
+    if (tagChip) {
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+        var tagName = tagChip.getAttribute('data-tag');
+        var tagRow = tagChip.closest('.row');
+        var tagHash = tagRow ? tagRow.getAttribute('data-hash') : undefined;
+        showMenu(e.clientX, e.clientY, [
+            ['pushTag', T('menu.pushTag')],
+            ['deleteTag', T('menu.deleteTag')]
+        ], function (action) {
+            vscode.postMessage({ command: 'action', action: action, tag: tagName, hash: tagHash });
+        });
+        return;
+    }
+
     var row = e.target.closest('.row');
     if (!row) return;
     e.preventDefault();

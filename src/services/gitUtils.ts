@@ -793,6 +793,19 @@ export function remoteNameFromUpstream(upstream: string | undefined): string | u
     return slash > 0 ? text.slice(0, slash) : undefined;
 }
 
+/**
+ * Tag badges come before branch badges in a commit row. A tag is the release
+ * marker people scan for, while the branch chips on the same commit are often
+ * just `main` / `origin/main` and would otherwise push the tag out of the
+ * visible part of the refs column. Order is decided once on the host so rows,
+ * tooltips and cached pages all agree.
+ */
+export function refsTagsFirst(refs: readonly string[], tags: readonly string[]): string[] {
+    if (tags.length === 0 || refs.length < 2) {return [...refs];}
+    const tagged = new Set(tags);
+    return [...refs.filter(r => tagged.has(r)), ...refs.filter(r => !tagged.has(r))];
+}
+
 export interface RemoteBranchMatch {
     remote: string;
     /** The remote-tracking ref as listed by the repository, e.g. `fork/dev/x`. */

@@ -7,6 +7,7 @@ import {
     findStaleLock,
     parseLogLine,
     parseGraphLine,
+    refsTagsFirst,
     LruCache,
     stashRef
 } from '../services/gitUtils';
@@ -261,5 +262,34 @@ describe('findStaleLock', () => {
         assert.equal(findStaleLock("fatal: cannot lock ref 'refs/heads/main': is at 111 but expected 222"), undefined);
         assert.equal(findStaleLock(''), undefined);
         assert.equal(findStaleLock(undefined), undefined);
+    });
+});
+
+describe('refsTagsFirst', () => {
+    it('moves tags in front of branch chips', () => {
+        assert.deepEqual(
+            refsTagsFirst(['main', 'v1.0.0', 'origin/main', 'release/v1'], ['v1.0.0']),
+            ['v1.0.0', 'main', 'origin/main', 'release/v1']
+        );
+    });
+
+    it('keeps the original order inside each group', () => {
+        assert.deepEqual(
+            refsTagsFirst(['main', 'v2', 'dev', 'v1'], ['v1', 'v2']),
+            ['v2', 'v1', 'main', 'dev']
+        );
+    });
+
+    it('leaves untagged commits and untouched arrays alone', () => {
+        assert.deepEqual(refsTagsFirst(['main'], ['v1']), ['main']);
+        assert.deepEqual(refsTagsFirst([], ['v1']), []);
+        assert.deepEqual(refsTagsFirst(['main', 'dev'], []), ['main', 'dev']);
+    });
+
+    it('does not reuse the input array', () => {
+        const refs = ['main', 'v1'];
+        const out = refsTagsFirst(refs, ['v1']);
+        assert.notEqual(out, refs);
+        assert.deepEqual(refs, ['main', 'v1']);
     });
 });
