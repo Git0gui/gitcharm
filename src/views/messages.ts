@@ -63,8 +63,8 @@ export interface PushDialogCommit {
  */
 export interface TagSyncRow {
     name: string;
-    /** `inSync` rows are listed but change nothing: they are what the
-     *  differences-only filter hides by default. */
+    /** `inSync` rows have no default action — they are what the differences-only
+     *  filter hides — but can still be deleted on either side. */
     state: 'remoteOnly' | 'localOnly' | 'different' | 'inSync';
     /** Commit the local tag resolves to; absent when only the remote has it. */
     localHash?: string;
@@ -73,7 +73,7 @@ export interface TagSyncRow {
 }
 
 /** `keep` is an explicit "leave the local tag alone"; nothing is run for it. */
-export type TagSyncOperation = 'keep' | 'pull' | 'pullForce' | 'push' | 'deleteRemote';
+export type TagSyncOperation = 'keep' | 'pull' | 'pullForce' | 'push' | 'deleteRemote' | 'deleteLocal';
 
 export interface TagSyncDecision {
     name: string;

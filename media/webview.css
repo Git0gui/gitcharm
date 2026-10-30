@@ -2354,10 +2354,9 @@ body.dialog-resizing * {
 .tag-sync-stat b {
     font-size: 15px;
     font-weight: 600;
-    margin-right: 6px;
+    margin-left: 6px;
     color: var(--vscode-foreground, #cccccc);
 }
-.tag-sync-stat.diff b { color: var(--vscode-editorWarning-foreground, #cca700); }
 .tag-sync-stat.sel b { color: var(--vscode-textLink-foreground, #3794ff); }
 .tag-sync-toolbar {
     display: flex;
@@ -2392,21 +2391,55 @@ body.dialog-resizing * {
     max-height: 52vh;
     overflow: auto;
 }
+/* Column floors are deliberately small and the rows carry no min-width: the
+   dialog is sized against the panel (the detail column eats into it), so a
+   viewport media query cannot know how much room this table really has. The
+   ResizeObserver toggles `compact` / `narrow` from the table's own width, and
+   the ops column — the only column with decisions in it — is never the one
+   that gets cut off. */
 .tag-sync-head, .tag-sync-row {
     display: grid;
-    grid-template-columns: 24px minmax(110px, 1.3fr) 146px 78px 78px minmax(228px, 1.5fr);
+    grid-template-columns: 22px minmax(80px, 1.1fr) 96px minmax(0, 64px) minmax(0, 64px) minmax(180px, 1.3fr);
     align-items: center;
-    gap: 12px;
-    padding: 0 20px;
-    min-width: 720px;
+    gap: 10px;
+    padding: 0 16px;
+    min-width: 0;
 }
 /* No remote, no actions: the list is a report, so the checkbox and ops
    columns are gone instead of being drawn disabled. */
 .tag-sync-table.read-only .tag-sync-head,
 .tag-sync-table.read-only .tag-sync-row {
-    grid-template-columns: minmax(110px, 1.3fr) 146px 90px 90px;
+    grid-template-columns: minmax(90px, 1.2fr) 96px 64px 64px;
     min-width: 0;
 }
+/* Below 640px of table: hashes are reference detail, the row still decides. */
+.tag-sync-table.compact .tag-sync-head,
+.tag-sync-table.compact .tag-sync-row {
+    grid-template-columns: 22px minmax(80px, 1fr) 96px minmax(180px, 1.3fr);
+}
+.tag-sync-table.compact:not(.read-only) .tag-sync-head > :nth-child(4),
+.tag-sync-table.compact:not(.read-only) .tag-sync-head > :nth-child(5),
+.tag-sync-table.compact:not(.read-only) .tag-sync-row > .tag-sync-hash { display: none; }
+.tag-sync-table.read-only.compact .tag-sync-head,
+.tag-sync-table.read-only.compact .tag-sync-row {
+    grid-template-columns: minmax(80px, 1fr) 96px;
+}
+.tag-sync-table.read-only.compact .tag-sync-head > :nth-child(3),
+.tag-sync-table.read-only.compact .tag-sync-head > :nth-child(4),
+.tag-sync-table.read-only.compact .tag-sync-row > .tag-sync-hash { display: none; }
+/* Below 460px: even the state badge yields to the tag name and the actions. */
+.tag-sync-table.narrow:not(.read-only) .tag-sync-head,
+.tag-sync-table.narrow:not(.read-only) .tag-sync-row {
+    grid-template-columns: 22px minmax(64px, 1fr) minmax(150px, 1.4fr);
+}
+.tag-sync-table.narrow:not(.read-only) .tag-sync-head > :nth-child(3),
+.tag-sync-table.narrow:not(.read-only) .tag-sync-row > .tag-sync-state { display: none; }
+.tag-sync-table.narrow.read-only .tag-sync-head,
+.tag-sync-table.narrow.read-only .tag-sync-row {
+    grid-template-columns: minmax(64px, 1fr);
+}
+.tag-sync-table.narrow.read-only .tag-sync-head > :nth-child(2),
+.tag-sync-table.narrow.read-only .tag-sync-row > .tag-sync-state { display: none; }
 .tag-sync-head {
     position: sticky;
     top: 0;
@@ -2489,11 +2522,12 @@ button.tag-sync-hash.on {
 .tag-sync-ops {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
     justify-content: flex-end;
 }
 .tag-sync-op {
-    padding: 3px 9px;
+    padding: 3px 8px;
     font-size: 11px;
     font-family: inherit;
     border-radius: 6px;
@@ -2516,19 +2550,6 @@ button.tag-sync-hash.on {
     color: var(--vscode-inputValidation-errorForeground, #f48771);
     border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
 }
-/* Narrow webviews: hashes are reference detail, the decision columns stay. */
-@media (max-width: 620px) {
-    .tag-sync-head, .tag-sync-row {
-        grid-template-columns: 24px minmax(90px, 1fr) 140px minmax(200px, 1.2fr);
-        min-width: 0;
-    }
-    .tag-sync-head span:nth-child(4),
-    .tag-sync-head span:nth-child(5),
-    .tag-sync-row .tag-sync-hash {
-        display: none;
-    }
-}
-
 /* Custom tooltip for theme-aware hover hints */
 .custom-tooltip {
     position: fixed;

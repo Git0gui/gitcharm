@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { GitService, TagPushResult, tagNameProblem } from '../services/gitService';
 import { diffTagRefs, formatGitError, redactUrlCredentials, RemoteTagRef } from '../services/gitUtils';
 import { logger } from '../services/logger';
-import { TagSyncRow } from '../views/messages';
+import { TagSyncOperation, TagSyncRow } from '../views/messages';
 import { GraphViewProvider } from '../views/graphView';
 import { combineErrorText } from './helpers';
 import { t } from '../i18n';
@@ -40,6 +40,18 @@ export function registerTagCommands(
         names.length <= 3
             ? names.join(', ')
             : `${names.slice(0, 3).join(', ')}… (${names.length})`;
+
+    /** The verb as it reads inside a confirmation summary. */
+    const actionLabel = (action: TagSyncOperation): string => {
+        switch (action) {
+            case 'deleteRemote': return t('tag.actionDeleteRemote');
+            case 'deleteLocal': return t('tag.actionDeleteLocal');
+            case 'pullForce': return t('tag.actionPullOverwrite');
+            case 'pull': return t('tag.actionPull');
+            case 'push': return t('tag.actionPush');
+            default: return t('tag.actionKeepLocal');
+        }
+    };
 
     /** Network failures stay short here; the full git output is in the log. */
     const showNetworkError = (message: string): void => {
@@ -483,7 +495,7 @@ export function registerTagCommands(
                 .sort((a, b) => a.localeCompare(b));
             // Conflicts first: they are the rows that actually need a decision,
             // while one-sided tags have an obvious default and agreeing tags
-            // have none at all (the differences-only filter hides them).
+            // offer deletions only (the differences-only filter hides them).
             const rows: TagSyncRow[] = [
                 ...diff.different.map(name => ({
                     name,
@@ -518,13 +530,11 @@ export function registerTagCommands(
             const actionable = (picked ?? []).filter(item => item.action !== 'keep');
             if (actionable.length === 0) {return;}
 
-            // Overwriting a local tag and deleting a remote one both destroy
+            // Overwriting a local tag and deleting either side both destroy
             // something, so they get one explicit confirmation up front.
             const risky = actionable.filter(item => item.action !== 'pull' && item.action !== 'push');
             if (risky.length > 0) {
-                const summary = summarizeNames(risky.map(item => item.action === 'deleteRemote'
-                    ? `${t('tag.actionDeleteRemote')} ${item.name}`
-                    : `${t('tag.actionPullOverwrite')} ${item.name}`));
+                const summary = summarizeNames(risky.map(item => `${actionLabel(item.action)} ${item.name}`));
                 const confirm = await graphView.showDialog(
                     t('tag.confirmDestructive', { items: summary }),
                     [t('tag.runBtn'), t('common.cancel')],
@@ -539,7 +549,7 @@ export function registerTagCommands(
                 cancellable: false
             }, async () => {
                 let done = 0;
-                let pulled = false;
+                let localChanged = false;
                 const toPush: string[] = [];
                 const skipped: string[] = [];
                 const diverged: string[] = [];
@@ -554,9 +564,13 @@ export function registerTagCommands(
                         if (item.action === 'deleteRemote') {
                             await gitService.deleteRemoteTag(item.name, remote);
                             done++;
+                        } else if (item.action === 'deleteLocal') {
+                            await gitService.deleteTag(item.name);
+                            localChanged = true;
+                            done++;
                         } else {
                             await gitService.fetchTag(item.name, remote, item.action === 'pullForce');
-                            pulled = true;
+                            localChanged = true;
                             done++;
                         }
                     } catch (error) {
@@ -596,9 +610,9 @@ export function registerTagCommands(
                 if (failed.length > 0) {
                     showNetworkError(t('tag.syncFailed', { names: summarizeNames(failed), error: firstError }));
                 }
-                // Only a fetch changes local refs; pushes and remote deletions
-                // leave the badges exactly as they were.
-                if (pulled) {graphView.refresh();}
+                // Fetches and local deletions change the badges; pushes and
+                // remote deletions leave the local refs exactly as they were.
+                if (localChanged) {graphView.refresh();}
             });
         })
     );

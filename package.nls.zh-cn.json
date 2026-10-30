@@ -39,7 +39,7 @@
     "cmd.deleteTags": "删除标签（本地和远端一起）",
     "cmd.pushTag": "推送标签到远端",
     "cmd.pushAllTags": "推送全部标签到远端",
-    "cmd.remoteTags": "对比本地与远端标签",
+    "cmd.remoteTags": "管理本地与远端标签",
     "cmd.stashSave": "贮藏当前改动（stash）",
     "cmd.stashApply": "应用贮藏（保留条目）",
     "cmd.stashPop": "弹出贮藏（移除条目）",

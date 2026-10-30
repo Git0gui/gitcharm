@@ -4850,19 +4850,24 @@ function showReflogDialog(scope, entries) {
 }
 
 /* ---- tag differences dialog ---- */
-// Per-state verbs. A one-sided tag has an obvious default; a conflict starts on
-// "keep local" because pulling over it or deleting the remote one destroys work.
-// An agreeing tag has nothing to do — it is listed for context, not action.
+// Per-state verbs: [action, button label, tooltip]. A one-sided tag has an
+// obvious default; a conflict starts on "keep local" because pulling over it or
+// deleting the remote one destroys work. Agreeing tags have no default verb —
+// the only things worth doing there are deleting one side — so their row must
+// pick one of those before it can be checked.
 var TAG_SYNC_OPS = {
-    different: [['keep', 'tag.actionKeepLocal'], ['pullForce', 'tag.actionPullOverwrite'], ['deleteRemote', 'tag.actionDeleteRemote']],
-    remoteOnly: [['pull', 'tag.actionPull'], ['deleteRemote', 'tag.actionDeleteRemote']],
-    localOnly: [['push', 'tag.actionPush']],
-    inSync: []
+    different: [['keep', 'tag.opKeep', 'tag.actionKeepLocal'], ['pullForce', 'tag.opOverwrite', 'tag.actionPullOverwrite'], ['deleteRemote', 'tag.opDeleteRemote', 'tag.actionDeleteRemote']],
+    remoteOnly: [['pull', 'tag.opPull', 'tag.actionPull'], ['deleteRemote', 'tag.opDeleteRemote', 'tag.actionDeleteRemote']],
+    localOnly: [['push', 'tag.opPush', 'tag.actionPush']],
+    inSync: [['deleteLocal', 'tag.opDeleteLocal', 'tag.actionDeleteLocal'], ['deleteRemote', 'tag.opDeleteRemote', 'tag.actionDeleteRemote']]
 };
 
 function showTagSyncDialog(remote, rows, readOnly) {
     var existing = document.getElementById('tag-sync-dialog');
-    if (existing) { existing.remove(); }
+    if (existing) {
+        if (existing._densityObserver) { existing._densityObserver.disconnect(); }
+        existing.remove();
+    }
 
     var items = rows.map(function (r) {
         return {
@@ -4896,16 +4901,23 @@ function showTagSyncDialog(remote, rows, readOnly) {
     }
     function rowHtml(item, index) {
         var ops = readOnly ? '' : (TAG_SYNC_OPS[item.state] || []).map(function (op) {
-            return '<button class="tag-sync-op' + (op[0] === 'deleteRemote' ? ' danger' : '')
-                + (op[0] === item.action ? ' on' : '') + '" data-op="' + op[0] + '">' + T(op[1]) + '</button>';
+            var danger = op[0] === 'deleteRemote' || op[0] === 'deleteLocal';
+            return '<button class="tag-sync-op' + (danger ? ' danger' : '')
+                + (op[0] === item.action ? ' on' : '') + '" data-op="' + op[0] +
+                '" data-title="' + esc(T(op[2])) + '">' + esc(T(op[1])) + '</button>';
         }).join('');
-        var off = item.state === 'inSync' || readOnly;
+        // A row is runnable only once a verb that actually does something is
+        // picked. Checkboxes follow that: a checked row must always be a row
+        // that will run, so "selected" and "applied" cannot drift apart.
+        var runnable = item.action !== 'keep';
+        var off = readOnly || !runnable;
         // Read-only means no remote to act against, so the checkbox and the
         // ops column are not rendered at all: disabled controls still suggest
         // an action exists and merely cannot be reached.
         return '<div class="tag-sync-row' + (item.state === 'inSync' ? ' in-sync' : '') + '" data-index="' + index + '">' +
             (readOnly ? '' : '<input class="tag-sync-check" type="checkbox"' + (off ? ' disabled' : '') +
-            ' data-title="' + esc(item.state === 'inSync' ? T('tag.syncRowInSync') : T('tag.syncCheckRow')) + '">') +
+            ' data-title="' + esc(!runnable ? T('tag.syncChooseAction')
+                : item.state === 'inSync' ? T('tag.syncRowInSync') : T('tag.syncCheckRow')) + '">') +
             '<span class="tag-sync-name" data-title="' + esc(item.name) + '">' + esc(item.name) + '</span>' +
             '<span class="tag-sync-state ' + item.state + '">' + stateLabel(item.state) + '</span>' +
             hashHtml(item.localHash) + hashHtml(item.remoteHash) +
@@ -4916,7 +4928,7 @@ function showTagSyncDialog(remote, rows, readOnly) {
     var overlay = document.createElement('div');
     overlay.className = 'push-dialog-overlay';
     overlay.id = 'tag-sync-dialog';
-    var title = remote ? T('tag.remoteDiffTitle', { remote: remote }) : T('tag.localTagsTitle');
+    var title = remote ? T('tag.manageTagsTitle', { remote: remote }) : T('tag.manageTagsLocalTitle');
     overlay.innerHTML = '<div class="push-dialog-box">' +
         '<div class="push-dialog-header">' +
         '<span class="tag-sync-title" data-title="' + esc(title) + '">' + esc(title) + '</span>' +
@@ -4933,9 +4945,8 @@ function showTagSyncDialog(remote, rows, readOnly) {
         '<div class="push-dialog-body">' +
         '<div class="push-commits-list full">' +
         (readOnly ? '' : '<div class="tag-sync-stats">' +
-        '<span class="tag-sync-stat diff"><b id="tag-sync-total">' + diffCount + '</b>' + esc(T('tag.syncStatTotal')) + '</span>' +
-        '<span class="tag-sync-stat sel"><b id="tag-sync-selected">0</b>' + esc(T('tag.syncStatSelected')) + '</span>' +
-        '<span class="tag-sync-stat pending"><b id="tag-sync-pending">' + diffCount + '</b>' + esc(T('tag.syncStatPending')) + '</span>' +
+        '<span class="tag-sync-stat">' + esc(T('tag.syncStatTotal')) + '<b>' + items.length + '</b></span>' +
+        '<span class="tag-sync-stat sel">' + esc(T('tag.syncStatSelected')) + '<b id="tag-sync-selected">0</b></span>' +
         '</div>') +
         '<div class="tag-sync-toolbar">' +
         (readOnly ? '' : '<label class="tag-sync-all"><input type="checkbox" id="tag-sync-all">' + esc(T('tag.syncSelectAll')) + '</label>') +
@@ -4965,12 +4976,31 @@ function showTagSyncDialog(remote, rows, readOnly) {
     syncTagSyncBounds();
     attachDialogResize(overlay, 'tagsync');
 
+    // The overlay is sized against the panel, not the viewport, so a media
+    // query cannot know how much room this table really has (the detail column
+    // is resizable). Density follows the table's own width: below 640px the
+    // commit columns go away, below 460px the state badge does too, and the
+    // ops column — the thing users act on — never leaves the visible area.
+    var tableEl = overlay.querySelector('.tag-sync-table');
+    function syncTagSyncDensity() {
+        var width = tableEl.clientWidth;
+        // A hidden panel measures 0; that is not a narrow table.
+        if (width === 0) { return; }
+        tableEl.classList.toggle('compact', width < 640);
+        tableEl.classList.toggle('narrow', width < 460);
+    }
+    syncTagSyncDensity();
+    if (window.ResizeObserver) {
+        var densityObserver = new ResizeObserver(syncTagSyncDensity);
+        densityObserver.observe(tableEl);
+        overlay._densityObserver = densityObserver;
+    }
+
     var listEl = overlay.querySelector('#tag-sync-list');
     var allBox = overlay.querySelector('#tag-sync-all');
     var diffOnlyBox = overlay.querySelector('#tag-sync-diff-only');
     var applyBtn = overlay.querySelector('.push-dialog-actions [data-action="apply"]');
     var selectedEl = overlay.querySelector('#tag-sync-selected');
-    var pendingEl = overlay.querySelector('#tag-sync-pending');
 
     function applyFilter() {
         var diffOnly = diffOnlyBox && diffOnlyBox.checked;
@@ -4981,22 +5011,26 @@ function showTagSyncDialog(remote, rows, readOnly) {
     }
 
     function paintRow(rowEl, item) {
+        var runnable = item.action !== 'keep';
+        if (!runnable) { item.checked = false; }
         rowEl.classList.toggle('selected', item.checked);
-        rowEl.querySelector('.tag-sync-check').checked = item.checked;
+        var box = rowEl.querySelector('.tag-sync-check');
+        box.disabled = !runnable;
+        box.checked = item.checked;
+        box.setAttribute('data-title', !runnable ? T('tag.syncChooseAction')
+            : item.state === 'inSync' ? T('tag.syncRowInSync') : T('tag.syncCheckRow'));
         rowEl.querySelectorAll('.tag-sync-op').forEach(function (btn) {
             btn.classList.toggle('on', btn.getAttribute('data-op') === item.action);
         });
     }
 
     function updateStats() {
-        // "Differences" and "pending" count the rows that can be acted on, not
-        // the in-sync tags the filter is hiding by default.
         var selected = items.filter(function (item) { return item.checked; }).length;
+        var runnable = items.filter(function (item) { return item.action !== 'keep'; }).length;
         if (selectedEl) {selectedEl.textContent = String(selected);}
-        if (pendingEl) {pendingEl.textContent = String(Math.max(0, diffCount - selected));}
         if (allBox) {
-            allBox.checked = diffCount > 0 && selected === diffCount;
-            allBox.indeterminate = selected > 0 && selected < diffCount;
+            allBox.checked = runnable > 0 && selected === runnable;
+            allBox.indeterminate = selected > 0 && selected < runnable;
         }
         if (applyBtn) {
             applyBtn.disabled = selected === 0;
@@ -5024,8 +5058,9 @@ function showTagSyncDialog(remote, rows, readOnly) {
         var item = items[Number(rowEl.getAttribute('data-index'))];
         item.action = opBtn.getAttribute('data-op');
         // Choosing a verb is also a decision to act on the row; the checkbox
-        // remains the way to opt a row out without changing its verb.
-        item.checked = true;
+        // remains the way to opt a row out without changing its verb. "Keep"
+        // runs nothing, so it un-checks instead of selecting a no-op.
+        item.checked = item.action !== 'keep';
         paintRow(rowEl, item);
         updateStats();
     });
@@ -5041,8 +5076,10 @@ function showTagSyncDialog(remote, rows, readOnly) {
     if (allBox) {
         allBox.addEventListener('change', function () {
             var on = allBox.checked;
-            // In-sync rows have nothing to run, so "select all" never touches them.
-            items.forEach(function (item) { if (item.state !== 'inSync') { item.checked = on; } });
+            // Only rows with a verb that runs can be selected: "keep" (the
+            // default for a conflict, and the only state of an agreeing tag
+            // until a delete is picked) would make "select all" select no-ops.
+            items.forEach(function (item) { if (item.action !== 'keep') { item.checked = on; } });
             listEl.querySelectorAll('.tag-sync-row').forEach(function (rowEl, idx) {
                 paintRow(rowEl, items[idx]);
             });
@@ -5063,6 +5100,7 @@ function showTagSyncDialog(remote, rows, readOnly) {
     overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var action = btn.getAttribute('data-action');
+            if (overlay._densityObserver) { overlay._densityObserver.disconnect(); }
             overlay.remove();
             tagSyncOverlay = null;
             if (action === 'apply') {
