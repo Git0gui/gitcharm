@@ -207,6 +207,10 @@
         favFilter: Object.assign({}, base, {
             steps: [{ do: 'click', sel: '#fav-filter' }]
         }),
+        /** Every branch in one history: the scope row under HEAD carries the selection. */
+        allBranches: Object.assign({}, base, {
+            selectedBranch: ''
+        }),
         /** Same switch with nothing marked: the hint replaces a tree of empty headers. */
         favFilterEmpty: Object.assign({}, base, {
             favorites: [],
@@ -427,7 +431,11 @@
             ]
         }),
         /** Second checkout of the repo: the worktree section at the bottom of the tree. */
-        worktrees: base
+        worktrees: base,
+        /** A workspace folder with a name long enough to squeeze the header buttons out. */
+        longRepoName: Object.assign({}, base, {
+            repoName: 'bouncePy-legacy-android-application-with-an-unreasonably-long-folder-name-2026'
+        })
     };
 
     function file(p) { return '.frow.file[data-path="' + p + '"]'; }
