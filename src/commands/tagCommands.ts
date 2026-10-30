@@ -91,7 +91,11 @@ export function registerTagCommands(
         });
     };
 
-    const pickTags = async (names: string[], placeHolderKey: string): Promise<string[] | undefined> => {
+    const pickTags = async (
+        names: string[],
+        placeHolderKey: string,
+        describe?: (name: string) => string | undefined
+    ): Promise<string[] | undefined> => {
         if (names.length === 0) {
             vscode.window.showInformationMessage(t('tag.none'));
             return undefined;
@@ -99,7 +103,7 @@ export function registerTagCommands(
         if (names.length === 1) {return names;}
 
         const picked = await vscode.window.showQuickPick(
-            names.map(name => ({ label: name })),
+            names.map(name => ({ label: name, description: describe?.(name) })),
             {
                 canPickMany: true,
                 placeHolder: t(placeHolderKey),
@@ -107,6 +111,34 @@ export function registerTagCommands(
             }
         );
         return picked && picked.length > 0 ? picked.map(p => p.label) : undefined;
+    };
+
+    /**
+     * What the remote already carries, keyed by local tag name. `undefined`
+     * means the remote could not be reached: the picker then lists every tag as
+     * before and the push itself reports the network error.
+     */
+    const readRemoteState = async (): Promise<Map<string, 'same' | 'diverged'> | undefined> => {
+        try {
+            return await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: t('tag.remoteReading'),
+                cancellable: false
+            }, async () => {
+                const info = await gitService.listRemoteTags();
+                const local = new Map(gitService.listTags().map(tag => [tag.name, tag.hash] as const));
+                const state = new Map<string, 'same' | 'diverged'>();
+                for (const tag of info.tags) {
+                    const mine = local.get(tag.name);
+                    if (mine === undefined) {continue;}
+                    state.set(tag.name, mine === tag.commit ? 'same' : 'diverged');
+                }
+                return state;
+            });
+        } catch (error) {
+            logger.debug(`[GitCharm] remote tag listing skipped: ${redactUrlCredentials(combineErrorText(error))}`);
+            return undefined;
+        }
     };
 
     ctx.subscriptions.push(
@@ -201,8 +233,34 @@ export function registerTagCommands(
         }),
 
         vscode.commands.registerCommand('idea-git.pushTag', async (node: any) => {
-            const candidates = resolveTagNames(node);
-            const names = await pickTags(candidates, 'tag.pickPushPlaceHolder');
+            let candidates = resolveTagNames(node);
+            if (candidates.length === 0) {
+                vscode.window.showInformationMessage(t('tag.none'));
+                return;
+            }
+
+            // Reading the remote once is what keeps the picker honest: tags the
+            // remote already has at the same commit drop out (there is nothing
+            // to push), and ones it has at another commit stay listed with a
+            // warning, because the push guard will not overwrite them.
+            let state: Map<string, 'same' | 'diverged'> | undefined;
+            if (candidates.length > 1) {
+                const remoteState = await readRemoteState();
+                if (remoteState) {
+                    state = remoteState;
+                    candidates = candidates.filter(name => remoteState.get(name) !== 'same');
+                    if (candidates.length === 0) {
+                        vscode.window.showInformationMessage(t('tag.noneToPush'));
+                        return;
+                    }
+                }
+            }
+
+            const names = await pickTags(
+                candidates,
+                'tag.pickPushPlaceHolder',
+                name => state?.get(name) === 'diverged' ? t('tag.remoteStateDiverged') : undefined
+            );
             if (!names || names.length === 0) {return;}
 
             await runPush(
