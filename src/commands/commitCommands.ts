@@ -5,6 +5,7 @@ import { SquashGroup } from '../services/squash';
 import { formatGitError } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
+import { LineHistoryPanel } from '../views/lineHistoryPanel';
 import {
     gitBlobUri,
     isConflictError,
@@ -854,19 +855,42 @@ export function registerCommitCommands(
             }
         }),
 
-        // File history is VS Code's own Timeline view, pinned to this file —
-        // the same command the Explorer's "Open Timeline" entry runs.
+        // One command, two UIs: `idea-git.fileHistory` picks between GitCharm's
+        // own panel (the default) and VS Code's Timeline view. Keeping it single
+        // means the menu, the palette and the Explorer entry can never disagree.
         vscode.commands.registerCommand('idea-git.viewFileHistory', async (uri?: vscode.Uri) => {
             const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
             if (!targetUri || targetUri.scheme !== 'file') {
                 vscode.window.showErrorMessage(t('common.noFileSelected'));
                 return;
             }
-            try {
-                await vscode.commands.executeCommand('files.openTimeline', targetUri);
-            } catch (error) {
-                vscode.window.showErrorMessage(t('fileHistory.timelineFailed', { error: formatGitError(error) }));
+
+            const ui = vscode.workspace.getConfiguration('idea-git').get<string>('fileHistory', 'custom');
+            if (ui === 'native') {
+                try {
+                    await vscode.commands.executeCommand('files.openTimeline', targetUri);
+                } catch (error) {
+                    vscode.window.showErrorMessage(t('fileHistory.timelineFailed', { error: formatGitError(error) }));
+                }
+                return;
             }
+
+            const repoPath = gitService.repositoryPath;
+            if (!repoPath) {
+                vscode.window.showErrorMessage(t('ext.noGitRepo'));
+                return;
+            }
+            const rel = path.relative(repoPath, targetUri.fsPath).replace(/\\/g, '/');
+            if (!rel || rel.startsWith('..')) {
+                vscode.window.showErrorMessage(t('lineHistory.notInRepo'));
+                return;
+            }
+            LineHistoryPanel.show(
+                gitService,
+                ctx.extensionUri,
+                { repoPath, file: rel, startLine: 0, endLine: 0, text: '', mode: 'file' },
+                (hash, file) => graphView.revealCommit(hash, file)
+            );
         })
     );
 }

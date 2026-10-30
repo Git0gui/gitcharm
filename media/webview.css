@@ -771,6 +771,31 @@ svg { flex: none; }
 .bitem.cur > svg { color: var(--vscode-textLink-foreground, #4da3ff); }
 .bitem.sel.cur .bname { color: inherit; }
 .bitem.hl { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+/* The "all branches" row is a scope switch, not a ref: it sits right under the
+   HEAD section, is picked with a single click, and never triggers a checkout. */
+.allitem {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px 3px 20px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    border-radius: 6px;
+    margin: 2px 4px 6px;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.allitem:hover {
+    background: var(--vscode-list-hoverBackground, #2a2d2e);
+    transform: translateX(2px);
+}
+.allitem.sel {
+    background: var(--vscode-list-activeSelectionBackground, #094771);
+    background-image: var(--gc-sel-wash);
+    color: var(--vscode-list-activeSelectionForeground, #fff);
+    box-shadow: var(--gc-sel-bar);
+}
+.allitem.sel .bname { color: inherit; font-weight: 600; }
 .bname { overflow: hidden; text-overflow: ellipsis; }
 /* Stash rows sit in the branch tree but are not branches (.bitem would catch the
    double-click-to-checkout handler), so they carry their own row class. */
@@ -1075,6 +1100,22 @@ canvas.graph-canvas {
     font-weight: 600;
     font-size: 12px;
     border-bottom: 1px solid var(--vscode-panel-border, #333);
+    flex: none;
+    /* The repo name is user data of any length. Without these the row's
+       min-content width wins, the buttons after it are pushed past the pane's
+       edge, and the eye / refresh controls simply disappear. */
+    min-width: 0;
+    overflow: hidden;
+}
+#repo-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.repo-row > svg,
+.repo-row > button {
     flex: none;
 }
 #d-files { 
@@ -1943,7 +1984,9 @@ body.dialog-resizing * {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    min-height: 200px; /* Ensure minimum height even when empty */
+    /* No min-height here: the box is content-sized, so a reserved height showed up
+       as a blank strip under short lists (reflog with five entries). The empty
+       state carries its own min-height. */
 }
 
 /* Empty state for new branches */
@@ -2506,6 +2549,6 @@ body.dialog-resizing * {
 .sel.kcur {
     box-shadow: var(--gc-sel-bar), var(--gc-sel-ring);
 }
-.bitem.kcur, .bfolder.kcur, .bsec.kcur, .sitem.kcur, .witem.kcur, .frow.kcur {
+.bitem.kcur, .allitem.kcur, .bfolder.kcur, .bsec.kcur, .sitem.kcur, .witem.kcur, .frow.kcur {
     border-radius: 6px;
 }

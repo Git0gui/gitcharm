@@ -1,8 +1,43 @@
-# GitCharm
+<h1 align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/icon.png" width="96" height="96" alt="GitCharm" />
+  <br />
+  GitCharm
+</h1>
 
-**English** | [简体中文](#简体中文)
+<p align="center">
+  <strong>Bring the IntelliJ IDEA Git UI and workflow to VS Code / Qoder.</strong>
+</p>
 
-> Bring the IntelliJ IDEA Git UI and workflow to VSCode / Qoder.
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Marketplace version" src="https://vsmarketplacebadges.dev/version-short/liugui.git-charm.svg?style=flat-square"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Installs" src="https://vsmarketplacebadges.dev/installs-short/liugui.git-charm.svg?style=flat-square"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Rating" src="https://vsmarketplacebadges.dev/rating-star/liugui.git-charm.svg?style=flat-square"></a>
+  <img alt="VS Code 1.66+" src="https://img.shields.io/badge/VS%20Code-%E2%89%A51.66-007ACC?style=flat-square&amp;logo=visualstudiocode&amp;logoColor=white">
+  <img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square">
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="#简体中文">简体中文</a>
+</p>
+
+## What's New
+
+### Line History — the story of one line, not the whole file
+
+Select a line or a range in the editor, then press `Alt+H` or right-click → **GitCharm → Selected Lines History**. The panel is built around exactly those lines:
+
+![Line history panel](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/line-history.png)
+
+- **Every commit that rewrote them**, newest first. Blame is only the starting set — `git log -L` adds the rewrites blame can no longer see, so a line that was edited and then moved still shows its whole chain.
+- **What the line said at that revision**, previewed under every row: the list reads as the history of a line, not as a list of committers.
+- **A diff scoped to the selection**: only the hunks that still cover the selected lines, with untouched stretches collapsed to `⋯`; one click switches to the whole file.
+- **Uncommitted work on top**: edits you have not committed yet sit as their own row, compared against the working tree.
+- **Blame runs on the editor buffer**, so unsaved edits do not shift the line numbers under your selection — and every commit is diffed under the file name it had back then, so renames are followed.
+- **Two hand-offs from the header**: re-root the main commit list on that commit (children above, ancestors below), or open the pair in VS Code's native diff.
+
+File History also opens GitCharm's own panel by default now — commit list plus the selected commit's changes — and `idea-git.fileHistory` switches it back to VS Code's Timeline.
+
+## Overview
 
 ![GitCharm three-panel git log UI](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
 
@@ -56,6 +91,7 @@ GitCharm provides a three-panel Git log view:
 - **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes
 - **Files**: compare file with another branch, compare with the local working copy, show the current file against its last commit (editor / Explorer right-click), pick a single file from a commit, jump to the file in your working tree (entries for files that no longer exist there are greyed out), **open the file exactly as it stood in that commit — read-only and scrolled to the first line the commit touched**, which is how you read code the working tree no longer has, open the file's cross-branch history in the editor's Timeline, view diff introduced by a single commit
 - **Blame**: inline annotation of last author & date per line, full commit info on hover, and clicking an annotation re-roots the commit list on that commit — its children above, its ancestors below, the commit itself selected in the middle. With word wrap on, the annotation sits at the end of each line so wrapped continuations stay aligned; with it off it stays in a fixed left column
+- **Line history**: select lines and press `Alt+H` for a panel listing every commit that rewrote them — each revision's text previewed, the diff scoped to those lines (whole file with one click), uncommitted edits pinned on top, and one click to re-root the commit list on that commit or open the native diff
 
 ### Performance
 
@@ -75,6 +111,7 @@ GitCharm provides a three-panel Git log view:
 - **IDEA-style search box**: `.*` treats the keyword as an extended regular expression and `Cc` makes it case-sensitive, both living inside the box so the rule you are searching under is visible while you type. The default is a literal substring match — `( . *` are characters, not syntax — and both switches are part of the filter, so they survive re-showing the panel, a branch switch and a cached page
 - **The filter bar never wraps**: when the commit column narrows, author / path / date move into a `>` popover instead of stacking into two rows and eating a screenful of the list. The chevron lights up when a filter you cannot currently see is still in effect, and the commit column has a minimum width the splitter will not let you squeeze past
 - **An exit for an empty result**: nothing matched means the empty state hands you a "clear all filters" button, and every filter that is actually applied puts an accent edge on its own toolbar control — a short list always has a reason
+- **All branches in one list**: an "All branches" entry under HEAD in the branch tree puts every branch's commits into the same list, so a search spans all of them; when a single-branch filter finds nothing, the empty state offers "Search all branches" instead of sending you to find that option in the tree
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
 - **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs; the header (count + switch) stays pinned while scrolling in any direction
 - **Collapsible details**: in the push and compare dialogs the info pane below the files folds into a single bar with one click, handing its height to the file list; the fold is remembered per dialog for the current session
@@ -86,6 +123,7 @@ GitCharm provides a three-panel Git log view:
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts are detected in one place, a persistent top status bar offers Continue / Abort, and the conflicted files are opened directly in the editor (up to 10 tabs) so the built-in merge-conflict code lenses can be used — the panel never switches you into another view
 - **The panel follows real git state**: resolve the conflicts and commit in your own terminal and the operation bar retracts on its own once git's state files are gone, while the commit list reloads as soon as the displayed branch tip moves — keeping your selection, detail panel, folds and scroll position instead of jumping back to the top
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
+- **Stale lock files, handled with a question**: if a write hits a `.lock` file left behind by a killed git process, GitCharm asks once, then deletes it and retries the same command — no hand-cleaning inside the git directory
 - **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
 - **Full error detail on demand**: the error notification stays short, while the complete git output (credentials redacted) goes to the GitCharm output channel, reachable from a Show Log button on the notification
 - **Optional background fetch**: set `idea-git.autoFetchMinutes` and the panel fetches from the remote every N minutes while it is open, refreshing the branch tree and the ahead/behind arrows. Silent by design — no credential prompt, no error toast, and no subprocess at all when the repository has no remote
@@ -134,7 +172,8 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | Compare file with local copy | Commit detail (third panel) → right-click a file → Compare with Local File |
 | Show a file's uncommitted changes | Editor / Explorer right-click → Show Changes |
 | Pick a file from a commit | Commit detail (third panel) → right-click a file → Cherry-Pick File |
-| View file history | Editor / Explorer right-click → GitCharm → View File History (opens the Timeline) |
+| View file history | Editor / Explorer right-click → GitCharm → File History — GitCharm's own panel by default (commit list + the selected commit's changes); `idea-git.fileHistory` switches it to VS Code's Timeline |
+| View history of selected lines | Select lines in the editor → `Alt+H`, or right-click → GitCharm → Selected Lines History |
 | Toggle blame | Editor right-click → Toggle Blame, or click the line-number area |
 
 ## Settings
@@ -146,6 +185,7 @@ Search `idea-git` in settings:
 | `idea-git.cache.enabled` | Cache branch info for faster startup (persisted; refreshed on repo changes or Git operations) | `true` |
 | `idea-git.prefetchOnStartup` | Load the panel's first page right after activation so it opens without waiting; adds a few Git commands at startup | `true` |
 | `idea-git.pullStrategy` | Update strategy when pulling: `merge` or `rebase` | `merge` |
+| `idea-git.fileHistory` | What the File History command opens: `custom` (GitCharm's panel) or `native` (VS Code's Timeline) | `custom` |
 | `idea-git.language` | UI language: `auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | Enable debug logging to the extension host console | `false` |
 | `idea-git.autoFetchMinutes` | Fetch from the remote every N minutes while the panel is open (silent; `0` disables) | `0` |
@@ -178,6 +218,25 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 # 简体中文
 
 > 在 VSCode / Qoder 中复刻 IntelliJ IDEA 的 Git UI 与工作流。
+
+## 新增功能
+
+### 行级历史——只追一行，而不是整个文件
+
+在编辑器里选中一行或一段，按 `Alt+H`，或右键 → **GitCharm → 选中行历史**。面板只围绕这几行展开：
+
+![行级历史面板](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/line-history.png)
+
+- **改写这一行的全部提交**，从新到旧。blame 只是起点——`git log -L` 补上 blame 已经看不见的改写链条：一行被改写之后再被移动，历史也不会断。
+- **这一行在那一版是什么**：每行下方预览该提交时这一行的原文，列表读起来是"这一行的历史"，而不是一串提交人。
+- **只显示选中行的差异**：只保留仍覆盖选中行的 hunk，中间没变的区间收成 `⋯`；点一下即可切到整文件。
+- **未提交的改动钉在最上面**：还没提交的修改单独成行，与工作区里的内容直接对比。
+- **blame 跑在编辑器缓冲区上**：未保存的修改不会让选中行的行号错位；每个提交都按它当时的文件名做对比，重命名也会跟着追。
+- **面板头部两个去处**：把主面板的提交列表改根到那条提交（上面是它之后的提交、下面是它的祖先），或者把这一对版本交给 VS Code 原生对比。
+
+文件历史也改为默认打开 GitCharm 自带面板（提交列表 + 所选提交的改动），`idea-git.fileHistory` 可切回 VS Code 时间线。
+
+## 概览
 
 ![GitCharm 三栏式提交图谱界面](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
 
@@ -231,6 +290,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **工作树（Worktree）**：分支树底部列出同一仓库的所有检出，双击在新窗口打开、右键移除；非当前本地分支可一键检出到新工作树。移除前按 git 登记校验，工作树含未提交改动时需再次确认才强制删除
 - **文件**：与其他分支对比此文件、与当前本地文件对比、查看当前文件与最后一次提交的差异（编辑器 / 资源管理器右键）、从提交中挑选单个文件、跳转到工作区中的该文件（工作区已不存在的文件菜单项灰显）、**按那次提交的版本只读打开这个文件并停在本次改动的第一行**（工作区里早已删掉的代码也能读）、跨分支查看该文件的全部历史提交（打开编辑器的时间线）、查看单次提交引入的差异
 - **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击把提交列表改根到那条提交——上面是它之后的提交、下面是导致它的提交，选中行落在中间，两个方向都能滚动。开启自动换行时注解显示在行尾，折行的续行不会错位；关闭换行时保持左侧固定列
+- **行级历史**：选中若干行后按 `Alt+H`，面板列出改写这些行的全部提交——每行预览该提交时的内容，下方差异默认只看选中行（可一键切整文件），未提交的改动钉在最上面，还能一键把提交列表改根到那条提交或交给原生对比
 
 ### 性能
 
@@ -250,6 +310,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **IDEA 式搜索框**：`.*` 把关键词当正则表达式匹配、`Cc` 区分大小写，两个开关长在框里——正在按什么规则搜，输入的时候就看得到。默认是字面子串匹配，`( . *` 是字符不是语法，不再因为一个左括号报正则错误；开关与关键词同属筛选条件，重新显示面板、换分支、复用缓存页都不会拿到错的那份答案
 - **筛选栏不再叠排**：提交列变窄时提交人 / 路径 / 日期收进 `>` 浮层，而不是换成两排把列表挤掉一屏；看不见的筛选还在生效时 `>` 会亮。分隔条也不允许把提交列压到没有内容可看
 - **筛空了要给出口**：一条都不剩时，空态直接提供"清除全部筛选"按钮；真正在生效的筛选会在自己的控件上亮一条强调边——列表为什么这么短总有答案
+- **全部分支一起看**：分支树 HEAD 段下的「全部分支」把所有分支的提交放进同一个列表，搜索随之跨分支；单分支下筛不到结果时，空态直接给"在所有分支中搜索"，不用先去树里找那个选项
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
 - **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换；表头（数量 + 切换按钮）在任意方向滚动时保持吸附
 - **详情可收起**：推送与对比对话框下方的详情区点一下折成一条，腾出的高度交给文件列表；收起状态在本次会话内按对话框记住
@@ -261,6 +322,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部常驻状态栏提供"继续 / 终止"，冲突文件直接在编辑器打开（上限 10 个 tab）用内置 merge-conflict 代码透镜解决，面板不会把用户切去其他视图
 - **面板跟着真实 git 状态走**：在自己终端里解决冲突并提交，操作状态栏会在 git 状态文件清掉后自动收起；提交列表也在所选分支 tip 移动时自动重载，并保留当前选中项、第三栏详情、折叠状态与滚动位置，不再跳回顶部
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
+- **残留锁文件先问再删**：写操作撞上被杀掉的 git 进程留下的 `.lock` 文件时先问一句，同意后删除它并重试同一条命令，不必自己去 git 目录里手动清理
 - **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
 - **完整错误随时可查**：错误通知保持简短，完整的 git 输出（凭据已脱敏）写入 GitCharm 输出通道，通知条上的"显示日志"按钮可直接打开
 - **可选的后台定时 fetch**：设置 `idea-git.autoFetchMinutes` 后，面板打开期间每隔 N 分钟静默 fetch 一次，只更新分支树与超前/落后箭头。刻意保持安静：不弹凭据输入、不弹错误提示，仓库没有远端时一个子进程也不 spawn
@@ -309,7 +371,8 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 与本地文件对比 | 第三栏变更文件右键 → 与当前本地文件对比 |
 | 看当前文件未提交的改动 | 编辑器 / 资源管理器右键 → 查看差异 |
 | 挑选提交中的单个文件 | 第三栏变更文件右键 → 挑选文件 |
-| 查看文件所有历史提交 | 编辑器 / 资源管理器右键 → GitCharm → 查看文件所有历史提交（打开时间线） |
+| 文件历史 | 编辑器 / 资源管理器右键 → GitCharm → 文件历史——默认是 GitCharm 自带面板（提交列表 + 所选提交的改动），`idea-git.fileHistory` 可切到 VS Code 时间线 |
+| 查看选中行的历史 | 编辑器中选中若干行 → `Alt+H`，或右键 → GitCharm → 选中行历史 |
 | 显示 Blame | 编辑器右键 → 显示提交信息，或点击行号区域 |
 
 ## 设置项
@@ -321,6 +384,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | `idea-git.cache.enabled` | 启用分支信息缓存以提高启动速度（缓存持久保存，仅在仓库变化或执行 Git 操作时更新） | `true` |
 | `idea-git.prefetchOnStartup` | 扩展激活后立即预取面板首屏，打开时无需等待；会在启动时多跑几条 Git 命令 | `true` |
 | `idea-git.pullStrategy` | 拉取远程分支的更新策略：`merge`（合并式）或 `rebase`（变基式） | `merge` |
+| `idea-git.fileHistory` | 「文件历史」打开的界面：`custom`（GitCharm 自带面板）或 `native`（VS Code 时间线） | `custom` |
 | `idea-git.language` | 界面显示语言：`auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | 启用调试日志（输出到扩展宿主控制台） | `false` |
 | `idea-git.autoFetchMinutes` | 面板打开期间每隔 N 分钟静默 fetch 一次远端（`0` 表示关闭） | `0` |

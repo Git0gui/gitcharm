@@ -1,0 +1,393 @@
+/* Line history tab. Same palette rules as the log webview: everything comes
+ * from --vscode-* variables, so a theme switch needs no reload. */
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size, 13px);
+    color: var(--vscode-foreground);
+    background: var(--vscode-editor-background);
+    overflow: hidden;
+}
+
+#lh-app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    min-height: 0;
+}
+
+#lh-head {
+    flex: 0 0 auto;
+    padding: 4px 10px 3px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+}
+
+.lh-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.lh-title-row svg {
+    flex: 0 0 auto;
+    opacity: 0.75;
+}
+
+#lh-file {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+#lh-refresh {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.75;
+}
+
+#lh-refresh:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+#lh-sub {
+    margin-top: 1px;
+    font-size: 11px;
+    opacity: 0.72;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The list is an index, not the deliverable: it gives up room to the diff.
+ * Rows are one line each, so 30% still shows a dozen revisions before
+ * scrolling. */
+#lh-list {
+    flex: 0 0 auto;
+    max-height: 30%;
+    overflow-y: auto;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+    padding: 1px 0;
+}
+
+.lh-row {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 2px 10px;
+    border: none;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+    line-height: 1.35;
+    cursor: pointer;
+}
+
+.lh-row:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+.lh-row.sel {
+    background: var(--vscode-list-activeSelectionBackground, rgba(4, 97, 173, 0.35));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+    border-left-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.lh-row:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: -1px;
+}
+
+/* What the line said at that revision: the difference between a list of
+ * committers and a history of the line. */
+.lh-row-content {
+    display: block;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10.5px;
+    line-height: 1.3;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lh-row.sel .lh-row-content {
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+    opacity: 0.88;
+}
+
+/* Uncommitted work: pinned on top, and the one row whose colour says "not a
+ * commit yet". */
+.lh-row-dirty {
+    border-left-color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+}
+
+.lh-row-dirty .lh-row-content {
+    color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+}
+
+.lh-dirty-dot {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+    align-self: center;
+}
+
+.lh-row-main {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+}
+
+.lh-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lh-stats {
+    flex: 0 0 auto;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    display: inline-flex;
+    gap: 5px;
+}
+
+.lh-add {
+    color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b);
+}
+
+.lh-del {
+    color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39);
+}
+
+.lh-hash {
+    flex: 0 0 auto;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.lh-author,
+.lh-time,
+.lh-lines {
+    flex: 0 0 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.lh-author {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 40%;
+}
+
+.lh-more {
+    display: block;
+    width: calc(100% - 20px);
+    margin: 3px 10px 2px;
+    padding: 4px 0;
+    border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+    border-radius: 6px;
+    background: transparent;
+    color: var(--vscode-textLink-foreground, #3794ff);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+
+.lh-more:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.12));
+}
+
+#lh-diff {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#lh-diff-head {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+    font-size: 12px;
+}
+
+#lh-diff-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+    opacity: 0.85;
+}
+
+#lh-diff-stats {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+}
+
+.lh-spacer {
+    flex: 1 1 auto;
+}
+
+#lh-diff-head button {
+    flex: 0 0 auto;
+    padding: 3px 9px;
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 5px;
+    background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
+    color: var(--vscode-button-secondaryForeground, inherit);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+}
+
+#lh-diff-head button:hover {
+    background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.3));
+}
+
+#lh-scope.on {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+#lh-diff-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.lh-diff-table {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: var(--vscode-editor-font-size, 12px);
+    line-height: 1.5;
+    min-width: max-content;
+}
+
+.lh-dl {
+    display: flex;
+    align-items: flex-start;
+    white-space: pre;
+}
+
+.lh-dl-add {
+    background: var(--vscode-diffEditor-insertedTextBackground, rgba(46, 160, 67, 0.16));
+}
+
+.lh-dl-del {
+    background: var(--vscode-diffEditor-removedTextBackground, rgba(248, 81, 73, 0.16));
+}
+
+.lh-dl-hunk {
+    margin: 6px 0 2px;
+    padding: 2px 0;
+    background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.13));
+    color: var(--vscode-descriptionForeground);
+}
+
+/* A line the selection still owns at this commit: a left accent, not a
+ * background, so it stays legible on top of the +/- tints. */
+.lh-dl-hit {
+    box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007fd4);
+}
+
+.lh-hunk-text {
+    padding: 0 10px;
+    opacity: 0.9;
+}
+
+.lh-ln {
+    flex: 0 0 auto;
+    width: 42px;
+    padding: 0 8px;
+    text-align: right;
+    color: var(--vscode-editorLineNumber-foreground, rgba(128, 128, 128, 0.8));
+    background: rgba(128, 128, 128, 0.07);
+    user-select: none;
+}
+
+.lh-ln + .lh-ln {
+    border-left: 1px solid rgba(128, 128, 128, 0.14);
+}
+
+.lh-sign {
+    flex: 0 0 auto;
+    width: 14px;
+    text-align: center;
+    user-select: none;
+    opacity: 0.7;
+}
+
+.lh-code {
+    flex: 1 1 auto;
+    padding-right: 16px;
+}
+
+.lh-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+}
+
+.lh-note-error {
+    color: var(--vscode-errorForeground, #f48771);
+    white-space: pre-wrap;
+}
+
+.lh-spin {
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    display: inline-block;
+    animation: lh-spin 0.9s linear infinite;
+    opacity: 0.7;
+}
+
+@keyframes lh-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lh-spin { animation-duration: 3s; }
+}

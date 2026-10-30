@@ -509,6 +509,8 @@ var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stro
 // Same silhouette with filled nodes: the checked-out branch has to stand out in the tree.
 var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="4.5" cy="12.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="11.5" cy="5.5" r="2" fill="currentColor" stroke-width="1"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
+// A trunk with two branches off it: the history of every branch at once.
+var I_ALL_BRANCHES = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 2.4v11.2"/><circle cx="3" cy="3.4" r="1.3"/><path d="M3 6.6h4.2"/><circle cx="8.9" cy="6.6" r="1.3"/><path d="M3 11h4.2"/><circle cx="8.9" cy="11" r="1.3"/></svg>';
 // Archive box: the lid, the body and the slot a stash is put through.
 var I_STASH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>';
 // Two overlapping folders: the same repository checked out in several places.
@@ -743,6 +745,13 @@ function renderTree() {
         head += resumeHtml;
     }
     var tree = '<div id="btree-inner">' + head +
+        // "All branches" is a scope, not a ref: one history holding every branch,
+        // which is the only way to search for a commit you cannot place. It sits
+        // right under HEAD so switching scopes is one click, and it carries its
+        // own class because .bitem would hand it to the double-click handler
+        // that expects a ref to check out.
+        '<div class="allitem' + (state.selectedBranch ? '' : ' sel') + '" data-all-branches="1" data-title="' + esc(T('w.allBranchesHint')) + '">' +
+        I_ALL_BRANCHES + '<span class="bname">' + esc(T('w.allBranches')) + '</span></div>' +
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
         stashSection() + worktreeSection() + '</div>';
@@ -786,7 +795,13 @@ function renderRows(appendOnly) {
         }
         document.getElementById('rows').innerHTML = '<div class="empty">' + T('w.noMatch') +
             (hasAppliedFilters()
-                ? ' <button class="empty-btn" id="clear-all-filters" type="button">' + T('filter.clearAll') + '</button>'
+                ? ' <button class="empty-btn" id="clear-all-filters" type="button">' + T('filter.clearAll') + '</button>' +
+                  // Chasing a word you cannot place in one branch is what the
+                  // all-branches scope is for, so offer it right where the branch
+                  // scope came up empty instead of making the user find the row.
+                  (state.selectedBranch
+                      ? ' <button class="empty-btn" id="search-all-branches" type="button">' + T('filter.searchAllBranches') + '</button>'
+                      : '')
                 : '') +
             '</div>';
         document.getElementById('rows').style.minWidth = '';
@@ -1388,7 +1403,15 @@ function selectStash(index) {
 
 function renderDetail() {
     applyDetailVisibility();
-    document.getElementById('repo-name').textContent = state.repoName;
+    var repoName = document.getElementById('repo-name');
+    repoName.textContent = state.repoName;
+    // The name is one ellipsised line so the buttons beside it survive; the
+    // custom tooltip is where the full name stays readable.
+    if (state.repoName) {
+        repoName.setAttribute('data-title', state.repoName);
+    } else {
+        repoName.removeAttribute('data-title');
+    }
     var info = document.getElementById('d-info');
     var filesBox = document.getElementById('d-files');
     
@@ -2281,6 +2304,10 @@ document.getElementById('scroll').addEventListener('scroll', function () {
 
 // Click handler for folders/sections (expand/collapse) and HEAD section
 document.getElementById('btree').addEventListener('click', function (e) {
+    if (e.target.closest('.allitem')) {
+        selectAllBranches();
+        return;
+    }
     var stashRow = e.target.closest('.sitem');
     if (stashRow) {
         selectStash(parseInt(stashRow.getAttribute('data-stash'), 10));
@@ -2313,6 +2340,25 @@ document.getElementById('btree').addEventListener('click', function (e) {
         return;
     }
 });
+
+/**
+ * Widen the history to every branch. The scope is the empty branch name: the
+ * host reads that as "no scope" and walks `--all`, exactly like a panel that
+ * never had a branch selected. Filters are scope-independent, so whatever the
+ * search box says is re-run against the wider walk.
+ */
+function selectAllBranches() {
+    if (!state.selectedBranch) {return;}
+    state.selectedBranch = '';
+    state.highlight = '';
+    state.detail = null;
+    state.stashDetail = null;
+    clearPreview();
+    renderTree();
+    renderDetail();
+    saveViewState();
+    vscode.postMessage({ command: 'selectBranch', branch: '' });
+}
 
 // Double-click handler for branch items only (switch branch)
 document.getElementById('btree').addEventListener('dblclick', function (e) {
@@ -2480,6 +2526,10 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
 document.getElementById('rows').addEventListener('click', function (e) {
     if (e.target.closest('#clear-all-filters')) {
         clearAllFilters();
+        return;
+    }
+    if (e.target.closest('#search-all-branches')) {
+        selectAllBranches();
         return;
     }
     var row = e.target.closest('.row');
@@ -3010,7 +3060,7 @@ function handleFileKeys(e) {
 /* --- branch tree --- */
 
 function treeRowList() {
-    return Array.from(document.querySelectorAll('#btree .bsec, #btree .bfolder, #btree .bitem, #btree .sitem, #btree .witem'));
+    return Array.from(document.querySelectorAll('#btree .allitem, #btree .bsec, #btree .bfolder, #btree .bitem, #btree .sitem, #btree .witem'));
 }
 
 /** Stable identity for a tree row: re-applying the cursor after a re-render keys on it. */
@@ -3019,6 +3069,7 @@ function treeRowId(row) {
     if (row.classList.contains('bfolder')) {return 'f|' + row.getAttribute('data-folder');}
     if (row.classList.contains('sitem')) {return 't|' + row.getAttribute('data-stash');}
     if (row.classList.contains('witem')) {return 'w|' + row.getAttribute('data-worktree');}
+    if (row.classList.contains('allitem')) {return 'a|all';}
     return 'b|' + row.getAttribute('data-branch');
 }
 
@@ -3072,6 +3123,8 @@ function handleBranchKeys(e) {
                 // Same as double-click: load that branch's commits. Checking out
                 // stays a deliberate double-click / menu action.
                 rows[at].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+            } else if (rows[at].classList.contains('allitem')) {
+                selectAllBranches();
             } else if (rows[at].classList.contains('sitem')) {
                 selectStash(parseInt(rows[at].getAttribute('data-stash'), 10));
             } else if (rows[at].classList.contains('witem')) {

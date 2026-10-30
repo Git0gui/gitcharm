@@ -1,6 +1,7 @@
 import { GraphCommit, CommitDetail, FileStat, LogFilters, StashEntry, ReflogEntry, RepositoryOption, WorktreeEntry } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 import { DiffPreviewLine } from '../services/gitUtils';
+import { DiffRow, LineHistoryCommit } from '../services/lineHistory';
 
 /**
  * Message protocol between the extension host and the graph webview.
@@ -274,3 +275,58 @@ export type WebviewToExtMessage =
     | { command: 'getCompareAllFiles' }
     | { command: 'compareFileDiff'; hash: string; path: string }
     | { command: 'compareDialogClosed' };
+
+/**
+ * Line history panel protocol (the editor tab opened by Alt+H).
+ *
+ * The host owns the blame walk and the per-commit patches; the webview only
+ * renders what it is handed. `requestId` lets the webview drop a patch that
+ * arrives after the user already picked another commit — clicking through a
+ * list faster than git answers is the normal case, not an edge case.
+ */
+export type LineHistoryExtMessage =
+    | { command: 'lh.loading'; mode: 'lines' | 'file' }
+    | {
+        command: 'lh.data';
+        /** Which tab this is: selected lines (Alt+H) or the whole file. */
+        mode: 'lines' | 'file';
+        /** Repository-relative path the selection belongs to. */
+        file: string;
+        /** 0-based inclusive line range the blame walk covered. */
+        startLine: number;
+        endLine: number;
+        commits: LineHistoryCommit[];
+        /** Selected lines with no commit yet (edited in the worktree). */
+        skipped: number;
+        /** Lines the selection covers. */
+        scanned: number;
+        /** Set instead of commits when the walk itself failed. */
+        error?: string;
+    }
+    | {
+        /**
+         * The `-L` chain landed after the blame list: the same rows enriched
+         * with older rewrites and each revision's content. Sent as its own
+         * message so the first paint never waits for the walk.
+         */
+        command: 'lh.chain';
+        commits: LineHistoryCommit[];
+    }
+    | {
+        command: 'lh.diff';
+        hash: string;
+        requestId: number;
+        /** Whether the rows cover the whole file change or only the selected lines. */
+        full: boolean;
+        rows: DiffRow[];
+        truncated: boolean;
+        binary: boolean;
+        error?: string;
+    };
+
+export type LineHistoryWebviewMessage =
+    | { command: 'ready' }
+    | { command: 'selectCommit'; hash: string; requestId: number; full: boolean }
+    | { command: 'openNativeDiff'; hash: string }
+    | { command: 'revealCommit'; hash: string }
+    | { command: 'refresh' };

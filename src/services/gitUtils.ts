@@ -1041,6 +1041,25 @@ export function formatGitError(error: unknown, maxLines = 4, maxLength = 400): s
     return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+/**
+ * The `.lock` file git refused to create, or undefined when the failure has
+ * nothing to do with one.
+ *
+ * Closing the editor while a checkout is still running leaves `index.lock` (or
+ * a ref lock) behind, and every later write keeps failing with the same message
+ * until somebody deletes it. Git names the file in both wordings it uses:
+ *   fatal: Unable to create 'D:/repo/.git/index.lock': File exists.
+ *   error: cannot lock ref 'refs/heads/x': Unable to create '…/x.lock': File exists.
+ * so one pattern covers them. Greedy up to the last `':` on the line keeps the
+ * whole path even when it contains quotes. This is data, never a command: the
+ * caller still has to prove the path sits inside the repository.
+ */
+export function findStaleLock(text: string | undefined): string | undefined {
+    if (!text) {return undefined;}
+    const match = /Unable to create '(.*)':/.exec(text);
+    return match ? match[1] : undefined;
+}
+
 /** The actionable half of a remote failure: what to do about it. */
 export type GitNetworkFailure = 'auth' | 'tls' | 'unreachable' | 'unknown';
 

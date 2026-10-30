@@ -4,6 +4,7 @@ import {
     assertRef,
     assertHash,
     assertShellSafe,
+    findStaleLock,
     parseLogLine,
     parseGraphLine,
     LruCache,
@@ -224,5 +225,41 @@ describe('parseGraphLine', () => {
 
     it('returns null for short lines', () => {
         assert.equal(parseGraphLine('a\0b\0c'), null);
+    });
+});
+
+describe('findStaleLock', () => {
+    it('names the file in the shape a dead checkout leaves behind', () => {
+        const stderr = [
+            "fatal: Unable to create 'D:/repo/.git/index.lock': File exists.",
+            '',
+            'Another git process seems to be running in this repository, e.g.',
+            'an editor opened by \'git commit\'. Please make sure all processes',
+            'are terminated then try again.'
+        ].join('\n');
+        assert.equal(findStaleLock(stderr), 'D:/repo/.git/index.lock');
+    });
+
+    it('finds it behind a ref-lock error as well', () => {
+        assert.equal(
+            findStaleLock("error: cannot lock ref 'refs/heads/main': Unable to create 'D:/repo/.git/refs/heads/main.lock': File exists."),
+            'D:/repo/.git/refs/heads/main.lock'
+        );
+    });
+
+    it('keeps the whole path when the directory name holds a quote', () => {
+        // Greedy up to the last "': on the line: cutting at the first would hand
+        // the service a truncated path that then fails its containment check.
+        assert.equal(
+            findStaleLock("fatal: Unable to create 'D:/a b'c/.git/index.lock': File exists."),
+            "D:/a b'c/.git/index.lock"
+        );
+    });
+
+    it('reports nothing for failures that name no lock file', () => {
+        assert.equal(findStaleLock('fatal: not a git repository (or any of the parent directories): .git'), undefined);
+        assert.equal(findStaleLock("fatal: cannot lock ref 'refs/heads/main': is at 111 but expected 222"), undefined);
+        assert.equal(findStaleLock(''), undefined);
+        assert.equal(findStaleLock(undefined), undefined);
     });
 });
