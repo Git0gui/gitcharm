@@ -540,6 +540,12 @@ svg { flex: none; }
 }
 .resizer:hover { background: var(--vscode-focusBorder, #007fd4); }
 #main.no-detail #resizer-right { display: none; }
+/* The tag dialog's backdrop stops at the detail column so its commit hashes can
+   be inspected there — which puts this divider, the only way to widen that
+   column, underneath it. Lift the divider above the overlay: dragging it is how
+   the commit's file list gets the width to show its paths, and the dialog's
+   bound follows the drag (syncTagSyncBounds). */
+body.tag-sync-open #resizer-right { z-index: 2100; }
 
 /* vertical resizer between d-info and d-files */
 .resizer-v {
@@ -985,14 +991,29 @@ canvas.graph-canvas {
     pointer-events: none; 
     z-index: 1; 
 }
+/* Graph column hidden → branch/tag badges hidden with it (see renderRows). */
+#rows.no-refs .refs { display: none; }
+/* Subject and badges share the flexible cell, in that order. The subject keeps
+   its natural width and only yields — with an ellipsis — when the row is too
+   narrow for both, so badges are never clipped by a long message. */
+.msgline {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+}
 .refs { 
     display: flex; 
+    flex: none;
     gap: 4px; 
-    margin-right: 8px; 
-    max-width: 280px; /* Limit width to prevent squeezing commit message */
+    margin-left: 10px;
+    margin-right: 8px;
+    max-width: 280px;
     overflow: hidden;
     position: relative;
 }
+.refs:empty { display: none; }
 /* Fade-out gradient on the right when refs overflow */
 .refs::after {
     content: '';
@@ -1017,9 +1038,23 @@ canvas.graph-canvas {
     color: var(--vscode-badge-foreground, #fff);
     white-space: nowrap;
     transition: all 0.15s ease;
+    /* Reduced to one badge per commit, so this one carries a long branch name
+       on its own: cut it with an ellipsis instead of running into the date. */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .chip:hover {
     transform: scale(1.05);
+}
+/* The rest of a commit's refs fold into this counter; the hover popover spells
+   them out, so the row keeps its width for the subject. */
+.chip-more {
+    margin-left: 5px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.28);
+    font-weight: 600;
 }
 
 /* Tag badge - yellow style like IDEA */
@@ -1037,8 +1072,8 @@ canvas.graph-canvas {
 .chip.cur { background: #2d6da8; }
 .chip.remote { background: #5a4a7a; }
 .msg {
-    flex: 1;
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: 48px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1232,6 +1267,8 @@ canvas.graph-canvas {
 }
 .crow { display: flex; align-items: center; margin-bottom: 8px; min-width: 0; }
 .crow:last-child { margin-bottom: 0; }
+/* Branch/tag badges on the detail card: all of them, wrapped, no +N fold. */
+.crefs > span { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .hashchip {
     font-family: monospace;
     font-size: 11px;
@@ -2280,7 +2317,245 @@ body.dialog-resizing * {
 .dialog-btn.danger:hover {
     background: #6a3535;
 }
+.dialog-btn:disabled {
+    opacity: .5;
+    cursor: default;
+    transform: none;
+    box-shadow: none;
+}
 
+/* ---- tag differences dialog ---- */
+/* The overlay stops at the detail column while it is visible, so the box is a
+   percentage of that area rather than of the whole webview. */
+#tag-sync-dialog .push-dialog-box {
+    width: min(1060px, calc(100% - 24px));
+}
+.tag-sync-title {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tag-sync-found {
+    flex: none;
+    font-weight: normal;
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 10px;
+    color: var(--vscode-inputValidation-warningForeground, #cca700);
+    background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, .12));
+    border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(204, 167, 0, .4));
+    white-space: nowrap;
+}
+.tag-sync-stats {
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    padding: 14px 20px 10px;
+    flex: none;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground, #999);
+}
+.tag-sync-stat b {
+    font-size: 15px;
+    font-weight: 600;
+    margin-left: 6px;
+    color: var(--vscode-foreground, #cccccc);
+}
+.tag-sync-stat.sel b { color: var(--vscode-textLink-foreground, #3794ff); }
+.tag-sync-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 20px 10px;
+    flex: none;
+    font-size: 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+.tag-sync-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    flex: none;
+}
+.tag-sync-hint {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999);
+}
+/* One scroll container for header and rows: a horizontally scrolled column
+   stays aligned with its header, and the header sticks while the list scrolls. */
+.tag-sync-table {
+    flex: 1;
+    min-height: 0;
+    max-height: 52vh;
+    overflow: auto;
+}
+/* Column floors are deliberately small and the rows carry no min-width: the
+   dialog is sized against the panel (the detail column eats into it), so a
+   viewport media query cannot know how much room this table really has. The
+   ResizeObserver toggles `compact` / `narrow` from the table's own width, and
+   the ops column — the only column with decisions in it — is never the one
+   that gets cut off. */
+.tag-sync-head, .tag-sync-row {
+    display: grid;
+    grid-template-columns: 22px minmax(80px, 1.1fr) 96px minmax(0, 64px) minmax(0, 64px) minmax(180px, 1.3fr);
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    min-width: 0;
+}
+/* No remote, no actions: the list is a report, so the checkbox and ops
+   columns are gone instead of being drawn disabled. */
+.tag-sync-table.read-only .tag-sync-head,
+.tag-sync-table.read-only .tag-sync-row {
+    grid-template-columns: minmax(90px, 1.2fr) 96px 64px 64px;
+    min-width: 0;
+}
+/* Below 640px of table: hashes are reference detail, the row still decides. */
+.tag-sync-table.compact .tag-sync-head,
+.tag-sync-table.compact .tag-sync-row {
+    grid-template-columns: 22px minmax(80px, 1fr) 96px minmax(180px, 1.3fr);
+}
+.tag-sync-table.compact:not(.read-only) .tag-sync-head > :nth-child(4),
+.tag-sync-table.compact:not(.read-only) .tag-sync-head > :nth-child(5),
+.tag-sync-table.compact:not(.read-only) .tag-sync-row > .tag-sync-hash { display: none; }
+.tag-sync-table.read-only.compact .tag-sync-head,
+.tag-sync-table.read-only.compact .tag-sync-row {
+    grid-template-columns: minmax(80px, 1fr) 96px;
+}
+.tag-sync-table.read-only.compact .tag-sync-head > :nth-child(3),
+.tag-sync-table.read-only.compact .tag-sync-head > :nth-child(4),
+.tag-sync-table.read-only.compact .tag-sync-row > .tag-sync-hash { display: none; }
+/* Below 460px: even the state badge yields to the tag name and the actions. */
+.tag-sync-table.narrow:not(.read-only) .tag-sync-head,
+.tag-sync-table.narrow:not(.read-only) .tag-sync-row {
+    grid-template-columns: 22px minmax(64px, 1fr) minmax(150px, 1.4fr);
+}
+.tag-sync-table.narrow:not(.read-only) .tag-sync-head > :nth-child(3),
+.tag-sync-table.narrow:not(.read-only) .tag-sync-row > .tag-sync-state { display: none; }
+.tag-sync-table.narrow.read-only .tag-sync-head,
+.tag-sync-table.narrow.read-only .tag-sync-row {
+    grid-template-columns: minmax(64px, 1fr);
+}
+.tag-sync-table.narrow.read-only .tag-sync-head > :nth-child(2),
+.tag-sync-table.narrow.read-only .tag-sync-row > .tag-sync-state { display: none; }
+.tag-sync-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999);
+    background: var(--vscode-editorWidget-background, #252526);
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+.tag-sync-col-actions { text-align: right; }
+.tag-sync-row {
+    padding-top: 9px;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .18));
+    transition: background .12s ease-out;
+}
+.tag-sync-row:hover { background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, .15)); }
+.tag-sync-row.selected { background: var(--vscode-list-inactiveSelectionBackground, rgba(55, 148, 255, .12)); }
+.tag-sync-check {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--vscode-focusBorder, #007fd4);
+}
+.tag-sync-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+}
+.tag-sync-state {
+    justify-self: start;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+    opacity: .92;
+}
+.tag-sync-state.different { color: var(--vscode-editorWarning-foreground, #cca700); }
+.tag-sync-state.remoteOnly { color: var(--vscode-charts-blue, #3794ff); }
+.tag-sync-state.localOnly { color: var(--vscode-charts-green, #89d185); }
+.tag-sync-state.inSync { color: var(--vscode-descriptionForeground, #999); }
+.tag-sync-hash {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999);
+}
+/* Hashes are the way into the third panel. */
+button.tag-sync-hash.link {
+    justify-self: start;
+    max-width: 100%;
+    padding: 2px 5px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+}
+button.tag-sync-hash.link:hover {
+    color: var(--vscode-textLink-foreground, #3794ff);
+    background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, .3));
+    text-decoration: underline;
+}
+button.tag-sync-hash.on {
+    color: var(--vscode-textLink-foreground, #3794ff);
+    background: var(--vscode-list-inactiveSelectionBackground, rgba(55, 148, 255, .16));
+}
+.tag-sync-row.filtered-out { display: none; }
+.tag-sync-row.in-sync .tag-sync-name { color: var(--vscode-descriptionForeground, #999); }
+.tag-sync-ops {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+}
+.tag-sync-op {
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    border-radius: 6px;
+    border: 1px solid var(--vscode-button-border, rgba(128, 128, 128, .35));
+    background: transparent;
+    color: var(--vscode-foreground, #cccccc);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease-out, color .15s ease-out;
+}
+.tag-sync-op:hover { background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, .3)); }
+.tag-sync-op.on {
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #ffffff);
+    border-color: transparent;
+}
+.tag-sync-op.danger { color: var(--vscode-errorForeground, #f48771); }
+.tag-sync-op.danger.on {
+    background: var(--vscode-inputValidation-errorBackground, #5a2a2a);
+    color: var(--vscode-inputValidation-errorForeground, #f48771);
+    border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
+}
 /* Custom tooltip for theme-aware hover hints */
 .custom-tooltip {
     position: fixed;
@@ -2305,6 +2580,45 @@ body.dialog-resizing * {
 .custom-tooltip.visible {
     opacity: 1;
     transform: translateY(-2px);
+}
+
+/* ---- refs popover (branches and tags on a commit) ---- */
+.refs-popover {
+    position: fixed;
+    z-index: 9500; /* above the date picker, below the tooltip and menus */
+    display: none;
+    min-width: 140px;
+    max-width: 320px;
+    max-height: 260px;
+    overflow: auto;
+    padding: 4px;
+    background: var(--vscode-editorHoverWidget-background, rgba(45, 45, 45, 0.98));
+    color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+    border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.refs-popover.visible { display: block; }
+.refs-pop-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.refs-pop-ico {
+    display: flex;
+    flex: none;
+    color: var(--vscode-descriptionForeground, #999);
+}
+.refs-pop-row.rp-tag .refs-pop-ico { color: #f0ad4e; }
+.refs-pop-row.rp-remote .refs-pop-ico { color: #a58bd0; }
+.refs-pop-row.rp-branch .refs-pop-ico { color: #6cb6ff; }
+.refs-pop-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* ---- squash message dialog (multi-line editor) ---- */

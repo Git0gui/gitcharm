@@ -52,13 +52,16 @@ import {
     gitFailureHost,
     pickFetchRemote,
     remoteNameFromUpstream,
+    refsTagsFirst,
+    parseLsRemoteTags,
+    parseTagRefList,
+    RemoteTagRef,
     matchRemoteBranch,
     resolvePushTarget,
     collectRepositoryRoots,
     discoverRepositoryRoots,
     repositoryKey,
     RepositoryOption,
-    tagNameProblem,
     InProgressOperation,
     StashEntry,
     ReflogEntry,
@@ -189,6 +192,10 @@ export interface CommitDetail {
     committer?: string;
     committerEmail?: string;
     committerDate?: string;
+    /** Branches and tags pointing at this commit, tags first. */
+    refs?: string[];
+    /** Subset of `refs` that are tags — what the badge colours are keyed on. */
+    tags?: string[];
 }
 
 /** Git dir writes arrive in bursts (one command touches several files). */
@@ -202,6 +209,21 @@ let _tempSeq = 0;
 
 /** Top-level git dir files whose contents the caches depend on. */
 const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir']);
+
+/** Outcome of a tag push: what went out, and which tags the guard held back. */
+export interface TagPushResult {
+    remote: string;
+    pushed: string[];
+    /** Tags sitting on commits the remote does not have; pushing them would
+     *  land the commit there without any remote branch pointing at it. */
+    skipped: string[];
+    /** The remote already carries the same tag at the same commit. */
+    upToDate: string[];
+    /** The remote carries this tag at another commit. Sending it would be
+     *  rejected as a non-fast-forward, so it is left alone for the user to
+     *  resolve in the remote-diff dialog — a batch must not overwrite it. */
+    diverged: string[];
+}
 
 export class GitService {
     /** Max cached entries per cache (branch list / commit log / per-commit files). */
@@ -255,6 +277,11 @@ export class GitService {
     private _recentBranches = new RecentBranchReader(() => this._repositoryPath);
     private _trackInfoCache: { at: number; map: BranchTrackMap } | undefined;
     private _trackInfoPromise: Promise<BranchTrackMap> | undefined;
+    // Tag name -> commit hash. `for-each-ref` is what peels annotated tags whose
+    // object lives in a pack file; the refs-directory read can only inflate
+    // loose objects and would otherwise report the tag-object hash.
+    private _tagRefsCache: { at: number; map: Map<string, string> } | undefined;
+    private _tagRefsPromise: Promise<Map<string, string>> | undefined;
     // Persistent branch cache (workspaceState Memento, versioned payload)
     private _persistedCache: PersistedBranchCache;
     
@@ -721,7 +748,9 @@ export class GitService {
                 authorDate: indexed.date,
                 committer: indexed.committer,
                 committerEmail: indexed.committerEmail,
-                committerDate: indexed.committerDate
+                committerDate: indexed.committerDate,
+                refs: indexed.refs,
+                tags: indexed.tags
             };
             this._detailCache.set(key, detail);
             return detail;
@@ -731,10 +760,13 @@ export class GitService {
         // same reason as the graph log: a subject may contain any other char.
         // %an=author name, %ae=author email, %ai=author date
         // %cn=committer name, %ce=committer email, %ci=committer date
-        const output = (await this.executeGitArgs([
-            'show', '-s', '--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci', hash
-        ])).trimEnd();
-        const parts = output.split('\0');
+        const [output, refs] = await Promise.all([
+            this.executeGitArgs([
+                'show', '-s', '--format=%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci', hash
+            ]),
+            this._refsAtCommit(hash)
+        ]);
+        const parts = output.trimEnd().split('\0');
 
         const detail: CommitDetail = {
             hash: parts[0] || hash,
@@ -745,11 +777,35 @@ export class GitService {
             authorDate: parts[5] || '',
             committer: parts[6] || '',
             committerEmail: parts[7] || '',
-            committerDate: parts[8] || ''
+            committerDate: parts[8] || '',
+            refs: refs.refs,
+            tags: refs.tags
         };
         
         this._detailCache.set(key, detail);
         return detail;
+    }
+
+    /**
+     * Branches and tags that point at `hash`, in the same shape the log rows
+     * carry (tags first). One `for-each-ref` over all refs: annotated tags point
+     * at a tag object, so both the raw and the peeled hash have to be compared.
+     */
+    private async _refsAtCommit(hash: string): Promise<{ refs: string[]; tags: string[] }> {
+        const output = await this.executeGitArgs([
+            'for-each-ref', 'refs/heads/', 'refs/remotes/', 'refs/tags/',
+            '--format=%(refname)%09%(refname:short)%09%(objectname)%09%(*objectname)'
+        ]);
+        const tags: string[] = [];
+        const branches: string[] = [];
+        for (const line of output.split('\n')) {
+            if (!line.trim()) {continue;}
+            const [full, short, object, peeled] = line.split('\t');
+            if (object !== hash && peeled !== hash) {continue;}
+            if (full.startsWith('refs/tags/')) {tags.push(short);}
+            else {branches.push(short);}
+        }
+        return { refs: refsTagsFirst([...tags, ...branches], tags), tags };
     }
 
     /**
@@ -1177,6 +1233,7 @@ export class GitService {
         this._graphCache.clear();
         this._branchCache.clear();
         this._trackInfoCache = undefined;
+        this._tagRefsCache = undefined;
         // Head hashes must be re-read: divergence checks compare them against
         // remote-tracking refs, and a stale cache hides the arrows.
         this._refsReader.invalidate();
@@ -2694,9 +2751,10 @@ export class GitService {
             }
         }
 
-        // Read branch and tag refs efficiently from filesystem (no subprocess)
+        // Branches come from the refs directory (no subprocess). Tags need
+        // git's peeling so annotated tags in pack files land on their commit.
         const branchRefsMap = this._refsReader.readBranchRefs();
-        const tagRefsMap = this._refsReader.readTagRefs();
+        const tagRefsMap = await this.getTagRefs();
         
         // Build reverse map: hash -> [ref names]
         const hashToRefs = new Map<string, string[]>();
@@ -2733,14 +2791,15 @@ export class GitService {
                 isMerge: parsed.parents.length > 1
             };
             
-            // Apply refs to this commit
+            // Apply refs to this commit. Tags are ordered in front of branch
+            // chips here, once, so every render path sees the same order.
             const refs = hashToRefs.get(parsed.hash);
-            if (refs && refs.length > 0) {
-                commit.refs = refs;
-            }
             const tags = hashToTags.get(parsed.hash);
             if (tags && tags.length > 0) {
                 commit.tags = tags;
+            }
+            if (refs && refs.length > 0) {
+                commit.refs = refsTagsFirst(refs, tags ?? []);
             }
             
             this._commitIndex.set(hash, commit);
@@ -2777,22 +2836,56 @@ export class GitService {
     }
 
     /**
-     * Every tag with the commit it points at, read from the refs on disk
-     * (no subprocess). Annotated tags resolve to the tagged commit, which is
-     * what RefsReader already reports.
+     * tag name -> commit hash for every local tag.
+     *
+     * This goes through `git for-each-ref` rather than the refs-directory
+     * reader: an annotated tag whose object has been packed has no loose file
+     * to inflate, so a filesystem read can only report the tag-object hash.
+     * That hash matches no commit — the badge silently disappeared, and a tag
+     * sitting on the very same commit as its remote counterpart read as
+     * "different". `%(*objectname)` is the peeled commit and empty for
+     * lightweight tags, so the fallback keeps those as they are.
      */
-    listTags(): Array<{ name: string; hash: string }> {
+    async getTagRefs(): Promise<Map<string, string>> {
+        const TTL_MS = 3000;
+        if (this._tagRefsCache && (Date.now() - this._tagRefsCache.at) < TTL_MS) {
+            return new Map(this._tagRefsCache.map);
+        }
+        if (this._tagRefsPromise) {return new Map(await this._tagRefsPromise);}
+        this._tagRefsPromise = (async () => {
+            try {
+                const output = await this.executeGitArgs(
+                    ['for-each-ref', 'refs/tags', '--format=%(objectname)\t%(*objectname)\t%(refname:short)'],
+                    { timeoutMs: 10000 }
+                );
+                const map = parseTagRefList(output);
+                this._tagRefsCache = { at: Date.now(), map };
+                return map;
+            } catch (error) {
+                // No git binary or no repository yet: the filesystem reader is
+                // still right for loose tags, and it never throws.
+                logger.debug(`[GitCharm] for-each-ref tags failed: ${String(error)}`);
+                return this._refsReader.readTagRefs();
+            } finally {
+                this._tagRefsPromise = undefined;
+            }
+        })();
+        return new Map(await this._tagRefsPromise);
+    }
+
+    /** Every tag with the commit it points at, newest names last. */
+    async listTags(): Promise<Array<{ name: string; hash: string }>> {
         const tags: Array<{ name: string; hash: string }> = [];
-        for (const [name, hash] of this._refsReader.readTagRefs()) {
+        for (const [name, hash] of await this.getTagRefs()) {
             tags.push({ name, hash });
         }
         return tags.sort((a, b) => a.name.localeCompare(b.name));
     }
 
     /** Tag names pointing exactly at `hash` — the ones a row can delete or push. */
-    getTagsAt(hash: string): string[] {
+    async getTagsAt(hash: string): Promise<string[]> {
         const found: string[] = [];
-        for (const [name, tagHash] of this._refsReader.readTagRefs()) {
+        for (const [name, tagHash] of await this.getTagRefs()) {
             if (tagHash === hash) {found.push(name);}
         }
         return found.sort((a, b) => a.localeCompare(b));
@@ -2821,14 +2914,126 @@ export class GitService {
     }
 
     /**
-     * Push one tag to a remote. The explicit `refs/tags/…` form is what git
-     * needs to push a tag rather than something that happens to share the name.
+     * Tags the remote advertises, read with `ls-remote` (refs only, no objects
+     * transferred). A fetched tag becomes an ordinary local tag — git keeps no
+     * separate remote-tag namespace — so this listing is the only way to tell
+     * which tags the remote has that this clone does not.
      */
-    async pushTag(name: string, remote = 'origin'): Promise<string> {
+    async listRemoteTags(remote?: string): Promise<{ remote: string; tags: RemoteTagRef[] }> {
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        const output = await this._execNetwork(['ls-remote', '--tags', target]);
+        return { remote: target, tags: parseLsRemoteTags(output) };
+    }
+
+    /**
+     * Fetch one tag into the local ref. A tag that already exists locally with
+     * another commit needs `--force`; git refuses the ref update otherwise.
+     */
+    async fetchTag(name: string, remote?: string, overwrite = false): Promise<void> {
         assertRef(name, t('label.tag'));
-        assertRef(remote, t('label.remote'));
-        const output = await this._execNetwork(['push', remote, `refs/tags/${name}`]);
-        return output || t('tag.pushed', { name, remote });
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        // A bare `refs/tags/x` fetch only writes FETCH_HEAD; the destination
+        // refspec is what actually creates the local tag.
+        await this._execNetwork([
+            'fetch', ...(overwrite ? ['--force'] : []), target, `refs/tags/${name}:refs/tags/${name}`
+        ]);
+    }
+
+    /** Delete a tag on the remote (`push :refs/tags/<name>`); the local ref stays. */
+    async deleteRemoteTag(name: string, remote?: string): Promise<void> {
+        assertRef(name, t('label.tag'));
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        await this._execNetwork(['push', target, `:refs/tags/${name}`]);
+    }
+
+    /**
+     * Push tags, but only those whose commit the target remote's branches
+     * already contain.
+     *
+     * A tag-only push uploads the tag object *and* the commit behind it, so a
+     * tag on unpushed work would land a commit on the remote that no remote
+     * branch points at — the tag arrives before its branch, and the branch's
+     * ahead/behind still says it has work to send. The check reads the
+     * remote-tracking refs, which `push` itself updates, so branches pushed
+     * from this clone are always visible here.
+     */
+    async pushTags(names: string[], remote?: string): Promise<TagPushResult> {
+        const target = remote?.trim() || await this._defaultRemoteForPush();
+        assertRef(target, t('label.remote'));
+        // An unknown remote has no tracking refs; let `git push` report it
+        // instead of blaming the tags for it.
+        const configured = this.getRemoteNames().includes(target);
+        const local = new Map((await this.listTags()).map(tag => [tag.name, tag.hash] as const));
+        let onRemote: Map<string, string> | undefined;
+        if (configured) {
+            try {
+                onRemote = new Map(
+                    (await this.listRemoteTags(target)).tags.map(tag => [tag.name, tag.commit])
+                );
+            } catch {
+                // The listing is an optimisation, not a gate: without it the
+                // per-tag commit check still works, and `git push` will report
+                // the network error itself.
+                onRemote = undefined;
+            }
+        }
+        const pushed: string[] = [];
+        const skipped: string[] = [];
+        const upToDate: string[] = [];
+        const diverged: string[] = [];
+        for (const name of names) {
+            assertRef(name, t('label.tag'));
+            if (!configured) {
+                pushed.push(name);
+                continue;
+            }
+            const remoteCommit = onRemote?.get(name);
+            if (remoteCommit !== undefined) {
+                if (remoteCommit === local.get(name)) {
+                    upToDate.push(name);
+                } else {
+                    diverged.push(name);
+                }
+                continue;
+            }
+            if (await this._isTagOnRemote(name, target)) {
+                pushed.push(name);
+            } else {
+                skipped.push(name);
+            }
+        }
+        if (pushed.length > 0) {
+            // Explicit refspecs rather than `--tags`: only the tags that passed
+            // the check go out, so a batch never sweeps the held-back ones along.
+            await this._execNetwork(['push', target, ...pushed.map(name => `refs/tags/${name}`)]);
+        }
+        return { remote: target, pushed, skipped, upToDate, diverged };
+    }
+
+    /**
+     * Counts what a tag-only push would import: commits reachable from the tag
+     * but from none of the remote's branches. Zero means the commit is already
+     * there, so the push is a pure tag transfer.
+     */
+    private async _isTagOnRemote(name: string, remote: string): Promise<boolean> {
+        const count = await this.executeGitArgs([
+            'rev-list', '--count', `refs/tags/${name}`, '--not', `--remotes=${remote}`
+        ]);
+        return count.trim() === '0';
+    }
+
+    /** Remote a tag goes to when the caller did not name one. */
+    private async _defaultRemoteForPush(): Promise<string> {
+        const names = this.getRemoteNames();
+        if (names.length === 0) {return 'origin';}
+        if (names.length === 1) {return names[0];}
+        const upstream = await this.getUpstream(await this.getCurrentBranch()).catch(() => undefined);
+        const fromUpstream = remoteNameFromUpstream(upstream);
+        if (fromUpstream && names.includes(fromUpstream)) {return fromUpstream;}
+        return names.includes('origin') ? 'origin' : names[0];
     }
 
     /**

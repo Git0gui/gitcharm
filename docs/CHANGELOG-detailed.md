@@ -2,6 +2,44 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.1.9] - 2026-10-31
+
+本版主题是标签：推送前先问远端、本地与远端一次看清、每一行都能就地处理；提交行的引用徽章收成一枚，消息回到最前面。途中修掉一个"打包后附注标签全成假差异"的解析错误——它不是显示问题，而是把整个仓库的标签都判成了"两边不同"。
+
+### 新增
+
+- **标签推送先读远端**（`GitService.pushTags`；纯函数 `parseLsRemoteTags` / `parseTagRefList` / `diffTagRefs`，`src/services/gitUtils.ts`；单测 `src/test/gitService.test.ts` 新增四组）。原先「推送全部标签」把本地标签直接交给 `git push`：远端已有同名标签且指向别的提交时 git 非快进拒绝，整批推送一起失败，用户只看到一句 push failed，其余标签到底推上去没有无从判断。现在先 `ls-remote --tags` 读一次远端：同提交 → 视为已在远端、不重复发送（`upToDate`）；不同提交 → 保留远端原值并单独警告（`diverged`，交给「标签管理」处理）；远端没有才进入"标签所在提交必须在目标远端分支上"的既有闸门（`skipped`）。`ls-remote` 失败（离线 / 认证）只当拿不到清单，退回原路径让 `git push` 自己报错。结果按 pushed / skipped / upToDate / diverged 四类汇总。「推送标签…」选择器也读一次远端（`src/commands/tagCommands.ts` 的 `pushTag`）：指向同一提交的标签不列出，指向不同的保留但标注"推送会被跳过"，读不到远端退回原来的完整列表，让推送自己报错。
+- **「标签管理」对话框**（`idea-git.remoteTags`，`src/commands/tagCommands.ts` + `media/webview.js` 的 `showTagSyncDialog` / `.tag-sync-table` / `TAG_SYNC_OPS`）。前身是「远端标签差异…」，现在把两侧全部标签列进同一张表：`inSync` 行默认被「只看差异」筛掉（复选框默认勾选），差异行按 remoteOnly / localOnly / different 给出操作。每一行都能处理：`inSync` 给「删本地／删远端」，指向不同给「保留／覆盖本地／删远端」，仅一侧给拉取或推送。**只有选了真正会执行的动作才能勾选**——默认 `keep` 的行复选框禁用，点动作即勾选该行，「全选」只选可执行行，否则"已选择 N"与实际执行的行对不上。没有配置远端时跳过 `ls-remote`，表格退化为只读的本地标签清单（标题「标签管理 · 仅本地」，无操作列 / 勾选框 / 统计 / 筛选），两侧都空才只给一句提示。
+- **提交号点开进第三栏**（`tagSyncCommit` → 宿主走主屏幕同一套 `setDetail`，带 `origin: 'tagSync'` 因而不校验 `selectedHash`）：每行的本地 / 远端提交号是按钮，点一下右侧显示该提交的完整信息与文件列表。对话框遮罩的 `right` 收在 `#right` 左缘（`syncTagSyncBounds`），第三栏在对话框打开时仍可滚动、双击文件；`#right` 隐藏后遮罩铺满，所以对话框头部自带一个眼睛按钮——列自己的眼睛会随列一起消失，没有这个镜像就再也点不回来。第三栏提交卡片补上所在分支与标签（`CommitDetail.refs/tags`；命中 `_commitIndex` 直接复用行上的 refs，未命中走 `GitService._refsAtCommit` 的一次 `for-each-ref`，比对 `objectname` 与 `*objectname`，轻量 / 附注标签都认，`HEAD` 过滤掉）。
+- **提交行一个徽章 + 悬浮全量**（`refsTagsFirst` 在宿主把标签排到分支前；`media/webview.js` 的 `refChipHtml` / `.refs-popover`，z-index 9500）：标签与它所在的分支曾经并排成两枚徽章，长分支名会把行挤满；现在只取 `refs[0]`，其余折成 `+N`，悬浮逐条列出（标签黄 / 远程分支紫 / 本地分支蓝 / 当前分支实心）。定位沿用"先摆再校"：按徽章列的 left / bottom+4 摆好用渲染矩形复核，底部不够翻到上方；滚动、按下、行重建、鼠标离开都收起——重建后锚点节点已不在文档里，不收起就会浮在旧位置。
+- **删除标签的目的地一次问清**（`idea-git.deleteTag`）：确认框给「删除本地 / 删除本地和远端 / 取消」；选后者**先删远端再删本地**，网络那半失败（凭据、保护规则）不会连累用户同样要求的本地清理；`remote ref does not exist` 不算失败，那是"本来就没得删"。同时去掉 `showDialog` 的 30 秒墙钟兜底——挂时钟会在用户还没选的时候释放监听、留下点不动的按钮；改为视图隐藏 / 销毁时结算，面板不可见时退回原生模态框。批量「删除标签…」（`idea-git.deleteTags`）先多选标签，确认框明说本地与远端一起删，**只有每个远端删除都成功才动本地**，任一失败整体中止并提示重试，不留下"远端删了、本地还在"的半截状态。
+- **无远端时不再黑盒失败**（`ensureRemote`）：推送标签前先确认有远端，否则提示"标签只能保存在本地"并给「管理远端」入口；删除框在无远端时把文案改成"此仓库没有配置远端，只能删除本地标签"，不再让 `git push origin` 甩出一句看起来像仓库损坏的 fatal。
+- **提示语收敛**（`summarizeNames`）：超过 3 个标签名就写成"前 3 个… (N)"，用于推送 / 删除的确认框、进度标题与结果提示；只有一个标签时仍给完整名字。quick pick 仍列全量——那是选择器，不是提示。
+
+### 变更
+
+- **工具栏标签菜单**改为「推送标签… / 删除标签… / 标签管理…」：「推送全部标签」撤出菜单（`idea-git.pushAllTags` 只留在命令面板）；`package.json` 与两份 `package.nls*.json` 新增 `idea-git.deleteTags` / `idea-git.pushAllTags` / `idea-git.remoteTags` 声明，`idea-git.deleteTag` 标题从"删除本地标签"改为"删除标签"。
+- **提交行排版**：消息在前、徽章在后（IDEA Log 的顺序）——`.msgline` 的 `.msg` 保持自然宽度，徽章列 `flex: none`，行窄时只让消息出省略号。消息 tooltip 删掉重复的分支两行，分支与标签只在徽章这一处出现。
+
+### 修复
+
+- **打包后的附注标签全被误判成"指向不同提交"**（`GitService.getTagRefs` 取代 `RefsReader` 读文件路径成为主路径）：clone 或 gc 之后附注标签对象待在 pack 里，`RefsReader` 只能 inflate 松散对象，拿回来的是 tag 对象哈希；`ls-remote` 给的是剥开后的提交哈希，两边一比每个附注标签都成了差异——实测 svelte 仓库 1035 条全部假冲突，而且这个哈希不对应任何提交，标签徽章一起消失。改为 `for-each-ref refs/tags --format=%(objectname)\t%(*objectname)\t%(refname:short)`（`parseTagRefList`，`%(*objectname)` 为空则回落到 `%objectname`，轻量标签不受影响），3s 缓存 + in-flight Promise 去重，`invalidateVolatile()` 清缓存；读文件保留为无 git 时的兜底。`listTags` / `getTagsAt` 随之变异步，调用点全部 `await`。
+- **形如 `feat/x` 的本地分支被当成远程**（`isRemoteRefName`）：以前见到 `/` 就当远程，本地带斜杠的分支会拿到云图标；改为按 `state.remote` 里的远程名首段比对，`remotes/` 前缀兜底。
+- **「标签管理」操作列被挤出可视区**（`media/webview.css` + `webview.js` 的 ResizeObserver）：表格曾带 `min-width: 720px`，在 1100px 宽的宿主要求下操作列直接被横向滚动条吃出屏幕。表格宽度改跟面板（`#right` 可拖动，媒体查询量不到），密度由表格自身的 `ResizeObserver` 切 `compact`（<640 隐藏提交号列）与 `narrow`（<460 再隐藏状态徽章），操作列永远留在可视区。
+- **对话框遮罩压住第三栏分隔条**（`media/webview.js` + `media/webview.css`）：遮罩右缘 = `#right` 左缘，而 5px 分隔条正好就在那条边上——用户点提交号看到被截断的文件路径后，想拖宽第三栏毫无反应。`body.tag-sync-open #resizer-right { z-index: 2100 }` 把分隔条抬到遮罩（2000）之上；`setup()` 的 `onMove` 回调 `syncTagSyncBounds()`，遮罩跟着分隔条走（只在 `resize` 同步会让对话框停在旧边界上）；被拖拽钉死过宽度的对话框（`attachDialogResize` 写了内联 `width`）在第三栏变宽时钳到遮罩内，否则它会反过来压住刚被拖出来看文件的那一栏。CSS 定宽的框自己会缩，不受影响。
+- **远端标签指向的提交还没拉到本地**：`git show` 报 `bad object` 时提示"先拉取对应标签"，不把 git 的报错原样甩给用户。
+
+### 文档
+
+- README 中英 What's New 换成标签管理，Features / Tags 与概览同步（提交行徽章、第三栏引用、删除标签目的地、推送前先读远端）；`docs/CSDN-GitCharm使用说明.md` 补「标签管理」小节与常用操作行。
+- AGENTS.md：§7 补提交行"消息在前、徽章在后 / 一枚徽章 + 悬浮全量 / 远程判定只看远程名"与第三栏提交卡片展示引用；§8 补标签管理对话框的不变量（遮罩让出第三栏分隔条、密度按表格宽度、可勾选范围、bad object 提示）、删除标签的目的地与"先删远端"、工具栏菜单构成、`summarizeNames`。
+
+### 验证
+
+- compile / lint（0 error，66 warning）/ test 全绿，386 例 89 组（`src/test/gitService.test.ts` 新增 `refsTagsFirst`、`parseLsRemoteTags`、`parseTagRefList`、`diffTagRefs` 四组，135 行）。
+- 预览 harness（headless Chrome）验证「标签管理」对话框：分隔条在遮罩之上可拖、遮罩随拖动收放（右缘 1022 → 862）、拖回后 1162；钉宽度的对话框按遮罩钳回（boxRight 610 ≤ overlayRight 622）；取消后对话框移除且 `body.tag-sync-open` 清掉。预览夹具补了一个标签，覆盖多引用徽章与各类图标。
+- 待复验（需要真实工作台）：标签管理对话框的表格密度与操作列、推送 / 删除确认、附注标签在打包仓库里的徽章位置；`media/` 改动后开发宿主跑旧代码，必须完全重启，必要时 bump 版本号让缓存失效。
+
 ## [0.1.8] - 2026-10-30
 
 本版的主题是"历史看得更细"：新增一个独立面板，把 blame 那一行追溯到被改写的每一次，并把差异收敛到选中的几行；文件历史复用同一个面板；面板与对话框修掉三处排版问题；写操作撞上遗留锁文件不再只能手动清。

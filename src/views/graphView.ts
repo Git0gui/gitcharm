@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, FileStat, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
-import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
+import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
@@ -622,23 +622,40 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Returns the selected action or undefined if dismissed.
      */
     showDialog(message: string, actions: string[], type: 'warn' | 'info' | 'error' = 'warn'): Promise<string | undefined> {
+        const view = this._view;
+        if (!view) {return Promise.resolve(undefined);}
+        // Command palette can run a command whose dialog would land in a hidden
+        // view, where the frame (and the dialog with it) does not exist. Ask in a
+        // native modal instead: buffering it would wait for a panel the user has
+        // no reason to open.
+        if (!view.visible) {
+            const options: vscode.MessageOptions = { modal: true };
+            const ask = (msg: string): Thenable<string | undefined> =>
+                type === 'error' ? vscode.window.showErrorMessage(msg, options, ...actions)
+                : type === 'info' ? vscode.window.showInformationMessage(msg, options, ...actions)
+                : vscode.window.showWarningMessage(msg, options, ...actions);
+            return Promise.resolve(ask(message));
+        }
         return new Promise((resolve) => {
-            if (!this._view) {
-                resolve(undefined);
-                return;
-            }
-            const handler = this._view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
-                if (msg.command === 'dialogAction') {
-                    handler.dispose();
-                    resolve(msg.action);
-                }
-            });
+            const subscriptions: vscode.Disposable[] = [];
+            let settled = false;
+            const settle = (action?: string) => {
+                if (settled) {return;}
+                settled = true;
+                while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+                resolve(action);
+            };
+            subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+                if (msg.command === 'dialogAction') {settle(msg.action);}
+            }));
+            // Hiding the panel destroys the dialog's DOM, so an answer can never
+            // arrive — settle then instead of on a clock, which used to leave a
+            // dialog on screen whose buttons were already dead.
+            subscriptions.push(view.onDidChangeVisibility(() => {
+                if (!view.visible) {settle(undefined);}
+            }));
+            subscriptions.push(view.onDidDispose(() => settle(undefined)));
             this._post({ command: 'showDialog', message, actions, type });
-            // Fallback: resolve after 30s in case user closes panel
-            setTimeout(() => {
-                handler.dispose();
-                resolve(undefined);
-            }, 30000);
         });
     }
 
@@ -785,6 +802,39 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }));
             subscriptions.push(view.onDidDispose(() => settle(undefined)));
             postDialog(preview);
+        });
+    }
+
+    /**
+     * Show the local-vs-remote tag table and resolve with the rows the user
+     * chose to act on. An empty array means "nothing selected"; undefined means
+     * the dialog was dismissed or the view disappeared under it. Like the push
+     * dialog, the listener lives until it settles — a dialog left open stays
+     * usable, and losing the view settles it so the command never hangs.
+     */
+    showTagSyncDialog(remote: string, rows: TagSyncRow[], readOnly = false): Promise<TagSyncDecision[] | undefined> {
+        return new Promise((resolve) => {
+            const view = this._view;
+            if (!view) {
+                resolve(undefined);
+                return;
+            }
+            const subscriptions: vscode.Disposable[] = [];
+            let settled = false;
+            const settle = (items?: TagSyncDecision[]) => {
+                if (settled) {return;}
+                settled = true;
+                while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+                resolve(items);
+            };
+            subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+                if (msg.command === 'tagSyncConfirm') {settle(msg.items ?? []);}
+            }));
+            subscriptions.push(view.onDidChangeVisibility(() => {
+                if (!view.visible) {settle(undefined);}
+            }));
+            subscriptions.push(view.onDidDispose(() => settle(undefined)));
+            this._post({ command: 'showTagSyncDialog', remote, rows, readOnly });
         });
     }
 
@@ -1152,6 +1202,37 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         });
                     } catch (error) {
                         vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: formatGitError(error) }));
+                    } finally {
+                        this._postLoading('detail', false);
+                    }
+                    break;
+                case 'tagSyncCommit':
+                    // Same detail UI as a selected row, but the log selection
+                    // stays where it is: `origin` tells the webview to accept
+                    // the payload without a matching selected hash.
+                    this._postLoading('detail', true);
+                    try {
+                        const [commit, files] = await Promise.all([
+                            this._gitService.getCommitDetail(message.hash),
+                            this._gitService.getCommitFilesWithStats(message.hash)
+                        ]);
+                        this._post({
+                            command: 'setDetail',
+                            origin: 'tagSync',
+                            commit,
+                            files,
+                            existingPaths: await this._existingWorkingPaths(files)
+                        });
+                    } catch (error) {
+                        // A remote-only tag can point at a commit that was never
+                        // fetched; "bad object" is the expected answer there, not
+                        // a broken repository, so it gets its own next step.
+                        const text = error instanceof Error ? error.message : String(error);
+                        if (/bad object|unknown revision|not a valid object/i.test(text)) {
+                            vscode.window.showWarningMessage(t('tag.commitNotLocal'));
+                        } else {
+                            vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: formatGitError(error) }));
+                        }
                     } finally {
                         this._postLoading('detail', false);
                     }
@@ -1807,10 +1888,25 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await vscode.commands.executeCommand('idea-git.createTag', commitNode);
                     return;
                 case 'deleteTag':
-                    await vscode.commands.executeCommand('idea-git.deleteTag', commitNode);
+                    await vscode.commands.executeCommand('idea-git.deleteTag', message.tag ? { ...commitNode, tag: message.tag } : commitNode);
                     return;
                 case 'pushTag':
-                    await vscode.commands.executeCommand('idea-git.pushTag', commitNode);
+                    await vscode.commands.executeCommand('idea-git.pushTag', message.tag ? { ...commitNode, tag: message.tag } : commitNode);
+                    return;
+                case 'pushAllTags':
+                    await vscode.commands.executeCommand('idea-git.pushAllTags');
+                    return;
+                case 'deleteTags':
+                    // No node: the command opens the tag picker itself.
+                    await vscode.commands.executeCommand('idea-git.deleteTags');
+                    return;
+                case 'pickPushTags':
+                    // No node means "every tag in the repository", which opens the
+                    // quick pick instead of pushing anything directly.
+                    await vscode.commands.executeCommand('idea-git.pushTag', undefined);
+                    return;
+                case 'remoteTags':
+                    await vscode.commands.executeCommand('idea-git.remoteTags');
                     return;
                 case 'toggleFavorite': {
                     // A mark on the tree, not on git: nothing to reload, and the
@@ -2543,6 +2639,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 </button>
                 <button class="col-refresh no-spin" id="stash-save" title="${t('ui.stashSave')}">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2.8h12v2.4H2z"/><path d="M3.2 5.2V13h9.6V5.2"/><path d="M6.4 8.1h3.2"/></svg>
+                </button>
+                <button class="col-refresh no-spin" id="tag-push" title="${t('ui.tags')}">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2 2h5l7 7-5 5-7-7z"/><circle cx="4.6" cy="4.6" r="1"/></svg>
                 </button>
                 <button class="col-refresh" id="rf-branch" title="${t('ui.refreshBranches')}">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 1.5v3h-3"/></svg>

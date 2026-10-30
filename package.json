@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -211,8 +211,23 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.deleteTags",
+        "title": "%cmd.deleteTags%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.pushTag",
         "title": "%cmd.pushTag%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.pushAllTags",
+        "title": "%cmd.pushAllTags%",
+        "category": "GitCharm"
+      },
+      {
+        "command": "idea-git.remoteTags",
+        "title": "%cmd.remoteTags%",
         "category": "GitCharm"
       },
       {

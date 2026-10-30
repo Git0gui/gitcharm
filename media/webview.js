@@ -360,6 +360,9 @@ function applyRestoreNow() {
                 // The panel's own min wins over the center floor when the window is
                 // too small to honor both — a stuck divider beats an unusable bar.
                 panel.style.width = Math.max(minW, Math.min(newW, maxSidePanelWidth(panel))) + 'px';
+                // The tag dialog's overlay stops at this column, so its bound has
+                // to follow the divider while it moves, not only on window resize.
+                syncTagSyncBounds();
             }
             function onUp() {
                 document.removeEventListener('mousemove', onMove);
@@ -432,6 +435,16 @@ function laneColor(name) {
         laneColorCache[name] = palette[Object.keys(laneColorCache).length % palette.length];
     }
     return laneColorCache[name];
+}
+// Ref shown first is now a tag (tags lead the row), but a lane's colour should
+// stay keyed to the branch line — tagging a commit must not repaint the graph.
+function branchColorSeed(c) {
+    var refs = (c.refs || []).filter(function (r) { return r !== 'HEAD'; });
+    var tags = c.tags || [];
+    for (var i = 0; i < refs.length; i++) {
+        if (tags.indexOf(refs[i]) < 0) {return refs[i];}
+    }
+    return refs[0];
 }
 function avatarColor(name) {
     var h = 0;
@@ -509,6 +522,9 @@ var I_BRANCH = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stro
 // Same silhouette with filled nodes: the checked-out branch has to stand out in the tree.
 var I_BRANCH_CURRENT = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4.5" cy="3.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="4.5" cy="12.5" r="2" fill="currentColor" stroke-width="1"/><circle cx="11.5" cy="5.5" r="2" fill="currentColor" stroke-width="1"/><path d="M4.5 5.5v5"/><path d="M11.5 7.5c0 3-7 1.5-7 5"/></svg>';
 var I_CLOUD = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 12a3 3 0 0 1 0-6 4 4 0 0 1 7.5 1 2.5 2.5 0 0 1-.5 5z"/></svg>';
+// A price tag lying on its side: the ref list uses it for refs/tags, so a name
+// is never mistaken for a branch.
+var I_TAG = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2.2 2.8h5.4l6 6-5.4 5.2-6-6z"/><circle cx="5.3" cy="5.3" r="1"/></svg>';
 // A trunk with two branches off it: the history of every branch at once.
 var I_ALL_BRANCHES = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 2.4v11.2"/><circle cx="3" cy="3.4" r="1.3"/><path d="M3 6.6h4.2"/><circle cx="8.9" cy="6.6" r="1.3"/><path d="M3 11h4.2"/><circle cx="8.9" cy="11" r="1.3"/></svg>';
 // Archive box: the lid, the body and the slot a stash is put through.
@@ -784,7 +800,37 @@ function markRefsOverflow(refsList) {
     }
 }
 
+/** Remote refs start with the remote's name (`origin/main`); a local branch may
+ *  contain a slash just as well (`feat/x`), so the slash alone proves nothing.
+ *  The remote names come from the branch list the host already sent. */
+function isRemoteRefName(name) {
+    if (name.indexOf('remotes/') === 0) {return true;}
+    var slash = name.indexOf('/');
+    if (slash <= 0) {return false;}
+    var head = name.substring(0, slash);
+    var remotes = state.remote || [];
+    for (var i = 0; i < remotes.length; i++) {
+        if (remotes[i].indexOf(head + '/') === 0) {return true;}
+    }
+    return false;
+}
+
+/** One badge per commit: the host sorts tags first, so a tagged commit shows the
+ *  tag. The rest of the refs fold into a `+N` counter and are spelled out by the
+ *  hover popover — a row belongs to the subject, not to a wall of branch names. */
+function refChipHtml(name, extra, tags) {
+    var isTag = tags.indexOf(name) >= 0;
+    var cls = 'chip';
+    if (isTag) {cls += ' tag';}
+    else if (name === state.current) {cls += ' cur';}
+    else if (isRemoteRefName(name)) {cls += ' remote';}
+    return '<span class="' + cls + '"' + (isTag ? ' data-tag="' + esc(name) + '"' : '') + '>' +
+        esc(name) + (extra > 0 ? '<span class="chip-more">+' + extra + '</span>' : '') + '</span>';
+}
+
 function renderRows(appendOnly) {
+    // A rebuild pulls the rows the popover is anchored to out from under it.
+    if (window._hideRefsPopover) {window._hideRefsPopover();}
     var list = state.commits;
     if (list.length === 0) {
         rowsPainted = { count: 0, graphW: -1 };
@@ -849,7 +895,7 @@ function renderRows(appendOnly) {
         var expecting = [];
         for (var k = 0; k < lanes.length; k++) if (lanes[k].pending === c.hash) expecting.push(k);
         var li = expecting.length ? expecting[0] : slotLane();
-        var refName = (c.refs || []).filter(function (r) { return r !== 'HEAD'; })[0];
+        var refName = branchColorSeed(c);
         if (!lanes[li].color) lanes[li].color = laneColor(refName || ('anon' + li));
         commitLane[c.hash] = li;
         laneLastRow[li] = i;
@@ -880,27 +926,10 @@ function renderRows(appendOnly) {
     list.forEach(function (c, i) {
         if (i < from) {parts.push(''); return;}
         var html = '';
-        var chips = '';
-        (c.refs || []).forEach(function (r) {
-            if (r === 'HEAD') return;
-            
-            // Determine ref type for styling. Tags are known by the host (it read
-            // refs/tags), so the badge never guesses from the name's shape.
-            var isTag = (c.tags || []).indexOf(r) >= 0;
-            var isBranch = !r.includes('/') && !isTag;
-            var isRemote = r.indexOf('origin/') === 0 || r.indexOf('remotes/') === 0;
-
-            var cls = 'chip';
-            if (isTag) {
-                cls += ' tag'; // Yellow badge for tags
-            } else if (r === state.current) {
-                cls += ' cur';
-            } else if (isRemote) {
-                cls += ' remote';
-            }
-            
-            chips += '<span class="' + cls + '">' + esc(r) + '</span>';
-        });
+        var refNames = (c.refs || []).filter(function (r) {return r !== 'HEAD';});
+        var chips = refNames.length
+            ? refChipHtml(refNames[0], refNames.length - 1, c.tags || [])
+            : '';
 
         // Build tooltip with all available info including branches
         var commitTooltip = '';
@@ -912,45 +941,19 @@ function renderRows(appendOnly) {
         // Line 2: Author and date
         commitTooltip += T('w.authorPrefix') + esc(c.author || '') + '\n';
         commitTooltip += T('w.timePrefix') + fmtDateTime(c.date) + '\n';
-        
-        // Add branch refs to tooltip if available
-        if (c.refs && c.refs.length > 0) {
-            var localBranches = [];
-            var remoteBranches = [];
-            c.refs.forEach(function(r) {
-                if (r === 'HEAD') return;
-                if (r.indexOf('/') !== -1) {
-                    remoteBranches.push(r);
-                } else {
-                    localBranches.push(r);
-                }
-            });
-            
-            if (localBranches.length > 0 || remoteBranches.length > 0) {
-                commitTooltip += '\n'; // Separator line
-                
-                // Local branches
-                if (localBranches.length > 0) {
-                    commitTooltip += T('w.localBranchesPrefix') + localBranches.map(esc).join(', ') + '\n';
-                }
+        // Branches and tags deliberately stay out of this tooltip: they belong to
+        // the badge cell, whose hover list shows every ref with its own icon.
 
-                // Remote branches (strip remote name prefix like origin/)
-                if (remoteBranches.length > 0) {
-                    var remoteNames = remoteBranches.map(function(rb) {
-                        var parts = rb.split('/');
-                        return parts.length > 1 ? parts.slice(1).join('/') : rb;
-                    });
-                    commitTooltip += T('w.remoteBranchesPrefix') + remoteNames.map(esc).join(', ') + '\n';
-                }
-            }
-        }
-
-        html += '<div class="row' + (c.hash === state.selectedHash ? ' sel' : '') + '" data-hash="' + esc(c.hash) + '">';
-        html += '<div class="garea" style="width:' + graphW + 'px"></div>';
-        html += '<div class="refs">' + chips + '</div>';
         // Display only first line of commit message in list
         var displayMessage = esc(c.message).split('\n')[0];
+        html += '<div class="row' + (c.hash === state.selectedHash ? ' sel' : '') + '" data-hash="' + esc(c.hash) + '">';
+        html += '<div class="garea" style="width:' + graphW + 'px"></div>';
+        // Subject first, badges after it — the order IDEA's log uses, so the
+        // message keeps its own column instead of being pushed aside by refs.
+        html += '<div class="msgline">';
         html += '<div class="msg" data-title="' + commitTooltip + '">' + displayMessage + '</div>';
+        html += '<div class="refs">' + chips + '</div>';
+        html += '</div>';
         html += '<div class="rauthor" data-title="' + commitTooltip + '">' + esc(c.author || '') + '</div>';
         html += '<div class="rdate" data-title="' + commitTooltip + '">' + esc(fmtRelativeTime(c.date)) + '</div>';
         html += '<div class="avatar" style="background:' + avatarColor(c.author || '?') + '">' + esc((c.author || '?').charAt(0).toUpperCase()) + '</div>';
@@ -959,6 +962,9 @@ function renderRows(appendOnly) {
     });
 
     var wrap = document.getElementById('rows');
+    // The graph switch hides lane colours, and without lanes the branch badges
+    // are just a second copy of the tree on the left — they only cost message width.
+    wrap.classList.toggle('no-refs', state.graphVisible === false);
     if (from > 0) {
         // The canvas sits at index 0, so the appended rows are always the tail.
         var kids = wrap.children;
@@ -1214,8 +1220,7 @@ function drawGraphCanvas(list, lanes, commitLane, laneLastRow, laneW, graphW, to
     // Draw commit dots
     list.forEach(function (c, i) {
         var li = commitLane[c.hash];
-        var refName = (c.refs || []).filter(function (r) { return r !== 'HEAD'; })[0];
-        var isHead = !!refName && (c.refs || []).indexOf(state.current) >= 0;
+        var isHead = !!state.current && (c.refs || []).indexOf(state.current) >= 0;
         var color = lanes[li].color || '#888';
         var x = lx(li);
         var y = ry(i);
@@ -1334,7 +1339,36 @@ function applyDetailVisibility() {
     var tg = document.getElementById('tg-files');
     tg.title = state.detailVisible ? T('w.hideDetail') : T('w.showDetail');
     tg.classList.toggle('off', !state.detailVisible);
+    var tagToggle = document.querySelector('.tag-sync-detail-toggle');
+    if (tagToggle) {
+        tagToggle.setAttribute('data-title', state.detailVisible ? T('w.hideDetail') : T('w.showDetail'));
+        tagToggle.classList.toggle('off', !state.detailVisible);
+    }
+    syncTagSyncBounds();
 }
+
+/** The tag-diff dialog leaves the detail column uncovered, so its hashes can
+ *  be clicked while the third panel shows what they point at. Hidden detail
+ *  column (or no dialog) means the overlay keeps the full width. */
+var tagSyncOverlay = null;
+function syncTagSyncBounds() {
+    if (!tagSyncOverlay) {return;}
+    var right = document.getElementById('right');
+    var edge = window.innerWidth;
+    if (state.detailVisible && right && right.offsetWidth > 0) {
+        edge = right.getBoundingClientRect().left;
+    }
+    tagSyncOverlay.style.right = Math.max(0, window.innerWidth - edge) + 'px';
+    // A frame that was dragged carries a fixed pixel width and would otherwise
+    // spill over the detail column — i.e. sit on top of the files the user just
+    // widened the column to read. CSS-sized frames shrink by themselves.
+    var box = tagSyncOverlay.querySelector('.push-dialog-box');
+    if (box && box.style.width) {
+        var room = tagSyncOverlay.clientWidth - 24;
+        if (room > 0 && box.offsetWidth > room) {box.style.width = room + 'px';}
+    }
+}
+window.addEventListener('resize', syncTagSyncBounds);
 
 /** The stash picked in the tree: its own card, then the files it carries. */
 function renderStashDetail(info, filesBox) {
@@ -1454,6 +1488,15 @@ function renderDetail() {
     var mh = '<div class="ccard" data-title="' + tip + '">';
     mh += '<div class="crow"><span class="hashchip">' + esc(c.shortHash) + '</span></div>';
     mh += '<div class="crow"><span class="cmsg">' + esc(c.message) + '</span></div>';
+    // Branches and tags the commit sits on. Same badge language as the log
+    // rows, but spelled out: the card has the room and the user is here to
+    // read the commit, not to scan a list.
+    var refNames = (c.refs || []).filter(function (name) { return name !== 'HEAD'; });
+    if (refNames.length > 0) {
+        mh += '<div class="crow crefs"><span>' + refNames.map(function (name) {
+            return refChipHtml(name, 0, c.tags || []);
+        }).join('') + '</span></div>';
+    }
     mh += '<div class="crow"><span class="avatar" style="background:' + avatarColor(c.author || '?') + '">' + esc((c.author || '?').charAt(0).toUpperCase()) + '</span>' +
          '<span class="cmeta">' + esc(c.author) + ' &lt;' + esc(c.authorEmail) + '&gt; · ' + esc(fmtRelativeTime(c.authorDate || c.date)) + '</span></div>';
     
@@ -2413,6 +2456,19 @@ document.getElementById('stash-save').addEventListener('click', function () {
     vscode.postMessage({ command: 'action', action: 'stashSave' });
 });
 
+// Tag actions are repo-wide, so they live next to stash-all rather than on a
+// commit row: pick which tags to push, or send every local tag in one go.
+document.getElementById('tag-push').addEventListener('click', function () {
+    var r = this.getBoundingClientRect();
+    showMenu(r.left, r.bottom + 4, [
+        ['pickPushTags', T('menu.pushTagPick')],
+        ['deleteTags', T('menu.deleteTags')],
+        ['remoteTags', T('menu.remoteTags')]
+    ], function (action) {
+        vscode.postMessage({ command: 'action', action: action });
+    });
+});
+
 document.getElementById('tg-files').addEventListener('click', function () {
     state.detailVisible = !state.detailVisible;
     applyDetailVisibility();
@@ -2574,6 +2630,24 @@ document.getElementById('rows').addEventListener('click', function (e) {
 });
 
 document.getElementById('rows').addEventListener('contextmenu', function (e) {
+    // A tag badge carries its own two actions. Handle it before the row menu so
+    // right-clicking the badge never offers the whole-commit list.
+    var tagChip = e.target.closest('.refs .chip.tag');
+    if (tagChip) {
+        e.preventDefault();
+        if (window._hideTooltip) window._hideTooltip();
+        var tagName = tagChip.getAttribute('data-tag');
+        var tagRow = tagChip.closest('.row');
+        var tagHash = tagRow ? tagRow.getAttribute('data-hash') : undefined;
+        showMenu(e.clientX, e.clientY, [
+            ['pushTag', T('menu.pushTag')],
+            ['deleteTag', T('menu.deleteTag')]
+        ], function (action) {
+            vscode.postMessage({ command: 'action', action: action, tag: tagName, hash: tagHash });
+        });
+        return;
+    }
+
     var row = e.target.closest('.row');
     if (!row) return;
     e.preventDefault();
@@ -3571,6 +3645,24 @@ window.addEventListener('message', function (ev) {
         // Keep hasMoreAbove for the same reason, on the upward side.
         setTopLoader(false);
     } else if (m.command === 'setDetail') {
+        if (m.origin === 'tagSync') {
+            // A commit picked in the tag-diff dialog, not in the log: the row
+            // selection stays as it was, but the card must not keep deferring
+            // to a stash or a multi-select group that is still remembered.
+            state.stashDetail = null;
+            state.multiCommits = null;
+            state.detail = {
+                commit: m.commit,
+                files: m.files,
+                existingPaths: m.existingPaths || []
+            };
+            if (!state.detailVisible) {
+                state.detailVisible = true;
+                applyDetailVisibility();
+            }
+            renderDetail();
+            return;
+        }
         // A slower answer for a commit the user already clicked away from must
         // not overwrite the panel (revealCommit / refreshFiles can interleave).
         if (!state.selectedHash || m.commit.hash !== state.selectedHash) { return; }
@@ -3775,6 +3867,8 @@ window.addEventListener('message', function (ev) {
         showSquashMessageDialog(m.prompt, m.initialValue, m.placeholder);
     } else if (m.command === 'showPushDialog') {
         showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush, m.remote || 'origin', m.remotes || []);
+    } else if (m.command === 'showTagSyncDialog') {
+        showTagSyncDialog(m.remote || '', m.rows || []);
     } else if (m.command === 'pushFilesResponse') {
         window._handlePushFiles(m.hash, m.files || []);
     } else if (m.command === 'showCompareDialog') {
@@ -4766,6 +4860,280 @@ function showReflogDialog(scope, entries) {
     });
 }
 
+/* ---- tag differences dialog ---- */
+// Per-state verbs: [action, button label, tooltip]. A one-sided tag has an
+// obvious default; a conflict starts on "keep local" because pulling over it or
+// deleting the remote one destroys work. Agreeing tags have no default verb —
+// the only things worth doing there are deleting one side — so their row must
+// pick one of those before it can be checked.
+var TAG_SYNC_OPS = {
+    different: [['keep', 'tag.opKeep', 'tag.actionKeepLocal'], ['pullForce', 'tag.opOverwrite', 'tag.actionPullOverwrite'], ['deleteRemote', 'tag.opDeleteRemote', 'tag.actionDeleteRemote']],
+    remoteOnly: [['pull', 'tag.opPull', 'tag.actionPull'], ['deleteRemote', 'tag.opDeleteRemote', 'tag.actionDeleteRemote']],
+    localOnly: [['push', 'tag.opPush', 'tag.actionPush']],
+    inSync: [['deleteLocal', 'tag.opDeleteLocal', 'tag.actionDeleteLocal'], ['deleteRemote', 'tag.opDeleteRemote', 'tag.actionDeleteRemote']]
+};
+
+function showTagSyncDialog(remote, rows, readOnly) {
+    var existing = document.getElementById('tag-sync-dialog');
+    if (existing) {
+        if (existing._densityObserver) { existing._densityObserver.disconnect(); }
+        existing.remove();
+    }
+
+    var items = rows.map(function (r) {
+        return {
+            name: r.name,
+            state: r.state,
+            localHash: r.localHash || '',
+            remoteHash: r.remoteHash || '',
+            action: r.state === 'localOnly' ? 'push' : r.state === 'remoteOnly' ? 'pull' : 'keep',
+            checked: false
+        };
+    });
+    var diffItems = items.filter(function (item) { return item.state !== 'inSync'; });
+    var diffCount = diffItems.length;
+
+    function shortHash(hash) {
+        return hash ? hash.slice(0, 7) : '—';
+    }
+    function stateLabel(st) {
+        return st === 'remoteOnly' ? T('tag.stateRemoteOnly')
+            : st === 'localOnly' ? T('tag.stateLocalOnly')
+            : st === 'inSync' ? T('tag.stateInSync')
+            : T('tag.stateDifferent');
+    }
+    function hashHtml(hash) {
+        if (!hash) {
+            return '<span class="tag-sync-hash" data-title="' + esc(T('tag.syncAbsent')) + '">—</span>';
+        }
+        return '<button type="button" class="tag-sync-hash link" data-commit="' + esc(hash) +
+            '" data-title="' + esc(hash) + '\n' + esc(T('tag.syncOpenCommit')) + '">' +
+            esc(shortHash(hash)) + '</button>';
+    }
+    function rowHtml(item, index) {
+        var ops = readOnly ? '' : (TAG_SYNC_OPS[item.state] || []).map(function (op) {
+            var danger = op[0] === 'deleteRemote' || op[0] === 'deleteLocal';
+            return '<button class="tag-sync-op' + (danger ? ' danger' : '')
+                + (op[0] === item.action ? ' on' : '') + '" data-op="' + op[0] +
+                '" data-title="' + esc(T(op[2])) + '">' + esc(T(op[1])) + '</button>';
+        }).join('');
+        // A row is runnable only once a verb that actually does something is
+        // picked. Checkboxes follow that: a checked row must always be a row
+        // that will run, so "selected" and "applied" cannot drift apart.
+        var runnable = item.action !== 'keep';
+        var off = readOnly || !runnable;
+        // Read-only means no remote to act against, so the checkbox and the
+        // ops column are not rendered at all: disabled controls still suggest
+        // an action exists and merely cannot be reached.
+        return '<div class="tag-sync-row' + (item.state === 'inSync' ? ' in-sync' : '') + '" data-index="' + index + '">' +
+            (readOnly ? '' : '<input class="tag-sync-check" type="checkbox"' + (off ? ' disabled' : '') +
+            ' data-title="' + esc(!runnable ? T('tag.syncChooseAction')
+                : item.state === 'inSync' ? T('tag.syncRowInSync') : T('tag.syncCheckRow')) + '">') +
+            '<span class="tag-sync-name" data-title="' + esc(item.name) + '">' + esc(item.name) + '</span>' +
+            '<span class="tag-sync-state ' + item.state + '">' + stateLabel(item.state) + '</span>' +
+            hashHtml(item.localHash) + hashHtml(item.remoteHash) +
+            (readOnly ? '' : '<span class="tag-sync-ops">' + ops + '</span>') +
+            '</div>';
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'push-dialog-overlay';
+    overlay.id = 'tag-sync-dialog';
+    var title = remote ? T('tag.manageTagsTitle', { remote: remote }) : T('tag.manageTagsLocalTitle');
+    overlay.innerHTML = '<div class="push-dialog-box">' +
+        '<div class="push-dialog-header">' +
+        '<span class="tag-sync-title" data-title="' + esc(title) + '">' + esc(title) + '</span>' +
+        '<span class="tag-sync-found">' + esc(T('tag.syncFound', { count: diffCount })) + '</span>' +
+        // The detail column is reachable while this overlay is open, but its
+        // own eye toggle disappears with the column — once hidden it could not
+        // be brought back without closing the dialog. This mirror stays put.
+        '<button class="col-refresh no-spin tag-sync-detail-toggle' + (state.detailVisible ? '' : ' off') +
+        '" type="button" data-title="' + esc(state.detailVisible ? T('w.hideDetail') : T('w.showDetail')) + '">' +
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">' +
+        '<path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/>' +
+        '<circle cx="8" cy="8" r="2"/></svg></button>' +
+        '</div>' +
+        '<div class="push-dialog-body">' +
+        '<div class="push-commits-list full">' +
+        (readOnly ? '' : '<div class="tag-sync-stats">' +
+        '<span class="tag-sync-stat">' + esc(T('tag.syncStatTotal')) + '<b>' + items.length + '</b></span>' +
+        '<span class="tag-sync-stat sel">' + esc(T('tag.syncStatSelected')) + '<b id="tag-sync-selected">0</b></span>' +
+        '</div>') +
+        '<div class="tag-sync-toolbar">' +
+        (readOnly ? '' : '<label class="tag-sync-all"><input type="checkbox" id="tag-sync-all">' + esc(T('tag.syncSelectAll')) + '</label>') +
+        (readOnly ? '' : '<label class="tag-sync-all"><input type="checkbox" id="tag-sync-diff-only" checked>' + esc(T('tag.syncDiffOnly')) + '</label>') +
+        '<span class="tag-sync-hint">' + esc(readOnly ? T('tag.syncNoRemoteHint') : T('tag.syncHint')) + '</span>' +
+        '</div>' +
+        '<div class="tag-sync-table' + (readOnly ? ' read-only' : '') + '">' +
+        '<div class="tag-sync-head">' +
+        (readOnly ? '' : '<span></span>') +
+        '<span>' + esc(T('tag.colTag')) + '</span>' +
+        '<span>' + esc(T('tag.colState')) + '</span>' +
+        '<span>' + esc(T('tag.colLocal')) + '</span>' +
+        '<span>' + esc(T('tag.colRemote')) + '</span>' +
+        (readOnly ? '' : '<span class="tag-sync-col-actions">' + esc(T('tag.colAction')) + '</span>') +
+        '</div>' +
+        '<div class="tag-sync-list" id="tag-sync-list">' + items.map(rowHtml).join('') + '</div>' +
+        '</div>' +
+        '</div>' +
+        '</div>' +
+        '<div class="push-dialog-actions">' +
+        '<button class="dialog-btn ' + (readOnly ? 'primary' : 'secondary') + '" data-action="cancel">' + T('common.cancel') + '</button>' +
+        (readOnly ? '' : '<button class="dialog-btn primary" data-action="apply" disabled>' + T('tag.syncApply') + '</button>') +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+    // The backdrop ends at the detail column, so the column's divider sits under
+    // it; this class lifts the divider back above the overlay (webview.css).
+    document.body.classList.add('tag-sync-open');
+    tagSyncOverlay = overlay;
+    syncTagSyncBounds();
+    attachDialogResize(overlay, 'tagsync');
+
+    // The overlay is sized against the panel, not the viewport, so a media
+    // query cannot know how much room this table really has (the detail column
+    // is resizable). Density follows the table's own width: below 640px the
+    // commit columns go away, below 460px the state badge does too, and the
+    // ops column — the thing users act on — never leaves the visible area.
+    var tableEl = overlay.querySelector('.tag-sync-table');
+    function syncTagSyncDensity() {
+        var width = tableEl.clientWidth;
+        // A hidden panel measures 0; that is not a narrow table.
+        if (width === 0) { return; }
+        tableEl.classList.toggle('compact', width < 640);
+        tableEl.classList.toggle('narrow', width < 460);
+    }
+    syncTagSyncDensity();
+    if (window.ResizeObserver) {
+        var densityObserver = new ResizeObserver(syncTagSyncDensity);
+        densityObserver.observe(tableEl);
+        overlay._densityObserver = densityObserver;
+    }
+
+    var listEl = overlay.querySelector('#tag-sync-list');
+    var allBox = overlay.querySelector('#tag-sync-all');
+    var diffOnlyBox = overlay.querySelector('#tag-sync-diff-only');
+    var applyBtn = overlay.querySelector('.push-dialog-actions [data-action="apply"]');
+    var selectedEl = overlay.querySelector('#tag-sync-selected');
+
+    function applyFilter() {
+        var diffOnly = diffOnlyBox && diffOnlyBox.checked;
+        items.forEach(function (item, idx) {
+            var rowEl = listEl.querySelector('.tag-sync-row[data-index="' + idx + '"]');
+            if (rowEl) {rowEl.classList.toggle('filtered-out', !!(diffOnly && item.state === 'inSync'));}
+        });
+    }
+
+    function paintRow(rowEl, item) {
+        var runnable = item.action !== 'keep';
+        if (!runnable) { item.checked = false; }
+        rowEl.classList.toggle('selected', item.checked);
+        var box = rowEl.querySelector('.tag-sync-check');
+        box.disabled = !runnable;
+        box.checked = item.checked;
+        box.setAttribute('data-title', !runnable ? T('tag.syncChooseAction')
+            : item.state === 'inSync' ? T('tag.syncRowInSync') : T('tag.syncCheckRow'));
+        rowEl.querySelectorAll('.tag-sync-op').forEach(function (btn) {
+            btn.classList.toggle('on', btn.getAttribute('data-op') === item.action);
+        });
+    }
+
+    function updateStats() {
+        var selected = items.filter(function (item) { return item.checked; }).length;
+        var runnable = items.filter(function (item) { return item.action !== 'keep'; }).length;
+        if (selectedEl) {selectedEl.textContent = String(selected);}
+        if (allBox) {
+            allBox.checked = runnable > 0 && selected === runnable;
+            allBox.indeterminate = selected > 0 && selected < runnable;
+        }
+        if (applyBtn) {
+            applyBtn.disabled = selected === 0;
+            applyBtn.setAttribute('data-title', selected === 0 ? T('tag.syncNoneSelected') : '');
+        }
+    }
+
+    // Delegation: rows are static, but this keeps one handler per concern and
+    // survives any future re-render of the list.
+    listEl.addEventListener('click', function (e) {
+        var hashBtn = e.target.closest('.tag-sync-hash[data-commit]');
+        if (hashBtn) {
+            listEl.querySelectorAll('.tag-sync-hash.on').forEach(function (el) { el.classList.remove('on'); });
+            hashBtn.classList.add('on');
+            if (!state.detailVisible) {
+                state.detailVisible = true;
+                applyDetailVisibility();
+            }
+            vscode.postMessage({ command: 'tagSyncCommit', hash: hashBtn.getAttribute('data-commit') });
+            return;
+        }
+        var opBtn = e.target.closest('.tag-sync-op');
+        if (!opBtn) { return; }
+        var rowEl = opBtn.closest('.tag-sync-row');
+        var item = items[Number(rowEl.getAttribute('data-index'))];
+        item.action = opBtn.getAttribute('data-op');
+        // Choosing a verb is also a decision to act on the row; the checkbox
+        // remains the way to opt a row out without changing its verb. "Keep"
+        // runs nothing, so it un-checks instead of selecting a no-op.
+        item.checked = item.action !== 'keep';
+        paintRow(rowEl, item);
+        updateStats();
+    });
+    listEl.addEventListener('change', function (e) {
+        var box = e.target.closest('.tag-sync-check');
+        if (!box) { return; }
+        var rowEl = box.closest('.tag-sync-row');
+        var item = items[Number(rowEl.getAttribute('data-index'))];
+        item.checked = box.checked;
+        paintRow(rowEl, item);
+        updateStats();
+    });
+    if (allBox) {
+        allBox.addEventListener('change', function () {
+            var on = allBox.checked;
+            // Only rows with a verb that runs can be selected: "keep" (the
+            // default for a conflict, and the only state of an agreeing tag
+            // until a delete is picked) would make "select all" select no-ops.
+            items.forEach(function (item) { if (item.action !== 'keep') { item.checked = on; } });
+            listEl.querySelectorAll('.tag-sync-row').forEach(function (rowEl, idx) {
+                paintRow(rowEl, items[idx]);
+            });
+            updateStats();
+        });
+    }
+    if (diffOnlyBox) {diffOnlyBox.addEventListener('change', applyFilter);}
+
+    var detailToggle = overlay.querySelector('.tag-sync-detail-toggle');
+    if (detailToggle) {
+        detailToggle.addEventListener('click', function () {
+            state.detailVisible = !state.detailVisible;
+            applyDetailVisibility();
+            saveViewState();
+        });
+    }
+
+    overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var action = btn.getAttribute('data-action');
+            if (overlay._densityObserver) { overlay._densityObserver.disconnect(); }
+            overlay.remove();
+            tagSyncOverlay = null;
+            document.body.classList.remove('tag-sync-open');
+            if (action === 'apply') {
+                vscode.postMessage({
+                    command: 'tagSyncConfirm',
+                    items: items.filter(function (item) { return item.checked; })
+                        .map(function (item) { return { name: item.name, action: item.action }; })
+                });
+            } else {
+                vscode.postMessage({ command: 'tagSyncConfirm' });
+            }
+        });
+    });
+
+    applyFilter();
+    updateStats();
+}
+
 /* ---------- operation status indicator ---------- */
 // Operation status bar button event delegation (bind once, handle all clicks)
 (function initOperationButtons() {
@@ -4894,6 +5262,119 @@ function renderOperationStatus() {
             tooltip.style.top = (e.clientY + 10) + 'px';
         }
     });
+})();
+
+/**
+ * Ref badges give way to the subject when a row is narrow, and several refs run
+ * past the cell. Hovering the badge cell therefore opens the full list — one
+ * row per branch or tag with its own icon — the way IDEA's log does it.
+ */
+(function initRefsPopover() {
+    var pop = null;
+    var showTimer = null;
+    var hideTimer = null;
+
+    function ensure() {
+        if (pop) {return pop;}
+        pop = document.createElement('div');
+        pop.className = 'refs-popover';
+        pop.addEventListener('mouseenter', function() {
+            if (hideTimer) {clearTimeout(hideTimer); hideTimer = null;}
+        });
+        pop.addEventListener('mouseleave', scheduleHide);
+        document.body.appendChild(pop);
+        return pop;
+    }
+
+    function hide() {
+        if (showTimer) {clearTimeout(showTimer); showTimer = null;}
+        if (hideTimer) {clearTimeout(hideTimer); hideTimer = null;}
+        if (pop) {pop.classList.remove('visible');}
+    }
+    window._hideRefsPopover = hide;
+
+    function scheduleHide() {
+        if (hideTimer) {clearTimeout(hideTimer);}
+        hideTimer = setTimeout(hide, 120);
+    }
+
+    /** Same classification as the folded badge: tags from the host, remote names
+     *  from the actual remote list — `feat/x` is a local branch, not a cloud ref. */
+    function rowsFor(commit) {
+        var tags = commit.tags || [];
+        var html = '';
+        (commit.refs || []).forEach(function(name) {
+            if (name === 'HEAD') {return;}
+            var kind = tags.indexOf(name) >= 0 ? 'tag' : (isRemoteRefName(name) ? 'remote' : 'branch');
+            var icon = kind === 'tag' ? I_TAG : (kind === 'remote' ? I_CLOUD : (name === state.current ? I_BRANCH_CURRENT : I_BRANCH));
+            html += '<div class="refs-pop-row rp-' + kind + '">' +
+                '<span class="refs-pop-ico">' + icon + '</span>' +
+                '<span class="refs-pop-name">' + esc(name) + '</span></div>';
+        });
+        return html;
+    }
+
+    /** Place, then correct against the rendered box: CSS px and a zoomed rect
+     *  are different scales, so the first guess is not to be trusted. */
+    function place(cell) {
+        var col = cell.getBoundingClientRect();
+        var left = col.left;
+        var top = col.bottom + 4;
+        pop.style.left = left + 'px';
+        pop.style.top = top + 'px';
+        var box = pop.getBoundingClientRect();
+        if (box.right > window.innerWidth - 6) {
+            left = Math.max(6, window.innerWidth - 6 - box.width);
+            pop.style.left = left + 'px';
+        }
+        if (box.bottom > window.innerHeight - 6) {
+            top = col.top - box.height - 4;
+            if (top < 6) {top = Math.max(6, window.innerHeight - 6 - box.height);}
+            pop.style.top = top + 'px';
+        }
+    }
+
+    function showFor(cell) {
+        var row = cell.closest('.row');
+        var hash = row ? row.getAttribute('data-hash') : null;
+        if (!hash) {return;}
+        var commit = null;
+        var all = state.commits || [];
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].hash === hash) {commit = all[i]; break;}
+        }
+        if (!commit) {return;}
+        var html = rowsFor(commit);
+        if (!html) {return;}
+        ensure().innerHTML = html;
+        pop.classList.add('visible');
+        place(cell);
+    }
+
+    document.addEventListener('mouseover', function(e) {
+        var cell = e.target && e.target.closest ? e.target.closest('#rows .refs') : null;
+        if (!cell) {return;}
+        if (showTimer) {clearTimeout(showTimer); showTimer = null;}
+        if (hideTimer) {clearTimeout(hideTimer); hideTimer = null;}
+        if (pop && pop.classList.contains('visible')) {showFor(cell); return;}
+        showTimer = setTimeout(function() {
+            showTimer = null;
+            // The pointer may have left the cell while the delay ran.
+            if (cell.isConnected && cell.matches(':hover')) {showFor(cell);}
+        }, 150);
+    });
+
+    document.addEventListener('mouseout', function(e) {
+        var cell = e.target && e.target.closest ? e.target.closest('#rows .refs') : null;
+        if (!cell) {return;}
+        var to = e.relatedTarget;
+        if (to && (cell.contains(to) || (pop && pop.contains(to)))) {return;}
+        if (showTimer) {clearTimeout(showTimer); showTimer = null;}
+        scheduleHide();
+    });
+
+    document.getElementById('scroll').addEventListener('scroll', hide, { passive: true });
+    document.addEventListener('mousedown', hide, true);
 })();
 
 initPaneFocus();

@@ -57,6 +57,29 @@ export interface PushDialogCommit {
     date: string;
 }
 
+/**
+ * One tag whose local and remote state disagree, as shown in the remote-tag
+ * dialog. Hashes are full; the webview shortens them for display.
+ */
+export interface TagSyncRow {
+    name: string;
+    /** `inSync` rows have no default action — they are what the differences-only
+     *  filter hides — but can still be deleted on either side. */
+    state: 'remoteOnly' | 'localOnly' | 'different' | 'inSync';
+    /** Commit the local tag resolves to; absent when only the remote has it. */
+    localHash?: string;
+    /** Commit the remote tag resolves to; absent when only the local has it. */
+    remoteHash?: string;
+}
+
+/** `keep` is an explicit "leave the local tag alone"; nothing is run for it. */
+export type TagSyncOperation = 'keep' | 'pull' | 'pullForce' | 'push' | 'deleteRemote' | 'deleteLocal';
+
+export interface TagSyncDecision {
+    name: string;
+    action: TagSyncOperation;
+}
+
 /** Messages sent from the extension host to the webview. */
 export type ExtToWebviewMessage =
     | {
@@ -129,6 +152,9 @@ export type ExtToWebviewMessage =
         files: FileStat[];
         /** Subset of `files` that still exists in the current working tree. */
         existingPaths: string[];
+        /** `tagSync` means the third panel is showing a commit picked in the
+         *  tag-diff dialog, not the row selected in the log. */
+        origin?: 'tagSync';
     }
     | {
         command: 'filePreviewResponse';
@@ -178,6 +204,13 @@ export type ExtToWebviewMessage =
         /** All configured remotes; more than one turns the dialog's picker on. */
         remotes: string[];
     }
+    | {
+        command: 'showTagSyncDialog';
+        remote: string;
+        rows: TagSyncRow[];
+        /** No remote to act on: the table is a viewer, so nothing is selectable. */
+        readOnly?: boolean;
+    }
     | { command: 'pushFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
     | {
         command: 'showFileHistory';
@@ -213,7 +246,7 @@ export type WebviewAction =
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
     | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'
-    | 'newTag' | 'deleteTag' | 'pushTag'
+    | 'newTag' | 'deleteTag' | 'deleteTags' | 'pushTag' | 'pushAllTags' | 'pickPushTags' | 'remoteTags'
     | 'toggleFavorite'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
     | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove'
@@ -256,6 +289,8 @@ export type WebviewToExtMessage =
         hash?: string;
         hashes?: string[];
         path?: string;
+        /** Single tag a badge right-click asked about (`pushTag` / `deleteTag`). */
+        tag?: string;
         remainingHashes?: string[];
         /** Stash stack position (`stash@{n}`), for the stash tree section's actions. */
         stash?: number;
@@ -267,6 +302,10 @@ export type WebviewToExtMessage =
     | { command: 'saveViewState'; state: PersistedViewState }
     | { command: 'pushDialogAction'; action: string; force?: boolean }
     | { command: 'pushDialogRemote'; remote: string }
+    | { command: 'tagSyncConfirm'; items?: TagSyncDecision[] }
+    /** A local/remote hash clicked in the tag-diff dialog: show it in the
+     *  third column, with the same detail UI as a selected commit. */
+    | { command: 'tagSyncCommit'; hash: string }
     | { command: 'manageRemotes' }
     | { command: 'pushDialogFileDiff'; hash: string; path: string }
     | { command: 'getCommitFilesForPush'; hash: string }
