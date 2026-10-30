@@ -1032,9 +1032,23 @@ canvas.graph-canvas {
     color: var(--vscode-badge-foreground, #fff);
     white-space: nowrap;
     transition: all 0.15s ease;
+    /* Reduced to one badge per commit, so this one carries a long branch name
+       on its own: cut it with an ellipsis instead of running into the date. */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .chip:hover {
     transform: scale(1.05);
+}
+/* The rest of a commit's refs fold into this counter; the hover popover spells
+   them out, so the row keeps its width for the subject. */
+.chip-more {
+    margin-left: 5px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.28);
+    font-weight: 600;
 }
 
 /* Tag badge - yellow style like IDEA */

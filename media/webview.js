@@ -797,6 +797,34 @@ function markRefsOverflow(refsList) {
     }
 }
 
+/** Remote refs start with the remote's name (`origin/main`); a local branch may
+ *  contain a slash just as well (`feat/x`), so the slash alone proves nothing.
+ *  The remote names come from the branch list the host already sent. */
+function isRemoteRefName(name) {
+    if (name.indexOf('remotes/') === 0) {return true;}
+    var slash = name.indexOf('/');
+    if (slash <= 0) {return false;}
+    var head = name.substring(0, slash);
+    var remotes = state.remote || [];
+    for (var i = 0; i < remotes.length; i++) {
+        if (remotes[i].indexOf(head + '/') === 0) {return true;}
+    }
+    return false;
+}
+
+/** One badge per commit: the host sorts tags first, so a tagged commit shows the
+ *  tag. The rest of the refs fold into a `+N` counter and are spelled out by the
+ *  hover popover — a row belongs to the subject, not to a wall of branch names. */
+function refChipHtml(name, extra, tags) {
+    var isTag = tags.indexOf(name) >= 0;
+    var cls = 'chip';
+    if (isTag) {cls += ' tag';}
+    else if (name === state.current) {cls += ' cur';}
+    else if (isRemoteRefName(name)) {cls += ' remote';}
+    return '<span class="' + cls + '"' + (isTag ? ' data-tag="' + esc(name) + '"' : '') + '>' +
+        esc(name) + (extra > 0 ? '<span class="chip-more">+' + extra + '</span>' : '') + '</span>';
+}
+
 function renderRows(appendOnly) {
     // A rebuild pulls the rows the popover is anchored to out from under it.
     if (window._hideRefsPopover) {window._hideRefsPopover();}
@@ -895,28 +923,10 @@ function renderRows(appendOnly) {
     list.forEach(function (c, i) {
         if (i < from) {parts.push(''); return;}
         var html = '';
-        var chips = '';
-        (c.refs || []).forEach(function (r) {
-            if (r === 'HEAD') return;
-            
-            // Determine ref type for styling. Tags are known by the host (it read
-            // refs/tags), so the badge never guesses from the name's shape.
-            var isTag = (c.tags || []).indexOf(r) >= 0;
-            var isBranch = !r.includes('/') && !isTag;
-            var isRemote = r.indexOf('origin/') === 0 || r.indexOf('remotes/') === 0;
-
-            var cls = 'chip';
-            if (isTag) {
-                cls += ' tag'; // Yellow badge for tags
-            } else if (r === state.current) {
-                cls += ' cur';
-            } else if (isRemote) {
-                cls += ' remote';
-            }
-            
-            chips += '<span class="' + cls + '"' +
-                (isTag ? ' data-tag="' + esc(r) + '"' : '') + '>' + esc(r) + '</span>';
-        });
+        var refNames = (c.refs || []).filter(function (r) {return r !== 'HEAD';});
+        var chips = refNames.length
+            ? refChipHtml(refNames[0], refNames.length - 1, c.tags || [])
+            : '';
 
         // Build tooltip with all available info including branches
         var commitTooltip = '';
@@ -5118,13 +5128,14 @@ function renderOperationStatus() {
         hideTimer = setTimeout(hide, 120);
     }
 
-    /** Tags are known by the host (it read refs/tags); a slash marks a remote ref. */
+    /** Same classification as the folded badge: tags from the host, remote names
+     *  from the actual remote list — `feat/x` is a local branch, not a cloud ref. */
     function rowsFor(commit) {
         var tags = commit.tags || [];
         var html = '';
         (commit.refs || []).forEach(function(name) {
             if (name === 'HEAD') {return;}
-            var kind = tags.indexOf(name) >= 0 ? 'tag' : (name.indexOf('/') >= 0 ? 'remote' : 'branch');
+            var kind = tags.indexOf(name) >= 0 ? 'tag' : (isRemoteRefName(name) ? 'remote' : 'branch');
             var icon = kind === 'tag' ? I_TAG : (kind === 'remote' ? I_CLOUD : (name === state.current ? I_BRANCH_CURRENT : I_BRANCH));
             html += '<div class="refs-pop-row rp-' + kind + '">' +
                 '<span class="refs-pop-ico">' + icon + '</span>' +
