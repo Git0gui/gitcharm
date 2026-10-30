@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { GitService, tagNameProblem } from '../services/gitService';
+import { GitService, TagPushResult, tagNameProblem } from '../services/gitService';
 import { formatGitError, redactUrlCredentials } from '../services/gitUtils';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
@@ -37,10 +37,35 @@ export function registerTagCommands(
         });
     };
 
+    /**
+     * A tag held back by the "commit must already be on the remote" rule is not
+     * a git failure — no network call was made — so it reads as a warning that
+     * names the next step instead of an error with a log button.
+     */
+    const reportPush = (result: TagPushResult): void => {
+        if (result.pushed.length === 0) {
+            vscode.window.showWarningMessage(t('tag.commitNotPushed', {
+                names: result.skipped.join(', '),
+                remote: result.remote
+            }));
+            return;
+        }
+        vscode.window.showInformationMessage(
+            result.skipped.length > 0
+                ? t('tag.pushedSkipped', {
+                    count: result.pushed.length,
+                    names: result.skipped.join(', '),
+                    remote: result.remote
+                })
+                : result.pushed.length === 1
+                    ? t('tag.pushed', { name: result.pushed[0] })
+                    : t('tag.pushedMultiple', { count: result.pushed.length })
+        );
+    };
+
     const runPush = async (
         title: string,
-        push: () => Promise<unknown>,
-        successMessage: string,
+        push: () => Promise<TagPushResult>,
         failureMessage: (error: string) => string
     ): Promise<void> => {
         await vscode.window.withProgress({
@@ -49,8 +74,7 @@ export function registerTagCommands(
             cancellable: false
         }, async () => {
             try {
-                await push();
-                vscode.window.showInformationMessage(successMessage);
+                reportPush(await push());
             } catch (error) {
                 logger.error(`[GitCharm] tag push failed: ${redactUrlCredentials(combineErrorText(error))}`);
                 showNetworkError(failureMessage(formatGitError(error)));
@@ -176,14 +200,7 @@ export function registerTagCommands(
                 names.length === 1
                     ? t('tag.pushing', { name: names[0] })
                     : t('tag.pushingMultiple', { count: names.length }),
-                async () => {
-                    for (const name of names) {
-                        await gitService.pushTag(name);
-                    }
-                },
-                names.length === 1
-                    ? t('tag.pushed', { name: names[0] })
-                    : t('tag.pushedMultiple', { count: names.length }),
+                () => gitService.pushTags(names),
                 error => t('tag.pushFailed', { names: names.join(', '), error })
             );
             // Nothing about the local repository changed, so the panel must
@@ -206,8 +223,7 @@ export function registerTagCommands(
 
             await runPush(
                 t('tag.pushingAll', { count: names.length }),
-                () => gitService.pushAllTags(),
-                t('tag.pushedAll', { count: names.length }),
+                () => gitService.pushTags(names),
                 error => t('tag.pushAllFailed', { error })
             );
         })

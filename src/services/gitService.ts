@@ -204,6 +204,15 @@ let _tempSeq = 0;
 /** Top-level git dir files whose contents the caches depend on. */
 const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir']);
 
+/** Outcome of a tag push: what went out, and which tags the guard held back. */
+export interface TagPushResult {
+    remote: string;
+    pushed: string[];
+    /** Tags sitting on commits the remote does not have; pushing them would
+     *  land the commit there without any remote branch pointing at it. */
+    skipped: string[];
+}
+
 export class GitService {
     /** Max cached entries per cache (branch list / commit log / per-commit files). */
     static readonly CACHE_MAX = 20; // Reduced from 30 to save memory
@@ -2823,26 +2832,50 @@ export class GitService {
     }
 
     /**
-     * Push one tag to a remote. The explicit `refs/tags/…` form is what git
-     * needs to push a tag rather than something that happens to share the name.
+     * Push tags, but only those whose commit the target remote's branches
+     * already contain.
+     *
+     * A tag-only push uploads the tag object *and* the commit behind it, so a
+     * tag on unpushed work would land a commit on the remote that no remote
+     * branch points at — the tag arrives before its branch, and the branch's
+     * ahead/behind still says it has work to send. The check reads the
+     * remote-tracking refs, which `push` itself updates, so branches pushed
+     * from this clone are always visible here.
      */
-    async pushTag(name: string, remote?: string): Promise<string> {
-        assertRef(name, t('label.tag'));
+    async pushTags(names: string[], remote?: string): Promise<TagPushResult> {
         const target = remote?.trim() || await this._defaultRemoteForPush();
         assertRef(target, t('label.remote'));
-        const output = await this._execNetwork(['push', target, `refs/tags/${name}`]);
-        return output || t('tag.pushed', { name, remote: target });
+        // An unknown remote has no tracking refs; let `git push` report it
+        // instead of blaming the tags for it.
+        const configured = this.getRemoteNames().includes(target);
+        const pushed: string[] = [];
+        const skipped: string[] = [];
+        for (const name of names) {
+            assertRef(name, t('label.tag'));
+            if (!configured || await this._isTagOnRemote(name, target)) {
+                pushed.push(name);
+            } else {
+                skipped.push(name);
+            }
+        }
+        if (pushed.length > 0) {
+            // Explicit refspecs rather than `--tags`: only the tags that passed
+            // the check go out, so a batch never sweeps the held-back ones along.
+            await this._execNetwork(['push', target, ...pushed.map(name => `refs/tags/${name}`)]);
+        }
+        return { remote: target, pushed, skipped };
     }
 
     /**
-     * Push every local tag in one command (`--tags`). Same remote choice as
-     * pushTag: a tag marks a spot on some branch line, so that branch's remote
-     * wins; a repository with a single remote has nothing to choose.
+     * Counts what a tag-only push would import: commits reachable from the tag
+     * but from none of the remote's branches. Zero means the commit is already
+     * there, so the push is a pure tag transfer.
      */
-    async pushAllTags(remote?: string): Promise<string> {
-        const target = remote?.trim() || await this._defaultRemoteForPush();
-        assertRef(target, t('label.remote'));
-        return this._execNetwork(['push', target, '--tags']);
+    private async _isTagOnRemote(name: string, remote: string): Promise<boolean> {
+        const count = await this.executeGitArgs([
+            'rev-list', '--count', `refs/tags/${name}`, '--not', `--remotes=${remote}`
+        ]);
+        return count.trim() === '0';
     }
 
     /** Remote a tag goes to when the caller did not name one. */

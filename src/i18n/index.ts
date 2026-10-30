@@ -255,11 +255,12 @@ const zh: Record<string, string> = {
     'tag.pushingMultiple': '正在推送 {count} 个标签...',
     'tag.pushed': '已推送标签 {name} 到远端',
     'tag.pushedMultiple': '已推送 {count} 个标签到远端',
+    'tag.commitNotPushed': '以下标签所在的提交还没有推送到 {remote}，请先推送对应分支：{names}',
+    'tag.pushedSkipped': '已推送 {count} 个标签到 {remote}；跳过 {names}（所在提交尚未推送）',
     'tag.pushFailed': '推送标签 {names} 失败: {error}',
     'tag.pushAllConfirm': '推送全部 {count} 个本地标签到远端？',
     'tag.pushAllBtn': '全部推送',
     'tag.pushingAll': '正在推送 {count} 个标签...',
-    'tag.pushedAll': '已推送 {count} 个标签到远端',
     'tag.pushAllFailed': '推送标签失败: {error}',
 
     // stash commands (stashCommands.ts)
@@ -950,7 +951,8 @@ const en: Record<string, string> = {
     'tag.pushAllConfirm': 'Push all {count} local tags to the remote?',
     'tag.pushAllBtn': 'Push All',
     'tag.pushingAll': 'Pushing {count} tags...',
-    'tag.pushedAll': 'Pushed {count} tags to the remote',
+    'tag.commitNotPushed': 'The commits behind these tags are not on {remote} yet — push their branches first: {names}',
+    'tag.pushedSkipped': 'Pushed {count} tags to {remote}; skipped {names} (their commits are not pushed yet)',
     'tag.pushAllFailed': 'Failed to push tags: {error}',
 
     // stash commands (stashCommands.ts)
