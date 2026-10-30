@@ -305,6 +305,8 @@ export type LineHistoryExtMessage =
         command: 'lh.diff';
         hash: string;
         requestId: number;
+        /** Whether the rows cover the whole file change or only the selected lines. */
+        full: boolean;
         rows: DiffRow[];
         truncated: boolean;
         binary: boolean;
@@ -313,7 +315,7 @@ export type LineHistoryExtMessage =
 
 export type LineHistoryWebviewMessage =
     | { command: 'ready' }
-    | { command: 'selectCommit'; hash: string; requestId: number }
+    | { command: 'selectCommit'; hash: string; requestId: number; full: boolean }
     | { command: 'openNativeDiff'; hash: string }
     | { command: 'revealCommit'; hash: string }
     | { command: 'refresh' };

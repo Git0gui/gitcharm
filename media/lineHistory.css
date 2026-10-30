@@ -246,6 +246,11 @@ body {
     background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.3));
 }
 
+#lh-scope.on {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    color: var(--vscode-textLink-foreground, #3794ff);
+}
+
 #lh-diff-body {
     flex: 1 1 auto;
     min-height: 0;
@@ -278,6 +283,12 @@ body {
     padding: 2px 0;
     background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.13));
     color: var(--vscode-descriptionForeground);
+}
+
+/* A line the selection still owns at this commit: a left accent, not a
+ * background, so it stays legible on top of the +/- tints. */
+.lh-dl-hit {
+    box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007fd4);
 }
 
 .lh-hunk-text {

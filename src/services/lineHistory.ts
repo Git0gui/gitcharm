@@ -26,6 +26,14 @@ export interface BlameLineInfo {
     summary: string;
     /** Path the file had at that commit; a diff has to ask for this name. */
     path: string;
+    /**
+     * Where the selected lines sit in *this commit's* version of the file.
+     * Blame's header carries both numbers (`<sha> <orig> <final>`); the final
+     * one indexes the buffer the user is looking at, while the original one is
+     * the only way to find those lines again in `diff base..commit`, where the
+     * numbering is the commit's, not today's.
+     */
+    origLines: number[];
 }
 
 /**
@@ -40,27 +48,30 @@ export interface BlameLineInfo {
 export function parseBlamePorcelain(output: string): (BlameLineInfo | undefined)[] {
     const meta = new Map<string, BlameLineInfo>();
     const result: (BlameLineInfo | undefined)[] = [];
-    let current: { hash: string; line: number } | undefined;
+    let current: { hash: string; orig: number; line: number } | undefined;
 
     for (const raw of output.split('\n')) {
         const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-        const head = /^\^?([0-9a-f]{40}) \d+ (\d+)/.exec(line);
+        const head = /^\^?([0-9a-f]{40}) (\d+) (\d+)/.exec(line);
         if (head) {
-            current = { hash: head[1], line: parseInt(head[2], 10) };
+            current = { hash: head[1], orig: parseInt(head[2], 10), line: parseInt(head[3], 10) };
             if (!meta.has(current.hash)) {
                 meta.set(current.hash, {
-                    hash: current.hash, author: '', authorTime: 0, committerTime: 0, summary: '', path: ''
+                    hash: current.hash, author: '', authorTime: 0, committerTime: 0,
+                    summary: '', path: '', origLines: []
                 });
             }
             continue;
         }
         if (line.startsWith('\t')) {
             // The tab marks a content line. A block can cover several lines
-            // (the header's trailing count), and they are consecutive — blaming
-            // only the header's first line would leave the rest of the block
-            // holding whichever line came last.
+            // (the header's trailing count), and they are consecutive on both
+            // sides — blaming only the header's first line would leave the rest
+            // of the block holding whichever line came last.
             if (current) {
+                meta.get(current.hash)!.origLines.push(current.orig);
                 result[current.line - 1] = meta.get(current.hash);
+                current.orig++;
                 current.line++;
             }
             continue;
@@ -88,6 +99,8 @@ export interface LineHistoryCommit {
     path: string;
     /** How many of the selected lines currently come from this commit. */
     lines: number;
+    /** Those same lines numbered in this commit's version (diff filtering). */
+    origLines: number[];
 }
 
 export interface LineHistorySelection {
@@ -137,7 +150,8 @@ export function commitsForLines(
             committerTime: info.committerTime,
             summary: info.summary,
             path: info.path,
-            lines: 1
+            lines: 1,
+            origLines: [...new Set(info.origLines)].sort((a, b) => a - b)
         });
     }
 
@@ -155,6 +169,20 @@ export interface DiffRow {
     text: string;
     oldLine?: number;
     newLine?: number;
+    /** This row is one of the lines the selection owns (highlighted in the panel). */
+    hit?: boolean;
+}
+
+/**
+ * Which lines of the patch matter.
+ *
+ * The numbers are the selection's position in the *commit's* file, which is the
+ * new side of `diff base..commit` — the only numbering that is valid on both.
+ */
+export interface DiffLineFilter {
+    lines: readonly number[];
+    /** Keep only the hunks that touch those lines; otherwise merely mark them. */
+    restrict: boolean;
 }
 
 export interface ParsedPatch {
@@ -162,6 +190,50 @@ export interface ParsedPatch {
     truncated: boolean;
     /** git refused to diff the bytes; the caller shows a note instead of rows. */
     binary: boolean;
+}
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
+
+/** How many rows of the hunk body survive on each side of a wanted line. */
+const HIT_CONTEXT_ROWS = 3;
+
+/** Marks a stretch of the hunk that the panel left out. */
+const GAP_TEXT = '⋯';
+
+/**
+ * Keep only the neighbourhood of the wanted rows, and mark where the rest went.
+ *
+ * Git's three lines of context belong to the *hunk*, and a hunk can be the whole
+ * file — the initial import of a file is one hunk from line 1 to the end, so a
+ * line that has not changed since then would otherwise still paint thousands of
+ * rows. A `⋯` bar keeps the coordinates honest: the numbers on the next row
+ * jump, and the reader can see why.
+ */
+function trimToHits(body: DiffRow[]): DiffRow[] {
+    const inside = body.map(() => false);
+    let last = -1;
+    for (let i = 0; i < body.length; i++) {
+        if (!body[i].hit) {continue;}
+        const from = Math.max(0, i - HIT_CONTEXT_ROWS);
+        const to = Math.min(body.length - 1, i + HIT_CONTEXT_ROWS);
+        for (let k = from; k <= to; k++) {inside[k] = true;}
+    }
+    for (let i = inside.length - 1; i >= 0; i--) {
+        if (inside[i]) {last = i; break;}
+    }
+
+    const rows: DiffRow[] = [];
+    let gap = false;
+    for (let i = 0; i <= last; i++) {
+        if (inside[i]) {
+            rows.push(body[i]);
+            gap = false;
+        } else if (!gap) {
+            rows.push({ type: 'hunk', text: GAP_TEXT });
+            gap = true;
+        }
+    }
+    return rows;
 }
 
 /**
@@ -174,29 +246,95 @@ export interface ParsedPatch {
  * context (` `), addition (`+`) or deletion (`-`), and the two running counters
  * are what give each row its numbers. `\ No newline at end of file` carries no
  * content and is skipped.
+ *
+ * With a `restrict` filter, a hunk survives only if its new-side range covers
+ * one of the lines of interest, and only the rows within three rows of such a
+ * line are kept (see `trimToHits`). Whole hunks are otherwise untouched: a
+ * single added line with no surroundings is unreadable. Deletion-only hunks
+ * never survive — they have no new-side width, so they cannot contain a line
+ * that still exists at this commit.
  */
-export function parseUnifiedDiff(patch: string, maxRows: number = MAX_DIFF_ROWS): ParsedPatch {
+export function parseUnifiedDiff(
+    patch: string,
+    maxRows: number = MAX_DIFF_ROWS,
+    filter?: DiffLineFilter
+): ParsedPatch {
+    const keep = filter && filter.lines.length > 0 ? new Set(filter.lines) : undefined;
+    const restrict = !!filter?.restrict && !!keep;
+
     const rows: DiffRow[] = [];
+    let truncated = false;
+    let stopped = false;
+
+    // One hunk at a time: whether it belongs to the selection depends on its
+    // new-side range, which is only known once its header has been read.
+    let head: DiffRow | undefined;
+    let body: DiffRow[] = [];
+    let rangeFrom = 0;
+    let rangeTo = -1;
     let oldNo = 0;
     let newNo = 0;
     let inHunk = false;
-    let truncated = false;
+
+    const wanted = (): boolean => {
+        if (!restrict || !keep) { return true; }
+        for (let n = rangeFrom; n <= rangeTo; n++) {
+            if (keep.has(n)) { return true; }
+        }
+        return false;
+    };
+
+    const flush = (): void => {
+        if (head && wanted()) {
+            const visible = restrict ? trimToHits(body) : body;
+            if (visible.length === 0) {
+                head = undefined;
+                body = [];
+                return;
+            }
+            if (rows.length >= maxRows) {
+                truncated = true;
+                stopped = true;
+                return;
+            }
+            rows.push(head);
+            for (const row of visible) {
+                if (rows.length >= maxRows) {
+                    truncated = true;
+                    stopped = true;
+                    return;
+                }
+                rows.push(row);
+            }
+        }
+        head = undefined;
+        body = [];
+    };
 
     for (const raw of patch.split('\n')) {
+        if (stopped) {break;}
         const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
         if (line.startsWith('@@')) {
-            const head = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/.exec(line);
-            if (!head) {continue;}
-            oldNo = parseInt(head[1], 10);
-            newNo = parseInt(head[2], 10);
+            flush();
+            if (stopped) {break;}
+            const match = HUNK_HEADER.exec(line);
+            if (!match) {
+                inHunk = false;
+                continue;
+            }
+            const newStart = parseInt(match[3], 10);
+            const newCount = match[4] === undefined ? 1 : parseInt(match[4], 10);
+            oldNo = parseInt(match[1], 10);
+            newNo = newStart;
+            rangeFrom = newStart;
+            rangeTo = newStart + newCount - 1;
             inHunk = true;
-            if (rows.length >= maxRows) {truncated = true; break;}
             // Keep the coordinates: a hunk with no enclosing function has no
             // heading at all, and a blank separator reads as a rendering bug.
-            rows.push({ type: 'hunk', text: line.trim() });
+            head = { type: 'hunk', text: line.trim() };
             continue;
         }
-        if (!inHunk) {continue;}
+        if (!inHunk || !head) {continue;}
         if (line.startsWith('\\')) {continue;}
 
         let row: DiffRow | undefined;
@@ -211,9 +349,10 @@ export function parseUnifiedDiff(patch: string, maxRows: number = MAX_DIFF_ROWS)
             row = { type: 'ctx', text: line.slice(1), oldLine: oldNo++, newLine: newNo++ };
         }
         if (!row) {continue;}
-        if (rows.length >= maxRows) {truncated = true; break;}
-        rows.push(row);
+        if (keep && row.newLine !== undefined && keep.has(row.newLine)) {row.hit = true;}
+        body.push(row);
     }
+    flush();
 
     return { rows, truncated, binary: /^Binary files .* differ$/m.test(patch) };
 }

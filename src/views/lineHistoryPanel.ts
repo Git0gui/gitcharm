@@ -130,7 +130,7 @@ export class LineHistoryPanel {
                 await this._load();
                 return;
             case 'selectCommit':
-                void this._postDiff(message.hash, message.requestId);
+                void this._postDiff(message.hash, message.requestId, !!message.full);
                 return;
             case 'openNativeDiff':
                 await this._openNativeDiff(message.hash);
@@ -248,29 +248,30 @@ export class LineHistoryPanel {
         return this._commits.find(c => c.hash === hash);
     }
 
-    private async _postDiff(hash: string, requestId: number): Promise<void> {
+    private async _postDiff(hash: string, requestId: number, full: boolean): Promise<void> {
         const commit = this._commit(hash);
         if (!commit) {return;}
-        const key = `${hash}\0${commit.path}`;
+        const key = this._diffKey(commit, full);
 
         const cached = this._diffCache.get(key);
         if (cached) {
             // Refresh LRU position.
             this._diffCache.delete(key);
             this._diffCache.set(key, cached);
-            this._post({ command: 'lh.diff', hash, requestId, ...cached });
+            this._post({ command: 'lh.diff', hash, requestId, full, ...cached });
             return;
         }
 
         try {
-            const diff = await this._fetchDiff(commit, key);
-            this._post({ command: 'lh.diff', hash, requestId, ...diff });
+            const diff = await this._fetchDiff(commit, key, full);
+            this._post({ command: 'lh.diff', hash, requestId, full, ...diff });
         } catch (error) {
             logger.debug('[GitCharm] Line history diff failed:', error);
             this._post({
                 command: 'lh.diff',
                 hash,
                 requestId,
+                full,
                 rows: [],
                 truncated: false,
                 binary: false,
@@ -279,8 +280,17 @@ export class LineHistoryPanel {
         }
     }
 
+    /**
+     * The scope is part of the key: the same commit asked for "only my lines"
+     * and for the whole file is two different answer sets.
+     */
+    private _diffKey(commit: LineHistoryCommit, full: boolean): string {
+        const scope = full ? 'all' : commit.origLines.join(',');
+        return `${commit.hash}\0${commit.path}\0${scope}`;
+    }
+
     /** In-flight requests are shared: the same commit asked twice is one spawn. */
-    private _fetchDiff(commit: LineHistoryCommit, key: string): Promise<ParsedPatch> {
+    private _fetchDiff(commit: LineHistoryCommit, key: string, full: boolean): Promise<ParsedPatch> {
         const running = this._inFlight.get(key);
         if (running) {return running;}
 
@@ -289,7 +299,12 @@ export class LineHistoryPanel {
             const patch = await this._git.executeGitArgs([
                 'diff', '--no-ext-diff', '--no-color', '--unified=3', base, commit.hash, '--', commit.path
             ]);
-            return parseUnifiedDiff(patch, MAX_DIFF_ROWS);
+            // Numbers in the patch are this commit's own, which is exactly what
+            // blame's original-side line numbers refer to.
+            return parseUnifiedDiff(patch, MAX_DIFF_ROWS, {
+                lines: commit.origLines,
+                restrict: !full
+            });
         })().then(diff => {
             if (!this._disposed) {this._remember(key, diff);}
             return diff;
@@ -362,6 +377,7 @@ export class LineHistoryPanel {
                 <span id="lh-diff-title"></span>
                 <span class="lh-stats" id="lh-diff-stats"></span>
                 <span class="lh-spacer"></span>
+                <button id="lh-scope" type="button"></button>
                 <button id="lh-reveal" type="button" title="${t('lineHistory.reveal')}">${t('lineHistory.reveal')}</button>
                 <button id="lh-native" type="button" title="${t('lineHistory.nativeDiff')}">${t('lineHistory.nativeDiff')}</button>
             </div>

@@ -43,7 +43,10 @@
         selected: null,
         shown: PAGE,
         diff: null,
-        diffRequest: 0
+        diffRequest: 0,
+        /* false: only the hunks that touch the selected lines (the default —
+         * this tab exists to explain *those* lines). true: the whole file. */
+        full: false
     };
 
     var listEl = document.getElementById('lh-list');
@@ -54,6 +57,7 @@
     var statsEl = document.getElementById('lh-diff-stats');
     var revealBtn = document.getElementById('lh-reveal');
     var nativeBtn = document.getElementById('lh-native');
+    var scopeBtn = document.getElementById('lh-scope');
 
     function pad(n) {
         return n < 10 ? '0' + n : '' + n;
@@ -156,13 +160,28 @@
     }
 
     function selectCommit(hash) {
-        if (state.selected === hash && state.diff && state.diff.hash === hash) { return; }
+        if (state.selected === hash && state.diff && !state.diff.loading && state.diff.hash === hash) { return; }
         state.selected = hash;
         markSelected();
+        requestDiff(hash);
+    }
+
+    function requestDiff(hash) {
         state.diffRequest++;
-        state.diff = { hash: hash, loading: true, requestId: state.diffRequest };
+        state.diff = { hash: hash, loading: true, requestId: state.diffRequest, full: state.full };
         renderDiff();
-        vscode.postMessage({ command: 'selectCommit', hash: hash, requestId: state.diffRequest });
+        vscode.postMessage({
+            command: 'selectCommit', hash: hash, requestId: state.diffRequest, full: state.full
+        });
+    }
+
+    /* The button names the other scope, i.e. what clicking it does: in line
+     * scope it offers "whole file", and vice versa. */
+    function renderScope() {
+        var label = state.full ? T('lineHistory.scopeLines') : T('lineHistory.scopeFile');
+        scopeBtn.textContent = label;
+        scopeBtn.title = label;
+        scopeBtn.classList.toggle('on', state.full);
     }
 
     function diffHeaderText() {
@@ -176,6 +195,8 @@
         diffTitleEl.textContent = hasCommit ? diffHeaderText() : '';
         revealBtn.style.display = hasCommit ? '' : 'none';
         nativeBtn.style.display = hasCommit ? '' : 'none';
+        scopeBtn.style.display = hasCommit ? '' : 'none';
+        renderScope();
         diffBodyEl.innerHTML = hasCommit ? diffBodyHtml(state.diff) : '';
         renderDiffStats();
     }
@@ -193,7 +214,9 @@
         if (d.loading) { return loadingHtml(); }
         if (d.error) { return noteHtml(T('lineHistory.diffFailed', { error: d.error }), ' lh-note-error'); }
         if (d.binary) { return noteHtml(T('lineHistory.binary')); }
-        if (!d.rows || d.rows.length === 0) { return noteHtml(T('lineHistory.emptyDiff')); }
+        if (!d.rows || d.rows.length === 0) {
+            return noteHtml(T(d.full ? 'lineHistory.emptyDiff' : 'lineHistory.noLineChange'));
+        }
 
         var html = ['<div class="lh-diff-table">'];
         for (var i = 0; i < d.rows.length; i++) {
@@ -204,6 +227,7 @@
                 continue;
             }
             var cls = row.type === 'add' ? ' lh-dl-add' : row.type === 'del' ? ' lh-dl-del' : '';
+            if (row.hit) { cls += ' lh-dl-hit'; }
             var sign = row.type === 'add' ? '+' : row.type === 'del' ? '-' : ' ';
             html.push('<div class="lh-dl' + cls + '">' +
                 '<span class="lh-ln">' + (row.oldLine === undefined ? '' : row.oldLine) + '</span>' +
@@ -271,6 +295,11 @@
         if (state.selected) { vscode.postMessage({ command: 'openNativeDiff', hash: state.selected }); }
     });
 
+    scopeBtn.addEventListener('click', function () {
+        state.full = !state.full;
+        if (state.selected) { requestDiff(state.selected); } else { renderScope(); }
+    });
+
     revealBtn.addEventListener('click', function () {
         if (state.selected) { vscode.postMessage({ command: 'revealCommit', hash: state.selected }); }
     });
@@ -323,6 +352,7 @@
             if (message.hash !== state.selected) { return; }
             state.diff = {
                 hash: message.hash,
+                full: !!message.full,
                 rows: message.rows || [],
                 truncated: !!message.truncated,
                 binary: !!message.binary,
