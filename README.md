@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Marketplace version" src="https://img.shields.io/visual-studio-marketplace/v/liugui.git-charm?style=flat-square&amp;label=marketplace"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Installs" src="https://img.shields.io/visual-studio-marketplace/i/liugui.git-charm?style=flat-square&amp;label=installs"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Rating" src="https://img.shields.io/visual-studio-marketplace/r/liugui.git-charm?style=flat-square&amp;label=rating"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Marketplace version" src="https://vsmarketplacebadges.dev/version-short/liugui.git-charm.svg?style=flat-square"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Installs" src="https://vsmarketplacebadges.dev/installs-short/liugui.git-charm.svg?style=flat-square"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=liugui.git-charm"><img alt="Rating" src="https://vsmarketplacebadges.dev/rating-star/liugui.git-charm.svg?style=flat-square"></a>
   <img alt="VS Code 1.66+" src="https://img.shields.io/badge/VS%20Code-%E2%89%A51.66-007ACC?style=flat-square&amp;logo=visualstudiocode&amp;logoColor=white">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square">
 </p>
@@ -20,19 +20,13 @@
   <strong>English</strong> · <a href="#简体中文">简体中文</a>
 </p>
 
-![GitCharm three-panel git log UI](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
-
-GitCharm provides a three-panel Git log view:
-
-- **Left · Branch tree** — hierarchical tree grouped by `HEAD / Local / Remote`, plus stash and worktree sections at the bottom, ahead/behind arrows (▲▼) and commit-count badges; a toolbar button narrows the tree to the branches you favorited
-- **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / path / date-range filters (the search box carries `.*` and `Cc` switches for regex and case-sensitive matching)
-- **Right · Commit details** — full commit info, changed file list (added/deleted line counts) and diff entry
-
 ## What's New
 
 ### Line History — the story of one line, not the whole file
 
 Select a line or a range in the editor, then press `Alt+H` or right-click → **GitCharm → Selected Lines History**. The panel is built around exactly those lines:
+
+![Line history panel](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/line-history.png)
 
 - **Every commit that rewrote them**, newest first. Blame is only the starting set — `git log -L` adds the rewrites blame can no longer see, so a line that was edited and then moved still shows its whole chain.
 - **What the line said at that revision**, previewed under every row: the list reads as the history of a line, not as a list of committers.
@@ -42,6 +36,16 @@ Select a line or a range in the editor, then press `Alt+H` or right-click → **
 - **Two hand-offs from the header**: re-root the main commit list on that commit (children above, ancestors below), or open the pair in VS Code's native diff.
 
 File History also opens GitCharm's own panel by default now — commit list plus the selected commit's changes — and `idea-git.fileHistory` switches it back to VS Code's Timeline.
+
+## Overview
+
+![GitCharm three-panel git log UI](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
+
+GitCharm provides a three-panel Git log view:
+
+- **Left · Branch tree** — hierarchical tree grouped by `HEAD / Local / Remote`, plus stash and worktree sections at the bottom, ahead/behind arrows (▲▼) and commit-count badges; a toolbar button narrows the tree to the branches you favorited
+- **Center · Commit list** — Canvas-rendered commit graph showing message first line, author avatar and relative time, with message / author / path / date-range filters (the search box carries `.*` and `Cc` switches for regex and case-sensitive matching)
+- **Right · Commit details** — full commit info, changed file list (added/deleted line counts) and diff entry
 
 ## Screenshots
 
@@ -213,19 +217,13 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 > 在 VSCode / Qoder 中复刻 IntelliJ IDEA 的 Git UI 与工作流。
 
-![GitCharm 三栏式提交图谱界面](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
-
-GitCharm 提供一个三栏式的 Git 日志面板：
-
-- **左栏 · 分支树**：按 `HEAD / 本地 / 远程` 分组的层级树，底部另列贮藏与工作树，带超前/落后箭头（▲▼）与提交数徽标；工具栏可把树收窄到收藏的分支
-- **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 路径 / 日期区间筛选（搜索框内嵌 `.*` 正则与 `Cc` 区分大小写两个开关）
-- **右栏 · 提交详情**：选中提交的完整信息、变更文件列表（增删行数）与差异入口
-
 ## 新增功能
 
 ### 行级历史——只追一行，而不是整个文件
 
 在编辑器里选中一行或一段，按 `Alt+H`，或右键 → **GitCharm → 选中行历史**。面板只围绕这几行展开：
+
+![行级历史面板](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/line-history.png)
 
 - **改写这一行的全部提交**，从新到旧。blame 只是起点——`git log -L` 补上 blame 已经看不见的改写链条：一行被改写之后再被移动，历史也不会断。
 - **这一行在那一版是什么**：每行下方预览该提交时这一行的原文，列表读起来是"这一行的历史"，而不是一串提交人。
@@ -235,6 +233,16 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **面板头部两个去处**：把主面板的提交列表改根到那条提交（上面是它之后的提交、下面是它的祖先），或者把这一对版本交给 VS Code 原生对比。
 
 文件历史也改为默认打开 GitCharm 自带面板（提交列表 + 所选提交的改动），`idea-git.fileHistory` 可切回 VS Code 时间线。
+
+## 概览
+
+![GitCharm 三栏式提交图谱界面](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/main-view.png)
+
+GitCharm 提供一个三栏式的 Git 日志面板：
+
+- **左栏 · 分支树**：按 `HEAD / 本地 / 远程` 分组的层级树，底部另列贮藏与工作树，带超前/落后箭头（▲▼）与提交数徽标；工具栏可把树收窄到收藏的分支
+- **中栏 · 提交列表**：Canvas 绘制的提交图谱，含消息首行、作者头像、相对时间，支持消息 / 提交人 / 路径 / 日期区间筛选（搜索框内嵌 `.*` 正则与 `Cc` 区分大小写两个开关）
+- **右栏 · 提交详情**：选中提交的完整信息、变更文件列表（增删行数）与差异入口
 
 ## 界面截图
 
