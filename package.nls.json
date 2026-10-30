@@ -36,6 +36,7 @@
     "cmd.manageRemotes": "Manage Remotes",
     "cmd.createTag": "Create Tag on Commit (Lightweight or Annotated)",
     "cmd.deleteTag": "Delete Tag",
+    "cmd.deleteTags": "Delete Tags (Local and Remote)",
     "cmd.pushTag": "Push Tag to Remote",
     "cmd.pushAllTags": "Push All Tags to Remote",
     "cmd.remoteTags": "Compare Local and Remote Tags",

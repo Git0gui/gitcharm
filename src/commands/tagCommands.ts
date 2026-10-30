@@ -158,6 +158,32 @@ export function registerTagCommands(
         return false;
     };
 
+    /**
+     * Delete tags on the remote. A tag the remote never had is not a failure —
+     * there is simply nothing to remove. Returns the tags that really failed and
+     * the first git message, so callers can decide whether to go on with the
+     * local half.
+     */
+    const deleteRemoteTags = async (
+        names: string[],
+        remote: string
+    ): Promise<{ failed: string[]; error: string }> => {
+        const failed: string[] = [];
+        let firstError = '';
+        for (const name of names) {
+            try {
+                await gitService.deleteRemoteTag(name, remote);
+            } catch (error) {
+                const text = combineErrorText(error);
+                if (/remote ref does not exist/i.test(text)) {continue;}
+                logger.error(`[GitCharm] remote tag delete failed (${name}): ${redactUrlCredentials(text)}`);
+                if (!firstError) {firstError = formatGitError(error);}
+                failed.push(name);
+            }
+        }
+        return { failed, error: firstError };
+    };
+
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.createTag', async (node: any) => {
             const hash = node?.hash ?? node?.commit?.hash ?? gitService.selectedCommitHash;
@@ -237,23 +263,10 @@ export function registerTagCommands(
             }, async () => {
                 // Remote first: the network half can fail (auth, protected tags)
                 // and that must not stop the local removal the user also asked for.
-                const remoteFailed: string[] = [];
-                let remoteError = '';
-                if (alsoRemote) {
-                    for (const name of names) {
-                        try {
-                            await gitService.deleteRemoteTag(name, remote);
-                        } catch (error) {
-                            // A tag that was never pushed is not a failure: the
-                            // remote has nothing to delete.
-                            const text = combineErrorText(error);
-                            if (/remote ref does not exist/i.test(text)) {continue;}
-                            logger.error(`[GitCharm] remote tag delete failed (${name}): ${redactUrlCredentials(text)}`);
-                            if (!remoteError) {remoteError = formatGitError(error);}
-                            remoteFailed.push(name);
-                        }
-                    }
-                }
+                const remoteResult = alsoRemote
+                    ? await deleteRemoteTags(names, remote)
+                    : { failed: [] as string[], error: '' };
+                const remoteFailed = remoteResult.failed;
 
                 const deleted: string[] = [];
                 const failed: string[] = [];
@@ -284,10 +297,68 @@ export function registerTagCommands(
                     showNetworkError(t('tag.deleteRemoteFailed', {
                         names: remoteFailed.join(', '),
                         remote,
-                        error: remoteError
+                        error: remoteResult.error
                     }));
                 }
                 if (deleted.length > 0) {graphView.refresh();}
+            });
+        }),
+
+        /**
+         * The toolbar entry always means "both sides". Unlike the badge menu
+         * (which offers local or local+remote), the remote half runs first and
+         * must succeed before any local tag goes: a failed remote deletion
+         * leaves everything as it was, so the user can retry instead of ending
+         * up with the remote copy orphaned.
+         */
+        vscode.commands.registerCommand('idea-git.deleteTags', async (node: any) => {
+            if (!(await ensureRemote())) {return;}
+            const candidates = await resolveTagNames(node);
+            const names = await pickTags(candidates, 'tag.pickDeletePlaceHolder');
+            if (!names || names.length === 0) {return;}
+
+            const remote = gitService.getFetchRemote();
+            const summary = names.length === 1 ? names[0] : `${names.length}: ${names.join(', ')}`;
+            const confirmBtn = t('tag.deleteLocalRemoteBtn');
+            const confirm = await graphView.showDialog(
+                t('tag.deleteBothConfirm', { names: summary, remote }),
+                [confirmBtn, t('common.cancel')],
+                'warn'
+            );
+            if (confirm !== confirmBtn) {return;}
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: t('tag.deletingBoth', { names: summary }),
+                cancellable: false
+            }, async () => {
+                const remoteResult = await deleteRemoteTags(names, remote);
+                if (remoteResult.failed.length > 0) {
+                    showNetworkError(t('tag.deleteRemoteAborted', {
+                        names: remoteResult.failed.join(', '),
+                        remote,
+                        error: remoteResult.error
+                    }));
+                    return;
+                }
+
+                const deleted: string[] = [];
+                const failed: string[] = [];
+                for (const name of names) {
+                    try {
+                        await gitService.deleteTag(name);
+                        deleted.push(name);
+                    } catch {
+                        failed.push(name);
+                    }
+                }
+                if (deleted.length > 0) {
+                    vscode.window.showInformationMessage(t('tag.deletedBoth', { names: deleted.join(', ') }));
+                    graphView.refresh();
+                }
+                if (failed.length > 0) {
+                    vscode.window.showErrorMessage(t('tag.deleteFailed', { error: failed.join(', ') }));
+                }
             });
         }),
 

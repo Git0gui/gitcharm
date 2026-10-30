@@ -142,6 +142,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **缓存与快照必须能识别自己属于哪个仓库**：钉住的仓库写在 `workspaceState`（`idea-git.selectedRepository`），启动时用 `_hasGitDir` 校验，目录搬走就交给自动发现；持久化视图快照由宿主盖 `repoPath`，与当前仓库不匹配即丢弃（同 `PersistedBranchCache` 的 repoPath 校验思路）。
 - **后台 / 定时任务禁止走 `_execNetwork`**：它会挂 `GIT_ASKPASS`，无人值守时弹出凭据框。自动 fetch 用 `fetchSilent()`（绕开 askpass + `GIT_TERMINAL_PROMPT=0` + 有限超时 + 失败只记 `logger.debug`），且先用 fs 读 `.git/config` 判断有没有远端——没远端一个子进程都不 spawn。这类任务还要绑"面板可见"条件，与分支 watcher 同起同停。
 - **删除标签让用户选目的地**：确认框的答案是「删除本地」「删除本地和远端」「取消」三选一（没有远端时只剩本地/取消，文案同时说明"此仓库没有配置远端，只能删除本地标签"），命令标题因此叫「删除标签」而不是「删除本地标签」。选"本地和远端"时**先删远端再删本地**——网络那一半失败（凭据、保护规则）不能把用户同样要求的本地清理一起中止；远端根本没这个标签（`remote ref does not exist`）不算失败，那是"本来就没得删"。**推送标签前先确认有远端**（`ensureRemote`）：本地仓库没有远端时提示"标签只能保存在本地"并给「管理远端」入口，不要让 `git push origin` 抛出一句看起来像仓库损坏的 fatal。
+- **工具栏标签菜单是「推送标签… / 删除标签… / 远端标签差异…」**：「推送全部标签」已从菜单撤掉（命令 `idea-git.pushAllTags` 只留在命令面板）。「删除标签…」（`idea-git.deleteTags`）先选标签、确认框明说本地与远端一起删，**只有每个远端删除都成功才动本地**——任何远端失败（凭据、保护规则）就整体中止并提示重试，不留下"远端删了、本地还在"的半截状态。这与徽章右键的三选一有意不同：那里是用户逐个决定，这里用户点的是"两边一起清掉"。
 - **完整 stderr 必须落到输出通道**：通知条按 `formatGitError` 截断（4 行/400 字），排障需要的原文在 `GitCharm` OutputChannel 里。`logger` 的 sink 由 `extension.ts` 注入（服务层不 import vscode），命令 `idea-git.showLog` 打开；push/pull/fetch/update 的 catch 用 `logger.error` 记录**经 `redactUrlCredentials` 清洗**的原文，错误通知带"显示日志"按钮。
 
 ## 9. Git 工作流约束（AI 协作红线）

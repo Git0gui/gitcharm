@@ -211,6 +211,11 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.deleteTags",
+        "title": "%cmd.deleteTags%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.pushTag",
         "title": "%cmd.pushTag%",
         "category": "GitCharm"

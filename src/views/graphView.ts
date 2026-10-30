@@ -1865,6 +1865,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'pushAllTags':
                     await vscode.commands.executeCommand('idea-git.pushAllTags');
                     return;
+                case 'deleteTags':
+                    // No node: the command opens the tag picker itself.
+                    await vscode.commands.executeCommand('idea-git.deleteTags');
+                    return;
                 case 'pickPushTags':
                     // No node means "every tag in the repository", which opens the
                     // quick pick instead of pushing anything directly.
