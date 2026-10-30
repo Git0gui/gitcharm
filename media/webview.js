@@ -3819,6 +3819,8 @@ window.addEventListener('message', function (ev) {
         showSquashMessageDialog(m.prompt, m.initialValue, m.placeholder);
     } else if (m.command === 'showPushDialog') {
         showPushDialog(m.branchName, m.commits || [], m.remoteExists, m.isFirstPush, m.remote || 'origin', m.remotes || []);
+    } else if (m.command === 'showTagSyncDialog') {
+        showTagSyncDialog(m.remote || '', m.rows || []);
     } else if (m.command === 'pushFilesResponse') {
         window._handlePushFiles(m.hash, m.files || []);
     } else if (m.command === 'showCompareDialog') {
@@ -4808,6 +4810,169 @@ function showReflogDialog(scope, entries) {
             overlay.remove();
         });
     });
+}
+
+/* ---- tag differences dialog ---- */
+// Per-state verbs. A one-sided tag has an obvious default; a conflict starts on
+// "keep local" because pulling over it or deleting the remote one destroys work.
+var TAG_SYNC_OPS = {
+    different: [['keep', 'tag.actionKeepLocal'], ['pullForce', 'tag.actionPullOverwrite'], ['deleteRemote', 'tag.actionDeleteRemote']],
+    remoteOnly: [['pull', 'tag.actionPull'], ['deleteRemote', 'tag.actionDeleteRemote']],
+    localOnly: [['push', 'tag.actionPush']]
+};
+
+function showTagSyncDialog(remote, rows) {
+    var existing = document.getElementById('tag-sync-dialog');
+    if (existing) { existing.remove(); }
+
+    var items = rows.map(function (r) {
+        return {
+            name: r.name,
+            state: r.state,
+            localHash: r.localHash || '',
+            remoteHash: r.remoteHash || '',
+            action: r.state === 'localOnly' ? 'push' : r.state === 'remoteOnly' ? 'pull' : 'keep',
+            checked: false
+        };
+    });
+
+    function shortHash(hash) {
+        return hash ? hash.slice(0, 7) : '—';
+    }
+    function stateLabel(st) {
+        return st === 'remoteOnly' ? T('tag.stateRemoteOnly')
+            : st === 'localOnly' ? T('tag.stateLocalOnly')
+            : T('tag.stateDifferent');
+    }
+    function rowHtml(item, index) {
+        var ops = (TAG_SYNC_OPS[item.state] || []).map(function (op) {
+            return '<button class="tag-sync-op' + (op[0] === 'deleteRemote' ? ' danger' : '')
+                + (op[0] === item.action ? ' on' : '') + '" data-op="' + op[0] + '">' + T(op[1]) + '</button>';
+        }).join('');
+        return '<div class="tag-sync-row" data-index="' + index + '">' +
+            '<input class="tag-sync-check" type="checkbox" data-title="' + esc(T('tag.syncCheckRow')) + '">' +
+            '<span class="tag-sync-name" data-title="' + esc(item.name) + '">' + esc(item.name) + '</span>' +
+            '<span class="tag-sync-state ' + item.state + '">' + stateLabel(item.state) + '</span>' +
+            '<span class="tag-sync-hash" data-title="' + esc(item.localHash || T('tag.syncAbsent')) + '">' + esc(shortHash(item.localHash)) + '</span>' +
+            '<span class="tag-sync-hash" data-title="' + esc(item.remoteHash || T('tag.syncAbsent')) + '">' + esc(shortHash(item.remoteHash)) + '</span>' +
+            '<span class="tag-sync-ops">' + ops + '</span>' +
+            '</div>';
+    }
+
+    var overlay = document.createElement('div');
+    overlay.className = 'push-dialog-overlay';
+    overlay.id = 'tag-sync-dialog';
+    overlay.innerHTML = '<div class="push-dialog-box">' +
+        '<div class="push-dialog-header">' +
+        '<span class="tag-sync-title" data-title="' + esc(T('tag.remoteDiffTitle', { remote: remote })) + '">' +
+        esc(T('tag.remoteDiffTitle', { remote: remote })) + '</span>' +
+        '<span class="tag-sync-found">' + esc(T('tag.syncFound', { count: items.length })) + '</span>' +
+        '</div>' +
+        '<div class="push-dialog-body">' +
+        '<div class="push-commits-list full">' +
+        '<div class="tag-sync-stats">' +
+        '<span class="tag-sync-stat diff"><b id="tag-sync-total">' + items.length + '</b>' + esc(T('tag.syncStatTotal')) + '</span>' +
+        '<span class="tag-sync-stat sel"><b id="tag-sync-selected">0</b>' + esc(T('tag.syncStatSelected')) + '</span>' +
+        '<span class="tag-sync-stat pending"><b id="tag-sync-pending">' + items.length + '</b>' + esc(T('tag.syncStatPending')) + '</span>' +
+        '</div>' +
+        '<div class="tag-sync-toolbar">' +
+        '<label class="tag-sync-all"><input type="checkbox" id="tag-sync-all">' + esc(T('tag.syncSelectAll')) + '</label>' +
+        '<span class="tag-sync-hint">' + esc(T('tag.syncHint')) + '</span>' +
+        '</div>' +
+        '<div class="tag-sync-table">' +
+        '<div class="tag-sync-head">' +
+        '<span></span>' +
+        '<span>' + esc(T('tag.colTag')) + '</span>' +
+        '<span>' + esc(T('tag.colState')) + '</span>' +
+        '<span>' + esc(T('tag.colLocal')) + '</span>' +
+        '<span>' + esc(T('tag.colRemote')) + '</span>' +
+        '<span class="tag-sync-col-actions">' + esc(T('tag.colAction')) + '</span>' +
+        '</div>' +
+        '<div class="tag-sync-list" id="tag-sync-list">' + items.map(rowHtml).join('') + '</div>' +
+        '</div>' +
+        '</div>' +
+        '</div>' +
+        '<div class="push-dialog-actions">' +
+        '<button class="dialog-btn secondary" data-action="cancel">' + T('common.cancel') + '</button>' +
+        '<button class="dialog-btn primary" data-action="apply" disabled>' + T('tag.syncApply') + '</button>' +
+        '</div></div>';
+
+    document.body.appendChild(overlay);
+    attachDialogResize(overlay, 'tagsync');
+
+    var listEl = overlay.querySelector('#tag-sync-list');
+    var allBox = overlay.querySelector('#tag-sync-all');
+    var applyBtn = overlay.querySelector('.push-dialog-actions [data-action="apply"]');
+    var selectedEl = overlay.querySelector('#tag-sync-selected');
+    var pendingEl = overlay.querySelector('#tag-sync-pending');
+
+    function paintRow(rowEl, item) {
+        rowEl.classList.toggle('selected', item.checked);
+        rowEl.querySelector('.tag-sync-check').checked = item.checked;
+        rowEl.querySelectorAll('.tag-sync-op').forEach(function (btn) {
+            btn.classList.toggle('on', btn.getAttribute('data-op') === item.action);
+        });
+    }
+
+    function updateStats() {
+        var selected = items.filter(function (item) { return item.checked; }).length;
+        selectedEl.textContent = String(selected);
+        pendingEl.textContent = String(items.length - selected);
+        allBox.checked = selected === items.length;
+        allBox.indeterminate = selected > 0 && selected < items.length;
+        applyBtn.disabled = selected === 0;
+        applyBtn.setAttribute('data-title', selected === 0 ? T('tag.syncNoneSelected') : '');
+    }
+
+    // Delegation: rows are static, but this keeps one handler per concern and
+    // survives any future re-render of the list.
+    listEl.addEventListener('click', function (e) {
+        var opBtn = e.target.closest('.tag-sync-op');
+        if (!opBtn) { return; }
+        var rowEl = opBtn.closest('.tag-sync-row');
+        var item = items[Number(rowEl.getAttribute('data-index'))];
+        item.action = opBtn.getAttribute('data-op');
+        // Choosing a verb is also a decision to act on the row; the checkbox
+        // remains the way to opt a row out without changing its verb.
+        item.checked = true;
+        paintRow(rowEl, item);
+        updateStats();
+    });
+    listEl.addEventListener('change', function (e) {
+        var box = e.target.closest('.tag-sync-check');
+        if (!box) { return; }
+        var rowEl = box.closest('.tag-sync-row');
+        var item = items[Number(rowEl.getAttribute('data-index'))];
+        item.checked = box.checked;
+        paintRow(rowEl, item);
+        updateStats();
+    });
+    allBox.addEventListener('change', function () {
+        var on = allBox.checked;
+        items.forEach(function (item) { item.checked = on; });
+        listEl.querySelectorAll('.tag-sync-row').forEach(function (rowEl, idx) {
+            paintRow(rowEl, items[idx]);
+        });
+        updateStats();
+    });
+
+    overlay.querySelectorAll('.push-dialog-actions .dialog-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var action = btn.getAttribute('data-action');
+            overlay.remove();
+            if (action === 'apply') {
+                vscode.postMessage({
+                    command: 'tagSyncConfirm',
+                    items: items.filter(function (item) { return item.checked; })
+                        .map(function (item) { return { name: item.name, action: item.action }; })
+                });
+            } else {
+                vscode.postMessage({ command: 'tagSyncConfirm' });
+            }
+        });
+    });
+
+    updateStats();
 }
 
 /* ---------- operation status indicator ---------- */

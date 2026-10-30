@@ -61,7 +61,6 @@ import {
     discoverRepositoryRoots,
     repositoryKey,
     RepositoryOption,
-    tagNameProblem,
     InProgressOperation,
     StashEntry,
     ReflogEntry,

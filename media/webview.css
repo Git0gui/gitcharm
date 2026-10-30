@@ -2282,6 +2282,191 @@ body.dialog-resizing * {
 .dialog-btn.danger:hover {
     background: #6a3535;
 }
+.dialog-btn:disabled {
+    opacity: .5;
+    cursor: default;
+    transform: none;
+    box-shadow: none;
+}
+
+/* ---- tag differences dialog ---- */
+#tag-sync-dialog .push-dialog-box {
+    width: min(1060px, 94vw);
+}
+.tag-sync-title {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tag-sync-found {
+    flex: none;
+    font-weight: normal;
+    font-size: 11px;
+    padding: 2px 9px;
+    border-radius: 10px;
+    color: var(--vscode-inputValidation-warningForeground, #cca700);
+    background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, .12));
+    border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(204, 167, 0, .4));
+    white-space: nowrap;
+}
+.tag-sync-stats {
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    padding: 14px 20px 10px;
+    flex: none;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground, #999);
+}
+.tag-sync-stat b {
+    font-size: 15px;
+    font-weight: 600;
+    margin-right: 6px;
+    color: var(--vscode-foreground, #cccccc);
+}
+.tag-sync-stat.diff b { color: var(--vscode-editorWarning-foreground, #cca700); }
+.tag-sync-stat.sel b { color: var(--vscode-textLink-foreground, #3794ff); }
+.tag-sync-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 20px 10px;
+    flex: none;
+    font-size: 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+.tag-sync-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    flex: none;
+}
+.tag-sync-hint {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999);
+}
+/* One scroll container for header and rows: a horizontally scrolled column
+   stays aligned with its header, and the header sticks while the list scrolls. */
+.tag-sync-table {
+    flex: 1;
+    min-height: 0;
+    max-height: 52vh;
+    overflow: auto;
+}
+.tag-sync-head, .tag-sync-row {
+    display: grid;
+    grid-template-columns: 24px minmax(110px, 1.3fr) 146px 78px 78px minmax(228px, 1.5fr);
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    min-width: 720px;
+}
+.tag-sync-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999);
+    background: var(--vscode-editorWidget-background, #252526);
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+}
+.tag-sync-col-actions { text-align: right; }
+.tag-sync-row {
+    padding-top: 9px;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, .18));
+    transition: background .12s ease-out;
+}
+.tag-sync-row:hover { background: var(--vscode-list-hoverBackground, rgba(90, 93, 94, .15)); }
+.tag-sync-row.selected { background: var(--vscode-list-inactiveSelectionBackground, rgba(55, 148, 255, .12)); }
+.tag-sync-check {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: var(--vscode-focusBorder, #007fd4);
+}
+.tag-sync-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+}
+.tag-sync-state {
+    justify-self: start;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+    opacity: .92;
+}
+.tag-sync-state.different { color: var(--vscode-editorWarning-foreground, #cca700); }
+.tag-sync-state.remoteOnly { color: var(--vscode-charts-blue, #3794ff); }
+.tag-sync-state.localOnly { color: var(--vscode-charts-green, #89d185); }
+.tag-sync-hash {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #999);
+}
+.tag-sync-ops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+}
+.tag-sync-op {
+    padding: 3px 9px;
+    font-size: 11px;
+    font-family: inherit;
+    border-radius: 6px;
+    border: 1px solid var(--vscode-button-border, rgba(128, 128, 128, .35));
+    background: transparent;
+    color: var(--vscode-foreground, #cccccc);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease-out, color .15s ease-out;
+}
+.tag-sync-op:hover { background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, .3)); }
+.tag-sync-op.on {
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #ffffff);
+    border-color: transparent;
+}
+.tag-sync-op.danger { color: var(--vscode-errorForeground, #f48771); }
+.tag-sync-op.danger.on {
+    background: var(--vscode-inputValidation-errorBackground, #5a2a2a);
+    color: var(--vscode-inputValidation-errorForeground, #f48771);
+    border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
+}
+/* Narrow webviews: hashes are reference detail, the decision columns stay. */
+@media (max-width: 620px) {
+    .tag-sync-head, .tag-sync-row {
+        grid-template-columns: 24px minmax(90px, 1fr) 140px minmax(200px, 1.2fr);
+        min-width: 0;
+    }
+    .tag-sync-head span:nth-child(4),
+    .tag-sync-head span:nth-child(5),
+    .tag-sync-row .tag-sync-hash {
+        display: none;
+    }
+}
 
 /* Custom tooltip for theme-aware hover hints */
 .custom-tooltip {

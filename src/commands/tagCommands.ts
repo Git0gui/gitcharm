@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { GitService, TagPushResult, tagNameProblem } from '../services/gitService';
 import { diffTagRefs, formatGitError, redactUrlCredentials, RemoteTagRef } from '../services/gitUtils';
 import { logger } from '../services/logger';
+import { TagSyncRow } from '../views/messages';
 import { GraphViewProvider } from '../views/graphView';
 import { combineErrorText } from './helpers';
 import { t } from '../i18n';
@@ -334,33 +335,40 @@ export function registerTagCommands(
                 return;
             }
 
-            interface TagSyncItem extends vscode.QuickPickItem {
-                action: 'pull' | 'pullForce' | 'push' | 'deleteRemote';
-                name: string;
-            }
-            const items: TagSyncItem[] = [];
-            for (const name of diff.remoteOnly) {
-                items.push({ label: name, description: t('tag.remoteOnlyDesc'), detail: t('tag.actionPull'), action: 'pull', name });
-                items.push({ label: name, description: t('tag.remoteOnlyDesc'), detail: t('tag.actionDeleteRemote'), action: 'deleteRemote', name });
-            }
-            for (const name of diff.localOnly) {
-                items.push({ label: name, description: t('tag.localOnlyDesc'), detail: t('tag.actionPush'), action: 'push', name });
-            }
-            for (const name of diff.different) {
-                items.push({ label: name, description: t('tag.differentDesc'), detail: t('tag.actionPullOverwrite'), action: 'pullForce', name });
-                items.push({ label: name, description: t('tag.differentDesc'), detail: t('tag.actionDeleteRemote'), action: 'deleteRemote', name });
-            }
+            // Conflicts first: they are the rows that actually need a decision,
+            // while one-sided tags have an obvious default.
+            const remoteCommits = new Map(info.tags.map(tag => [tag.name, tag.commit] as const));
+            const rows: TagSyncRow[] = [
+                ...diff.different.map(name => ({
+                    name,
+                    state: 'different' as const,
+                    localHash: local.get(name),
+                    remoteHash: remoteCommits.get(name)
+                })),
+                ...diff.remoteOnly.map(name => ({
+                    name,
+                    state: 'remoteOnly' as const,
+                    remoteHash: remoteCommits.get(name)
+                })),
+                ...diff.localOnly.map(name => ({
+                    name,
+                    state: 'localOnly' as const,
+                    localHash: local.get(name)
+                }))
+            ];
 
-            const picked = await vscode.window.showQuickPick(items, {
-                canPickMany: true,
-                title: t('tag.remoteDiffTitle', { remote }),
-                placeHolder: t('tag.remoteDiffPlaceHolder')
-            });
-            if (!picked || picked.length === 0) {return;}
+            // The table keeps every tag visible with its own action, so the
+            // user decides per row instead of reading a multi-action quick pick
+            // where the same name appears once per possible verb.
+            const picked = await graphView.showTagSyncDialog(remote, rows);
+            // "Keep local" is a decision that runs nothing: ticking such a row
+            // only records that the conflict was reviewed.
+            const actionable = (picked ?? []).filter(item => item.action !== 'keep');
+            if (actionable.length === 0) {return;}
 
             // Overwriting a local tag and deleting a remote one both destroy
             // something, so they get one explicit confirmation up front.
-            const risky = picked.filter(item => item.action !== 'pull' && item.action !== 'push');
+            const risky = actionable.filter(item => item.action !== 'pull' && item.action !== 'push');
             if (risky.length > 0) {
                 const summary = risky
                     .map(item => item.action === 'deleteRemote'
@@ -377,7 +385,7 @@ export function registerTagCommands(
 
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
-                title: t('tag.syncingTags', { count: picked.length }),
+                title: t('tag.syncingTags', { count: actionable.length }),
                 cancellable: false
             }, async () => {
                 let done = 0;
@@ -387,7 +395,7 @@ export function registerTagCommands(
                 const diverged: string[] = [];
                 const failed: string[] = [];
                 let firstError = '';
-                for (const item of picked) {
+                for (const item of actionable) {
                     if (item.action === 'push') {
                         toPush.push(item.name);
                         continue;

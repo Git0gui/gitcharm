@@ -57,6 +57,27 @@ export interface PushDialogCommit {
     date: string;
 }
 
+/**
+ * One tag whose local and remote state disagree, as shown in the remote-tag
+ * dialog. Hashes are full; the webview shortens them for display.
+ */
+export interface TagSyncRow {
+    name: string;
+    state: 'remoteOnly' | 'localOnly' | 'different';
+    /** Commit the local tag resolves to; absent when only the remote has it. */
+    localHash?: string;
+    /** Commit the remote tag resolves to; absent when only the local has it. */
+    remoteHash?: string;
+}
+
+/** `keep` is an explicit "leave the local tag alone"; nothing is run for it. */
+export type TagSyncOperation = 'keep' | 'pull' | 'pullForce' | 'push' | 'deleteRemote';
+
+export interface TagSyncDecision {
+    name: string;
+    action: TagSyncOperation;
+}
+
 /** Messages sent from the extension host to the webview. */
 export type ExtToWebviewMessage =
     | {
@@ -178,6 +199,7 @@ export type ExtToWebviewMessage =
         /** All configured remotes; more than one turns the dialog's picker on. */
         remotes: string[];
     }
+    | { command: 'showTagSyncDialog'; remote: string; rows: TagSyncRow[] }
     | { command: 'pushFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
     | {
         command: 'showFileHistory';
@@ -269,6 +291,7 @@ export type WebviewToExtMessage =
     | { command: 'saveViewState'; state: PersistedViewState }
     | { command: 'pushDialogAction'; action: string; force?: boolean }
     | { command: 'pushDialogRemote'; remote: string }
+    | { command: 'tagSyncConfirm'; items?: TagSyncDecision[] }
     | { command: 'manageRemotes' }
     | { command: 'pushDialogFileDiff'; hash: string; path: string }
     | { command: 'getCommitFilesForPush'; hash: string }

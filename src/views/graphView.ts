@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, FileStat, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
-import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, WebviewToExtMessage } from './messages';
+import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
@@ -785,6 +785,39 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }));
             subscriptions.push(view.onDidDispose(() => settle(undefined)));
             postDialog(preview);
+        });
+    }
+
+    /**
+     * Show the local-vs-remote tag table and resolve with the rows the user
+     * chose to act on. An empty array means "nothing selected"; undefined means
+     * the dialog was dismissed or the view disappeared under it. Like the push
+     * dialog, the listener lives until it settles — a dialog left open stays
+     * usable, and losing the view settles it so the command never hangs.
+     */
+    showTagSyncDialog(remote: string, rows: TagSyncRow[]): Promise<TagSyncDecision[] | undefined> {
+        return new Promise((resolve) => {
+            const view = this._view;
+            if (!view) {
+                resolve(undefined);
+                return;
+            }
+            const subscriptions: vscode.Disposable[] = [];
+            let settled = false;
+            const settle = (items?: TagSyncDecision[]) => {
+                if (settled) {return;}
+                settled = true;
+                while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+                resolve(items);
+            };
+            subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+                if (msg.command === 'tagSyncConfirm') {settle(msg.items ?? []);}
+            }));
+            subscriptions.push(view.onDidChangeVisibility(() => {
+                if (!view.visible) {settle(undefined);}
+            }));
+            subscriptions.push(view.onDidDispose(() => settle(undefined)));
+            this._post({ command: 'showTagSyncDialog', remote, rows });
         });
     }
 
