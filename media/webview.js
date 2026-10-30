@@ -360,6 +360,9 @@ function applyRestoreNow() {
                 // The panel's own min wins over the center floor when the window is
                 // too small to honor both — a stuck divider beats an unusable bar.
                 panel.style.width = Math.max(minW, Math.min(newW, maxSidePanelWidth(panel))) + 'px';
+                // The tag dialog's overlay stops at this column, so its bound has
+                // to follow the divider while it moves, not only on window resize.
+                syncTagSyncBounds();
             }
             function onUp() {
                 document.removeEventListener('mousemove', onMove);
@@ -1356,6 +1359,14 @@ function syncTagSyncBounds() {
         edge = right.getBoundingClientRect().left;
     }
     tagSyncOverlay.style.right = Math.max(0, window.innerWidth - edge) + 'px';
+    // A frame that was dragged carries a fixed pixel width and would otherwise
+    // spill over the detail column — i.e. sit on top of the files the user just
+    // widened the column to read. CSS-sized frames shrink by themselves.
+    var box = tagSyncOverlay.querySelector('.push-dialog-box');
+    if (box && box.style.width) {
+        var room = tagSyncOverlay.clientWidth - 24;
+        if (room > 0 && box.offsetWidth > room) {box.style.width = room + 'px';}
+    }
 }
 window.addEventListener('resize', syncTagSyncBounds);
 
@@ -4972,6 +4983,9 @@ function showTagSyncDialog(remote, rows, readOnly) {
         '</div></div>';
 
     document.body.appendChild(overlay);
+    // The backdrop ends at the detail column, so the column's divider sits under
+    // it; this class lifts the divider back above the overlay (webview.css).
+    document.body.classList.add('tag-sync-open');
     tagSyncOverlay = overlay;
     syncTagSyncBounds();
     attachDialogResize(overlay, 'tagsync');
@@ -5103,6 +5117,7 @@ function showTagSyncDialog(remote, rows, readOnly) {
             if (overlay._densityObserver) { overlay._densityObserver.disconnect(); }
             overlay.remove();
             tagSyncOverlay = null;
+            document.body.classList.remove('tag-sync-open');
             if (action === 'apply') {
                 vscode.postMessage({
                     command: 'tagSyncConfirm',

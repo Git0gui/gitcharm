@@ -540,6 +540,12 @@ svg { flex: none; }
 }
 .resizer:hover { background: var(--vscode-focusBorder, #007fd4); }
 #main.no-detail #resizer-right { display: none; }
+/* The tag dialog's backdrop stops at the detail column so its commit hashes can
+   be inspected there — which puts this divider, the only way to widen that
+   column, underneath it. Lift the divider above the overlay: dragging it is how
+   the commit's file list gets the width to show its paths, and the dialog's
+   bound follows the drag (syncTagSyncBounds). */
+body.tag-sync-open #resizer-right { z-index: 2100; }
 
 /* vertical resizer between d-info and d-files */
 .resizer-v {
