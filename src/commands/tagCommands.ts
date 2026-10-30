@@ -197,18 +197,49 @@ export function registerTagCommands(
             if (!names || names.length === 0) {return;}
 
             const summary = names.length === 1 ? names[0] : `${names.length}: ${names.join(', ')}`;
+            // Deleting on the remote is a separate answer, not a hidden extra: the
+            // dialog offers both destinations. Without a remote there is nothing
+            // to ask about, so it stays a local-only question.
+            const remote = gitService.getFetchRemote();
+            const localBtn = t('tag.deleteLocalBtn');
+            const bothBtn = t('tag.deleteLocalRemoteBtn');
             const confirm = await graphView.showDialog(
                 t('tag.deleteConfirm', { names: summary }),
-                [t('tag.deleteBtn'), t('common.cancel')],
+                remote
+                    ? [localBtn, bothBtn, t('common.cancel')]
+                    : [localBtn, t('common.cancel')],
                 'warn'
             );
-            if (confirm !== t('tag.deleteBtn')) {return;}
+            if (confirm !== localBtn && confirm !== bothBtn) {return;}
+            const alsoRemote = confirm === bothBtn;
 
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
-                title: t('tag.deleting', { names: summary }),
+                title: alsoRemote
+                    ? t('tag.deletingBoth', { names: summary })
+                    : t('tag.deleting', { names: summary }),
                 cancellable: false
             }, async () => {
+                // Remote first: the network half can fail (auth, protected tags)
+                // and that must not stop the local removal the user also asked for.
+                const remoteFailed: string[] = [];
+                let remoteError = '';
+                if (alsoRemote) {
+                    for (const name of names) {
+                        try {
+                            await gitService.deleteRemoteTag(name, remote);
+                        } catch (error) {
+                            // A tag that was never pushed is not a failure: the
+                            // remote has nothing to delete.
+                            const text = combineErrorText(error);
+                            if (/remote ref does not exist/i.test(text)) {continue;}
+                            logger.error(`[GitCharm] remote tag delete failed (${name}): ${redactUrlCredentials(text)}`);
+                            if (!remoteError) {remoteError = formatGitError(error);}
+                            remoteFailed.push(name);
+                        }
+                    }
+                }
+
                 const deleted: string[] = [];
                 const failed: string[] = [];
                 for (const name of names) {
@@ -221,14 +252,25 @@ export function registerTagCommands(
                 }
 
                 if (deleted.length > 0) {
-                    vscode.window.showInformationMessage(
-                        deleted.length === 1
-                            ? t('tag.deleted', { name: deleted[0] })
-                            : t('tag.deletedMultiple', { count: deleted.length })
-                    );
+                    if (alsoRemote && failed.length === 0 && remoteFailed.length === 0) {
+                        vscode.window.showInformationMessage(t('tag.deletedBoth', { names: summary }));
+                    } else {
+                        vscode.window.showInformationMessage(
+                            deleted.length === 1
+                                ? t('tag.deleted', { name: deleted[0] })
+                                : t('tag.deletedMultiple', { count: deleted.length })
+                        );
+                    }
                 }
                 if (failed.length > 0) {
                     vscode.window.showErrorMessage(t('tag.deleteFailed', { error: failed.join(', ') }));
+                }
+                if (remoteFailed.length > 0) {
+                    showNetworkError(t('tag.deleteRemoteFailed', {
+                        names: remoteFailed.join(', '),
+                        remote,
+                        error: remoteError
+                    }));
                 }
                 if (deleted.length > 0) {graphView.refresh();}
             });

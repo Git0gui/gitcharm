@@ -35,7 +35,7 @@
     "cmd.openBranchOnRemote": "Open Branch on Remote Web",
     "cmd.manageRemotes": "Manage Remotes",
     "cmd.createTag": "Create Tag on Commit (Lightweight or Annotated)",
-    "cmd.deleteTag": "Delete Local Tag",
+    "cmd.deleteTag": "Delete Tag",
     "cmd.pushTag": "Push Tag to Remote",
     "cmd.pushAllTags": "Push All Tags to Remote",
     "cmd.remoteTags": "Compare Local and Remote Tags",

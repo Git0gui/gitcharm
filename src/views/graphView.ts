@@ -622,23 +622,40 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Returns the selected action or undefined if dismissed.
      */
     showDialog(message: string, actions: string[], type: 'warn' | 'info' | 'error' = 'warn'): Promise<string | undefined> {
+        const view = this._view;
+        if (!view) {return Promise.resolve(undefined);}
+        // Command palette can run a command whose dialog would land in a hidden
+        // view, where the frame (and the dialog with it) does not exist. Ask in a
+        // native modal instead: buffering it would wait for a panel the user has
+        // no reason to open.
+        if (!view.visible) {
+            const options: vscode.MessageOptions = { modal: true };
+            const ask = (msg: string): Thenable<string | undefined> =>
+                type === 'error' ? vscode.window.showErrorMessage(msg, options, ...actions)
+                : type === 'info' ? vscode.window.showInformationMessage(msg, options, ...actions)
+                : vscode.window.showWarningMessage(msg, options, ...actions);
+            return Promise.resolve(ask(message));
+        }
         return new Promise((resolve) => {
-            if (!this._view) {
-                resolve(undefined);
-                return;
-            }
-            const handler = this._view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
-                if (msg.command === 'dialogAction') {
-                    handler.dispose();
-                    resolve(msg.action);
-                }
-            });
+            const subscriptions: vscode.Disposable[] = [];
+            let settled = false;
+            const settle = (action?: string) => {
+                if (settled) {return;}
+                settled = true;
+                while (subscriptions.length > 0) {subscriptions.pop()?.dispose();}
+                resolve(action);
+            };
+            subscriptions.push(view.webview.onDidReceiveMessage((msg: WebviewToExtMessage) => {
+                if (msg.command === 'dialogAction') {settle(msg.action);}
+            }));
+            // Hiding the panel destroys the dialog's DOM, so an answer can never
+            // arrive — settle then instead of on a clock, which used to leave a
+            // dialog on screen whose buttons were already dead.
+            subscriptions.push(view.onDidChangeVisibility(() => {
+                if (!view.visible) {settle(undefined);}
+            }));
+            subscriptions.push(view.onDidDispose(() => settle(undefined)));
             this._post({ command: 'showDialog', message, actions, type });
-            // Fallback: resolve after 30s in case user closes panel
-            setTimeout(() => {
-                handler.dispose();
-                resolve(undefined);
-            }, 30000);
         });
     }
 
