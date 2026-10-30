@@ -153,11 +153,17 @@
         var html = [];
         for (var i = 0; i < limit; i++) {
             var c = state.commits[i];
+            /* One line per revision: the list is an index, and a taller header
+             * band would push the diff — the reason the tab exists — off screen.
+             * Everything that identifies the commit shares this row; only the
+             * line's own text (line mode) gets a second one. */
+            var head = c.dirty
+                ? '<span class="lh-dirty-dot"></span>'
+                : '<span class="lh-hash">' + esc(c.hash.substring(0, 8)) + '</span>';
             var meta = c.dirty
                 ? '<span class="lh-author">' + esc(T('lineHistory.you')) + '</span>' +
                     '<span class="lh-time">' + esc(T('lineHistory.justNow')) + '</span>'
-                : '<span class="lh-hash">' + esc(c.hash.substring(0, 8)) + '</span>' +
-                    '<span class="lh-author">' + esc(c.author) + '</span>' +
+                : '<span class="lh-author">' + esc(c.author) + '</span>' +
                     '<span class="lh-time">' + esc(fmtTime(c.authorTime)) + '</span>' +
                     (showLines && c.lines > 0
                         ? '<span class="lh-lines">' + esc(T('lineHistory.linesCount', { count: c.lines })) + '</span>'
@@ -169,13 +175,13 @@
             html.push(
                 '<button class="lh-row' + (c.dirty ? ' lh-row-dirty' : '') +
                     (c.hash === state.selected ? ' sel' : '') + '" type="button" data-hash="' + esc(c.hash) + '">' +
-                    '<span class="lh-row-top">' +
+                    '<span class="lh-row-main">' +
+                        head +
                         '<span class="lh-summary">' +
-                            (c.dirty ? '<span class="lh-dirty-dot"></span>' : '') +
                             esc(c.dirty ? T('lineHistory.uncommitted') : (c.summary || T('lineHistory.noSummary'))) +
                         '</span>' +
+                        meta +
                     '</span>' +
-                    '<span class="lh-row-bottom">' + meta + '</span>' +
                     content +
                 '</button>'
             );
