@@ -134,7 +134,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | Compare file with local copy | Commit detail (third panel) → right-click a file → Compare with Local File |
 | Show a file's uncommitted changes | Editor / Explorer right-click → Show Changes |
 | Pick a file from a commit | Commit detail (third panel) → right-click a file → Cherry-Pick File |
-| View file history | Editor / Explorer right-click → GitCharm → View File History (opens the Timeline) |
+| View file history | Editor / Explorer right-click → GitCharm → File History (Native) (opens the Timeline) |
 | Toggle blame | Editor right-click → Toggle Blame, or click the line-number area |
 
 ## Settings
@@ -309,7 +309,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 与本地文件对比 | 第三栏变更文件右键 → 与当前本地文件对比 |
 | 看当前文件未提交的改动 | 编辑器 / 资源管理器右键 → 查看差异 |
 | 挑选提交中的单个文件 | 第三栏变更文件右键 → 挑选文件 |
-| 查看文件所有历史提交 | 编辑器 / 资源管理器右键 → GitCharm → 查看文件所有历史提交（打开时间线） |
+| 文件历史(原生) | 编辑器 / 资源管理器右键 → GitCharm → 文件历史(原生)（打开时间线） |
 | 显示 Blame | 编辑器右键 → 显示提交信息，或点击行号区域 |
 
 ## 设置项
