@@ -8,6 +8,7 @@ import {
     parseLogLine,
     parseGraphLine,
     parseLsRemoteTags,
+    parseTagRefList,
     diffTagRefs,
     refsTagsFirst,
     LruCache,
@@ -338,6 +339,33 @@ describe('parseLsRemoteTags', () => {
         assert.deepEqual(parseLsRemoteTags(''), []);
         assert.deepEqual(parseLsRemoteTags('HEAD\tnot-a-hash\n'), []);
         assert.deepEqual(parseLsRemoteTags('garbage'), []);
+    });
+});
+
+describe('parseTagRefList', () => {
+    const tagObject = 'b'.repeat(40);
+    const commit = 'c'.repeat(40);
+    const light = 'd'.repeat(40);
+
+    it('peels annotated tags through *objectname', () => {
+        const tags = parseTagRefList(`${tagObject}\t${commit}\tv1.0.0\n`);
+        assert.equal(tags.get('v1.0.0'), commit);
+    });
+
+    it('keeps lightweight tags on their object name', () => {
+        const tags = parseTagRefList(`${light}\t\tv1.0.0-rc.1\n`);
+        assert.equal(tags.get('v1.0.0-rc.1'), light);
+    });
+
+    it('keeps slash names and ignores empty or malformed lines', () => {
+        const tags = parseTagRefList([
+            `${tagObject}\t${commit}\trelease/v2`,
+            '',
+            `not-a-hash\t\tnope`,
+            `garbage`,
+            ''
+        ].join('\n'));
+        assert.deepEqual([...tags], [['release/v2', commit]]);
     });
 });
 

@@ -10,8 +10,9 @@ import { t } from '../i18n';
 /**
  * Tag management: create on a commit, delete locally, push to the remote.
  *
- * The tag list always comes from `listTags()`/`getTagsAt()` — a refs-directory
- * read with no subprocess — so these commands never touch vscode.git.
+ * The tag list always comes from `listTags()`/`getTagsAt()`, which peel packed
+ * annotated tags through `git for-each-ref`; these commands never touch
+ * vscode.git.
  */
 export function registerTagCommands(
     ctx: vscode.ExtensionContext,
@@ -24,11 +25,11 @@ export function registerTagCommands(
      * play — every tag in the repository. The webview only ever sends a hash or
      * a tag name, so resolution stays on this side.
      */
-    const resolveTagNames = (node: any): string[] => {
+    const resolveTagNames = async (node: any): Promise<string[]> => {
         if (typeof node?.tag === 'string' && node.tag) {return [node.tag];}
         const hash = node?.hash ?? node?.commit?.hash;
         if (hash) {return gitService.getTagsAt(hash);}
-        return gitService.listTags().map(tag => tag.name);
+        return (await gitService.listTags()).map(tag => tag.name);
     };
 
     /** Network failures stay short here; the full git output is in the log. */
@@ -127,7 +128,7 @@ export function registerTagCommands(
                 cancellable: false
             }, async () => {
                 const info = await gitService.listRemoteTags();
-                const local = new Map(gitService.listTags().map(tag => [tag.name, tag.hash] as const));
+                const local = new Map((await gitService.listTags()).map(tag => [tag.name, tag.hash] as const));
                 const state = new Map<string, 'same' | 'diverged'>();
                 for (const tag of info.tags) {
                     const mine = local.get(tag.name);
@@ -150,7 +151,7 @@ export function registerTagCommands(
                 return;
             }
 
-            const existing = gitService.listTags().map(tag => tag.name);
+            const existing = (await gitService.listTags()).map(tag => tag.name);
             const name = await vscode.window.showInputBox({
                 prompt: t('tag.namePrompt', { hash: String(hash).substring(0, 7) }),
                 placeHolder: 'v1.0.0',
@@ -191,7 +192,7 @@ export function registerTagCommands(
         }),
 
         vscode.commands.registerCommand('idea-git.deleteTag', async (node: any) => {
-            const candidates = resolveTagNames(node);
+            const candidates = await resolveTagNames(node);
             const names = await pickTags(candidates, 'tag.pickDeletePlaceHolder');
             if (!names || names.length === 0) {return;}
 
@@ -234,7 +235,7 @@ export function registerTagCommands(
         }),
 
         vscode.commands.registerCommand('idea-git.pushTag', async (node: any) => {
-            let candidates = resolveTagNames(node);
+            let candidates = await resolveTagNames(node);
             if (candidates.length === 0) {
                 vscode.window.showInformationMessage(t('tag.none'));
                 return;
@@ -276,7 +277,7 @@ export function registerTagCommands(
         }),
 
         vscode.commands.registerCommand('idea-git.pushAllTags', async () => {
-            const names = gitService.listTags().map(tag => tag.name);
+            const names = (await gitService.listTags()).map(tag => tag.name);
             if (names.length === 0) {
                 vscode.window.showInformationMessage(t('tag.none'));
                 return;
@@ -325,7 +326,7 @@ export function registerTagCommands(
             }
             if (!info) {return;}
             const remote = info.remote;
-            const local = new Map(gitService.listTags().map(tag => [tag.name, tag.hash] as const));
+            const local = new Map((await gitService.listTags()).map(tag => [tag.name, tag.hash] as const));
             const diff = diffTagRefs(local, info.tags);
             if (diff.remoteOnly.length === 0 && diff.localOnly.length === 0 && diff.different.length === 0) {
                 vscode.window.showInformationMessage(t('tag.remoteInSync', {

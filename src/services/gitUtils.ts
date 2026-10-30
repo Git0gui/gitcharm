@@ -841,6 +841,23 @@ export function parseLsRemoteTags(output: string): RemoteTagRef[] {
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Parse `git for-each-ref refs/tags --format=%(objectname)%09%(*objectname)%09%(refname:short)`.
+ * `%(*objectname)` is the commit an annotated tag peels to and empty for a
+ * lightweight tag, whose object name already is the commit.
+ */
+export function parseTagRefList(output: string): Map<string, string> {
+    const hashRe = /^[0-9a-f]{40,64}$/i;
+    const tags = new Map<string, string>();
+    for (const line of output.split('\n')) {
+        if (!line) {continue;}
+        const [object, peeled, name] = line.split('\t');
+        if (!name || !hashRe.test(object ?? '')) {continue;}
+        tags.set(name, peeled && hashRe.test(peeled) ? peeled : object);
+    }
+    return tags;
+}
+
 /** How local tags differ from the remote's, by tag name. */
 export interface TagDiff {
     /** On the remote, absent locally — deleted here, or never fetched. */
@@ -851,7 +868,7 @@ export interface TagDiff {
     different: string[];
 }
 
-/** `local` maps tag name → commit, exactly what `RefsReader.readTagRefs` peels to. */
+/** `local` maps tag name → commit, exactly what `GitService.getTagRefs` returns. */
 export function diffTagRefs(local: ReadonlyMap<string, string>, remote: readonly RemoteTagRef[]): TagDiff {
     const remoteCommits = new Map(remote.map(tag => [tag.name, tag.commit]));
     const remoteOnly: string[] = [];

@@ -54,6 +54,7 @@ import {
     remoteNameFromUpstream,
     refsTagsFirst,
     parseLsRemoteTags,
+    parseTagRefList,
     RemoteTagRef,
     matchRemoteBranch,
     resolvePushTarget,
@@ -272,6 +273,11 @@ export class GitService {
     private _recentBranches = new RecentBranchReader(() => this._repositoryPath);
     private _trackInfoCache: { at: number; map: BranchTrackMap } | undefined;
     private _trackInfoPromise: Promise<BranchTrackMap> | undefined;
+    // Tag name -> commit hash. `for-each-ref` is what peels annotated tags whose
+    // object lives in a pack file; the refs-directory read can only inflate
+    // loose objects and would otherwise report the tag-object hash.
+    private _tagRefsCache: { at: number; map: Map<string, string> } | undefined;
+    private _tagRefsPromise: Promise<Map<string, string>> | undefined;
     // Persistent branch cache (workspaceState Memento, versioned payload)
     private _persistedCache: PersistedBranchCache;
     
@@ -1194,6 +1200,7 @@ export class GitService {
         this._graphCache.clear();
         this._branchCache.clear();
         this._trackInfoCache = undefined;
+        this._tagRefsCache = undefined;
         // Head hashes must be re-read: divergence checks compare them against
         // remote-tracking refs, and a stale cache hides the arrows.
         this._refsReader.invalidate();
@@ -2711,9 +2718,10 @@ export class GitService {
             }
         }
 
-        // Read branch and tag refs efficiently from filesystem (no subprocess)
+        // Branches come from the refs directory (no subprocess). Tags need
+        // git's peeling so annotated tags in pack files land on their commit.
         const branchRefsMap = this._refsReader.readBranchRefs();
-        const tagRefsMap = this._refsReader.readTagRefs();
+        const tagRefsMap = await this.getTagRefs();
         
         // Build reverse map: hash -> [ref names]
         const hashToRefs = new Map<string, string[]>();
@@ -2795,22 +2803,56 @@ export class GitService {
     }
 
     /**
-     * Every tag with the commit it points at, read from the refs on disk
-     * (no subprocess). Annotated tags resolve to the tagged commit, which is
-     * what RefsReader already reports.
+     * tag name -> commit hash for every local tag.
+     *
+     * This goes through `git for-each-ref` rather than the refs-directory
+     * reader: an annotated tag whose object has been packed has no loose file
+     * to inflate, so a filesystem read can only report the tag-object hash.
+     * That hash matches no commit — the badge silently disappeared, and a tag
+     * sitting on the very same commit as its remote counterpart read as
+     * "different". `%(*objectname)` is the peeled commit and empty for
+     * lightweight tags, so the fallback keeps those as they are.
      */
-    listTags(): Array<{ name: string; hash: string }> {
+    async getTagRefs(): Promise<Map<string, string>> {
+        const TTL_MS = 3000;
+        if (this._tagRefsCache && (Date.now() - this._tagRefsCache.at) < TTL_MS) {
+            return new Map(this._tagRefsCache.map);
+        }
+        if (this._tagRefsPromise) {return new Map(await this._tagRefsPromise);}
+        this._tagRefsPromise = (async () => {
+            try {
+                const output = await this.executeGitArgs(
+                    ['for-each-ref', 'refs/tags', '--format=%(objectname)\t%(*objectname)\t%(refname:short)'],
+                    { timeoutMs: 10000 }
+                );
+                const map = parseTagRefList(output);
+                this._tagRefsCache = { at: Date.now(), map };
+                return map;
+            } catch (error) {
+                // No git binary or no repository yet: the filesystem reader is
+                // still right for loose tags, and it never throws.
+                logger.debug(`[GitCharm] for-each-ref tags failed: ${String(error)}`);
+                return this._refsReader.readTagRefs();
+            } finally {
+                this._tagRefsPromise = undefined;
+            }
+        })();
+        return new Map(await this._tagRefsPromise);
+    }
+
+    /** Every tag with the commit it points at, newest names last. */
+    async listTags(): Promise<Array<{ name: string; hash: string }>> {
         const tags: Array<{ name: string; hash: string }> = [];
-        for (const [name, hash] of this._refsReader.readTagRefs()) {
+        for (const [name, hash] of await this.getTagRefs()) {
             tags.push({ name, hash });
         }
         return tags.sort((a, b) => a.name.localeCompare(b.name));
     }
 
     /** Tag names pointing exactly at `hash` — the ones a row can delete or push. */
-    getTagsAt(hash: string): string[] {
+    async getTagsAt(hash: string): Promise<string[]> {
         const found: string[] = [];
-        for (const [name, tagHash] of this._refsReader.readTagRefs()) {
+        for (const [name, tagHash] of await this.getTagRefs()) {
             if (tagHash === hash) {found.push(name);}
         }
         return found.sort((a, b) => a.localeCompare(b));
@@ -2891,7 +2933,7 @@ export class GitService {
         // An unknown remote has no tracking refs; let `git push` report it
         // instead of blaming the tags for it.
         const configured = this.getRemoteNames().includes(target);
-        const local = new Map(this.listTags().map(tag => [tag.name, tag.hash] as const));
+        const local = new Map((await this.listTags()).map(tag => [tag.name, tag.hash] as const));
         let onRemote: Map<string, string> | undefined;
         if (configured) {
             try {
