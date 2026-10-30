@@ -161,6 +161,11 @@
         "category": "GitCharm"
       },
       {
+        "command": "idea-git.lineHistory",
+        "title": "%cmd.lineHistory%",
+        "category": "GitCharm"
+      },
+      {
         "command": "idea-git.showWorkingDiff",
         "title": "%cmd.showWorkingDiff%",
         "category": "GitCharm"
@@ -304,6 +309,11 @@
           "command": "idea-git.toggleBlame",
           "when": "resourceScheme == file",
           "group": "navigation@1"
+        },
+        {
+          "command": "idea-git.lineHistory",
+          "when": "resourceScheme == file",
+          "group": "navigation@2"
         }
       ],
       "idea-git.editorSubmenu": [
@@ -321,6 +331,11 @@
           "command": "idea-git.viewFileHistory",
           "when": "resourceScheme == file",
           "group": "3_history@1"
+        },
+        {
+          "command": "idea-git.lineHistory",
+          "when": "resourceScheme == file",
+          "group": "3_history@2"
         }
       ],
       "commandPalette": [
@@ -362,6 +377,13 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "idea-git.lineHistory",
+        "key": "alt+h",
+        "when": "editorTextFocus && resourceScheme == file"
+      }
+    ],
     "configuration": {
       "title": "GitCharm",
       "properties": {

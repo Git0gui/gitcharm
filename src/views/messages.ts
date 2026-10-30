@@ -1,6 +1,7 @@
 import { GraphCommit, CommitDetail, FileStat, LogFilters, StashEntry, ReflogEntry, RepositoryOption, WorktreeEntry } from '../services/gitService';
 import { FileIconPack } from '../services/fileIconTheme';
 import { DiffPreviewLine } from '../services/gitUtils';
+import { DiffRow, LineHistoryCommit } from '../services/lineHistory';
 
 /**
  * Message protocol between the extension host and the graph webview.
@@ -274,3 +275,45 @@ export type WebviewToExtMessage =
     | { command: 'getCompareAllFiles' }
     | { command: 'compareFileDiff'; hash: string; path: string }
     | { command: 'compareDialogClosed' };
+
+/**
+ * Line history panel protocol (the editor tab opened by Alt+H).
+ *
+ * The host owns the blame walk and the per-commit patches; the webview only
+ * renders what it is handed. `requestId` lets the webview drop a patch that
+ * arrives after the user already picked another commit — clicking through a
+ * list faster than git answers is the normal case, not an edge case.
+ */
+export type LineHistoryExtMessage =
+    | { command: 'lh.loading' }
+    | {
+        command: 'lh.data';
+        /** Repository-relative path the selection belongs to. */
+        file: string;
+        /** 0-based inclusive line range the blame walk covered. */
+        startLine: number;
+        endLine: number;
+        commits: LineHistoryCommit[];
+        /** Selected lines with no commit yet (edited in the worktree). */
+        skipped: number;
+        /** Lines the selection covers. */
+        scanned: number;
+        /** Set instead of commits when the walk itself failed. */
+        error?: string;
+    }
+    | {
+        command: 'lh.diff';
+        hash: string;
+        requestId: number;
+        rows: DiffRow[];
+        truncated: boolean;
+        binary: boolean;
+        error?: string;
+    };
+
+export type LineHistoryWebviewMessage =
+    | { command: 'ready' }
+    | { command: 'selectCommit'; hash: string; requestId: number }
+    | { command: 'openNativeDiff'; hash: string }
+    | { command: 'revealCommit'; hash: string }
+    | { command: 'refresh' };

@@ -26,6 +26,7 @@
     "cmd.updateBranch": "更新",
     "cmd.commitBranch": "提交...",
     "cmd.viewFileHistory": "查看文件所有历史提交",
+    "cmd.lineHistory": "行历史：选中行（或当前行）的提交记录",
     "cmd.showWorkingDiff": "查看差异",
     "cmd.initRepository": "在当前文件夹初始化 Git 仓库",
     "cmd.revertCommit": "回退提交（生成反向提交）",
