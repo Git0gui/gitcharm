@@ -32,6 +32,9 @@
     }
 
     var state = {
+        /* 'lines' (Alt+H) or 'file' (whole-file history): the two tabs share
+         * this renderer, and the mode decides which head/list/diff bits exist. */
+        mode: 'lines',
         file: '',
         startLine: 0,
         endLine: 0,
@@ -99,17 +102,27 @@
         return count;
     }
 
+    function isFileMode() {
+        return state.mode === 'file';
+    }
+
     function renderHead() {
         fileEl.textContent = state.file;
         var parts = [];
         if (!state.loading) {
-            parts.push(rangeLabel());
-            if (!state.error) {
-                parts.push(T(state.chain ? 'lineHistory.revisions' : 'lineHistory.summary', {
-                    count: revisionCount()
-                }));
+            if (isFileMode()) {
+                if (!state.error) {
+                    parts.push(T('fileHistory.summary', { count: revisionCount() }));
+                }
+            } else {
+                parts.push(rangeLabel());
+                if (!state.error) {
+                    parts.push(T(state.chain ? 'lineHistory.revisions' : 'lineHistory.summary', {
+                        count: revisionCount()
+                    }));
+                }
+                if (state.skipped > 0) { parts.push(T('lineHistory.skipped', { count: state.skipped })); }
             }
-            if (state.skipped > 0) { parts.push(T('lineHistory.skipped', { count: state.skipped })); }
         }
         subEl.textContent = parts.join(' · ');
         document.title = state.file;
@@ -117,8 +130,9 @@
 
     function renderList() {
         var scrollTop = listEl.scrollTop;
+        var loadingText = T(isFileMode() ? 'fileHistory.loading' : 'lineHistory.loading');
         if (state.loading) {
-            listEl.innerHTML = '<div class="lh-note"><span class="lh-spin"></span>' + esc(T('lineHistory.loading')) + '</div>';
+            listEl.innerHTML = '<div class="lh-note"><span class="lh-spin"></span>' + esc(loadingText) + '</div>';
             return;
         }
         if (state.error) {
@@ -126,14 +140,16 @@
             return;
         }
         if (state.commits.length === 0) {
-            listEl.innerHTML = '<div class="lh-note">' + esc(T('lineHistory.noCommits')) + '</div>';
+            listEl.innerHTML = '<div class="lh-note">' +
+                esc(T(isFileMode() ? 'fileHistory.noCommits' : 'lineHistory.noCommits')) + '</div>';
             return;
         }
 
         var limit = Math.min(state.shown, state.commits.length);
         /* "2 行来自此提交" only means something when more than one line was
-         * selected; on a single line every row would just say 1. */
-        var showLines = state.scanned > 1;
+         * selected; on a single line every row would just say 1. A file-history
+         * row is a whole-file change, so that count has no meaning there. */
+        var showLines = !isFileMode() && state.scanned > 1;
         var html = [];
         for (var i = 0; i < limit; i++) {
             var c = state.commits[i];
@@ -198,11 +214,14 @@
     }
 
     function requestDiff(hash) {
+        /* A file-history row explains the whole file change — there is no
+         * selection to narrow it to. */
+        var full = isFileMode() || state.full;
         state.diffRequest++;
-        state.diff = { hash: hash, loading: true, requestId: state.diffRequest, full: state.full };
+        state.diff = { hash: hash, loading: true, requestId: state.diffRequest, full: full };
         renderDiff();
         vscode.postMessage({
-            command: 'selectCommit', hash: hash, requestId: state.diffRequest, full: state.full
+            command: 'selectCommit', hash: hash, requestId: state.diffRequest, full: full
         });
     }
 
@@ -231,7 +250,7 @@
         diffTitleEl.textContent = hasCommit ? diffHeaderText() : '';
         revealBtn.style.display = isCommit ? '' : 'none';
         nativeBtn.style.display = isCommit ? '' : 'none';
-        scopeBtn.style.display = hasCommit ? '' : 'none';
+        scopeBtn.style.display = hasCommit && !isFileMode() ? '' : 'none';
         renderScope();
         diffBodyEl.innerHTML = hasCommit ? diffBodyHtml(state.diff) : '';
         renderDiffStats();
@@ -345,6 +364,7 @@
         if (!message || !message.command) { return; }
 
         if (message.command === 'lh.loading') {
+            state.mode = message.mode || state.mode;
             state.loading = true;
             renderHead();
             renderList();
@@ -354,6 +374,7 @@
         if (message.command === 'lh.data') {
             var keep = state.selected;
             state.loading = false;
+            state.mode = message.mode || 'lines';
             state.file = message.file;
             state.startLine = message.startLine;
             state.endLine = message.endLine;

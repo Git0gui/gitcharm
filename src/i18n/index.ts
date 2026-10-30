@@ -309,6 +309,10 @@ const zh: Record<string, string> = {
     'fileHistory.empty': '该文件没有历史记录',
     'fileHistory.failed': '获取文件历史失败: {error}',
     'fileHistory.timelineFailed': '打开时间线失败: {error}',
+    'fileHistory.loading': '正在读取文件历史…',
+    'fileHistory.repoChanged': '仓库已切换，请重新打开文件历史',
+    'fileHistory.noCommits': '这个文件还没有提交历史',
+    'fileHistory.summary': '共 {count} 个提交',
     'common.noFileSelected': '未选择文件',
 
     // line history (blame set + per-commit diff in an editor tab)
@@ -988,6 +992,10 @@ const en: Record<string, string> = {
     'fileHistory.empty': 'No history for this file',
     'fileHistory.failed': 'Failed to get file history: {error}',
     'fileHistory.timelineFailed': 'Failed to open the Timeline view: {error}',
+    'fileHistory.loading': 'Reading file history…',
+    'fileHistory.repoChanged': 'The repository changed — reopen file history',
+    'fileHistory.noCommits': 'This file has no commit history yet',
+    'fileHistory.summary': '{count} commit(s)',
     'common.noFileSelected': 'No file selected',
 
     // line history (blame set + per-commit diff in an editor tab)

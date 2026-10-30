@@ -410,6 +410,19 @@
           ],
           "description": "%config.pullStrategy%"
         },
+        "idea-git.fileHistory": {
+          "type": "string",
+          "default": "custom",
+          "enum": [
+            "custom",
+            "native"
+          ],
+          "enumDescriptions": [
+            "%config.fileHistory.custom%",
+            "%config.fileHistory.native%"
+          ],
+          "description": "%config.fileHistory%"
+        },
         "idea-git.language": {
           "type": "string",
           "default": "auto",

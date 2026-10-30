@@ -285,9 +285,11 @@ export type WebviewToExtMessage =
  * list faster than git answers is the normal case, not an edge case.
  */
 export type LineHistoryExtMessage =
-    | { command: 'lh.loading' }
+    | { command: 'lh.loading'; mode: 'lines' | 'file' }
     | {
         command: 'lh.data';
+        /** Which tab this is: selected lines (Alt+H) or the whole file. */
+        mode: 'lines' | 'file';
         /** Repository-relative path the selection belongs to. */
         file: string;
         /** 0-based inclusive line range the blame walk covered. */

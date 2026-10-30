@@ -19,8 +19,16 @@ import {
     LineHistoryCommit,
     ParsedPatch
 } from '../services/lineHistory';
+import { buildFileLogArgs, parseFileLog } from '../services/fileHistory';
 import { LineHistoryExtMessage, LineHistoryWebviewMessage } from './messages';
 import { openEditorDiff } from '../commands/helpers';
+
+/**
+ * `lines` is the Alt+H tab; `file` is the whole-file history the
+ * "File History" command opens. Same panel, different list source and diff
+ * scope — the file tab has no line range at all.
+ */
+export type LineHistoryMode = 'lines' | 'file';
 
 export interface LineHistoryTarget {
     /** Root the blame walk belongs to; a different repository invalidates it. */
@@ -36,6 +44,8 @@ export interface LineHistoryTarget {
      * document on screen is the one the user clicked in.
      */
     text: string;
+    /** Defaults to 'lines' (the Alt+H tab). */
+    mode?: LineHistoryMode;
 }
 
 /** Patches are cheap to recompute but not free; keep the last few around. */
@@ -51,7 +61,8 @@ const DIFF_CACHE_LIMIT = 30;
  * git arguments, only with hashes it already handed out.
  */
 export class LineHistoryPanel {
-    private static _current: LineHistoryPanel | undefined;
+    /** One tab per mode: Alt+H and "File History" must not overwrite each other. */
+    private static readonly _current = new Map<LineHistoryMode, LineHistoryPanel>();
 
     public static show(
         git: GitService,
@@ -59,18 +70,20 @@ export class LineHistoryPanel {
         target: LineHistoryTarget,
         onRevealCommit: (hash: string, file: string) => void
     ): LineHistoryPanel {
-        if (LineHistoryPanel._current && !LineHistoryPanel._current._disposed) {
-            const panel = LineHistoryPanel._current;
-            panel._retarget(target);
-            panel._panel.reveal(undefined, true);
-            return panel;
+        const mode = target.mode ?? 'lines';
+        const existing = LineHistoryPanel._current.get(mode);
+        if (existing && !existing._disposed) {
+            existing._retarget(target);
+            existing._panel.reveal(undefined, true);
+            return existing;
         }
         const panel = new LineHistoryPanel(git, extensionUri, target, onRevealCommit);
-        LineHistoryPanel._current = panel;
+        LineHistoryPanel._current.set(mode, panel);
         return panel;
     }
 
     private readonly _panel: vscode.WebviewPanel;
+    private readonly _mode: LineHistoryMode;
     private readonly _diffCache = new Map<string, ParsedPatch>();
     private readonly _inFlight = new Map<string, Promise<ParsedPatch>>();
     private _target: LineHistoryTarget;
@@ -90,9 +103,10 @@ export class LineHistoryPanel {
         private readonly _onRevealCommit: (hash: string, file: string) => void
     ) {
         this._target = target;
+        this._mode = target.mode ?? 'lines';
         this._panel = vscode.window.createWebviewPanel(
-            'idea-git.lineHistory',
-            LineHistoryPanel._title(target.file),
+            this._mode === 'file' ? 'idea-git.fileHistory' : 'idea-git.lineHistory',
+            LineHistoryPanel._title(target.file, this._mode),
             { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
             {
                 enableScripts: true,
@@ -108,12 +122,15 @@ export class LineHistoryPanel {
         );
         this._panel.onDidDispose(() => {
             this._disposed = true;
-            if (LineHistoryPanel._current === this) {LineHistoryPanel._current = undefined;}
+            if (LineHistoryPanel._current.get(this._mode) === this) {
+                LineHistoryPanel._current.delete(this._mode);
+            }
         });
     }
 
-    private static _title(file: string): string {
-        return `${path.posix.basename(file)} — ${t('lineHistory.title')}`;
+    private static _title(file: string, mode: LineHistoryMode): string {
+        const kind = mode === 'file' ? t('fileHistory.title') : t('lineHistory.title');
+        return `${path.posix.basename(file)} — ${kind}`;
     }
 
     /**
@@ -123,7 +140,7 @@ export class LineHistoryPanel {
      */
     private _retarget(target: LineHistoryTarget): void {
         this._target = target;
-        this._panel.title = LineHistoryPanel._title(target.file);
+        this._panel.title = LineHistoryPanel._title(target.file, this._mode);
         this._diffCache.clear();
         if (this._ready) {void this._load();}
     }
@@ -141,11 +158,17 @@ export class LineHistoryPanel {
             case 'openNativeDiff':
                 await this._openNativeDiff(message.hash);
                 return;
-            case 'revealCommit':
-                if (message.hash !== WORKTREE_COMMIT) {
-                    this._onRevealCommit(message.hash, this._target.file);
-                }
+            case 'revealCommit': {
+                if (message.hash === WORKTREE_COMMIT) {return;}
+                // The graph knows the file by the name it had at that commit;
+                // in file mode that is the row's own path, not today's.
+                const commit = this._commit(message.hash);
+                const file = this._mode === 'file' && commit?.path
+                    ? commit.path
+                    : this._target.file;
+                this._onRevealCommit(message.hash, file);
                 return;
+            }
             case 'refresh':
                 this._diffCache.clear();
                 await this._load();
@@ -165,15 +188,20 @@ export class LineHistoryPanel {
 
     private async _load(): Promise<void> {
         const ticket = ++this._ticket;
-        this._post({ command: 'lh.loading' });
+        this._post({ command: 'lh.loading', mode: this._mode });
 
         if (this._repositoryChanged()) {
             this._commits = [];
             this._skipped = 0;
-            this._scanned = this._target.endLine - this._target.startLine + 1;
+            this._scanned = this._mode === 'file' ? 0 : this._target.endLine - this._target.startLine + 1;
             this._range = { startLine: this._target.startLine, endLine: this._target.endLine };
-            this._error = t('lineHistory.repoChanged');
+            this._error = t(this._mode === 'file' ? 'fileHistory.repoChanged' : 'lineHistory.repoChanged');
             this._post(this._dataMessage());
+            return;
+        }
+
+        if (this._mode === 'file') {
+            await this._loadFile(ticket);
             return;
         }
 
@@ -217,6 +245,34 @@ export class LineHistoryPanel {
         }
         this._post(this._dataMessage());
         void this._loadChain(blamed, ticket);
+    }
+
+    /**
+     * Whole-file history: one `--follow` walk, no line range, no chain.
+     *
+     * `--follow` reports each commit under the name the file had back then;
+     * the fallback only covers a record whose name-status line git omitted.
+     */
+    private async _loadFile(ticket: number): Promise<void> {
+        try {
+            const output = await this._git.executeGitArgs(
+                buildFileLogArgs(this._target.file),
+                { timeoutMs: 30000 }
+            );
+            if (ticket !== this._ticket || this._disposed) {return;}
+            this._commits = parseFileLog(output).map(c =>
+                c.path ? c : { ...c, path: this._target.file }
+            );
+            this._skipped = 0;
+            this._scanned = 0;
+            this._error = undefined;
+        } catch (error) {
+            if (ticket !== this._ticket || this._disposed) {return;}
+            logger.debug('[GitCharm] File history log failed:', error);
+            this._commits = [];
+            this._error = LineHistoryPanel._isNoHistory(error) ? undefined : formatGitError(error);
+        }
+        this._post(this._dataMessage());
     }
 
     /**
@@ -292,6 +348,7 @@ export class LineHistoryPanel {
     private _dataMessage(): LineHistoryExtMessage {
         return {
             command: 'lh.data',
+            mode: this._mode,
             file: this._target.file,
             startLine: this._range.startLine,
             endLine: this._range.endLine,
@@ -345,27 +402,29 @@ export class LineHistoryPanel {
         }
         const commit = this._commit(hash);
         if (!commit) {return;}
-        const key = this._diffKey(commit, full);
+        // A file-history row is about the whole file; there is no line scope.
+        const scope = this._mode === 'file' || full;
+        const key = this._diffKey(commit, scope);
 
         const cached = this._diffCache.get(key);
         if (cached) {
             // Refresh LRU position.
             this._diffCache.delete(key);
             this._diffCache.set(key, cached);
-            this._post({ command: 'lh.diff', hash, requestId, full, ...cached });
+            this._post({ command: 'lh.diff', hash, requestId, full: scope, ...cached });
             return;
         }
 
         try {
-            const diff = await this._fetchDiff(commit, key, full);
-            this._post({ command: 'lh.diff', hash, requestId, full, ...diff });
+            const diff = await this._fetchDiff(commit, key, scope);
+            this._post({ command: 'lh.diff', hash, requestId, full: scope, ...diff });
         } catch (error) {
             logger.debug('[GitCharm] Line history diff failed:', error);
             this._post({
                 command: 'lh.diff',
                 hash,
                 requestId,
-                full,
+                full: scope,
                 rows: [],
                 truncated: false,
                 binary: false,
@@ -483,7 +542,7 @@ export class LineHistoryPanel {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     ${csp}
-    <title>${t('lineHistory.title')}</title>
+    <title>${t(this._mode === 'file' ? 'fileHistory.title' : 'lineHistory.title')}</title>
     <link rel="stylesheet" href="${cssUri}">
 </head>
 <body>

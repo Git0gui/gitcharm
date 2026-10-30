@@ -25,7 +25,7 @@ body {
 
 #lh-head {
     flex: 0 0 auto;
-    padding: 8px 12px 6px;
+    padding: 6px 12px 4px;
     border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
 }
 
@@ -80,20 +80,22 @@ body {
     white-space: nowrap;
 }
 
+/* The list is an index, not the deliverable: it gives up room to the diff.
+ * 38% still shows nine dense rows before scrolling. */
 #lh-list {
     flex: 0 0 auto;
-    max-height: 45%;
+    max-height: 38%;
     overflow-y: auto;
     border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
-    padding: 4px 0;
+    padding: 2px 0;
 }
 
 .lh-row {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     width: 100%;
-    padding: 5px 12px;
+    padding: 3px 12px;
     border: none;
     border-left: 2px solid transparent;
     background: transparent;
@@ -122,9 +124,9 @@ body {
  * committers and a history of the line. */
 .lh-row-content {
     display: block;
-    margin-top: 2px;
+    margin-top: 1px;
     font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 11.5px;
+    font-size: 11px;
     line-height: 1.35;
     color: var(--vscode-descriptionForeground);
     white-space: nowrap;
@@ -193,7 +195,7 @@ body {
     align-items: baseline;
     gap: 10px;
     min-width: 0;
-    font-size: 11.5px;
+    font-size: 11px;
     opacity: 0.85;
 }
 

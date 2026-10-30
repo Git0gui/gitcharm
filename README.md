@@ -134,7 +134,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | Compare file with local copy | Commit detail (third panel) → right-click a file → Compare with Local File |
 | Show a file's uncommitted changes | Editor / Explorer right-click → Show Changes |
 | Pick a file from a commit | Commit detail (third panel) → right-click a file → Cherry-Pick File |
-| View file history | Editor / Explorer right-click → GitCharm → File History (Native) (opens the Timeline) |
+| View file history | Editor / Explorer right-click → GitCharm → File History — GitCharm's own panel by default (commit list + the selected commit's changes); `idea-git.fileHistory` switches it to VS Code's Timeline |
 | Toggle blame | Editor right-click → Toggle Blame, or click the line-number area |
 
 ## Settings
@@ -146,6 +146,7 @@ Search `idea-git` in settings:
 | `idea-git.cache.enabled` | Cache branch info for faster startup (persisted; refreshed on repo changes or Git operations) | `true` |
 | `idea-git.prefetchOnStartup` | Load the panel's first page right after activation so it opens without waiting; adds a few Git commands at startup | `true` |
 | `idea-git.pullStrategy` | Update strategy when pulling: `merge` or `rebase` | `merge` |
+| `idea-git.fileHistory` | What the File History command opens: `custom` (GitCharm's panel) or `native` (VS Code's Timeline) | `custom` |
 | `idea-git.language` | UI language: `auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | Enable debug logging to the extension host console | `false` |
 | `idea-git.autoFetchMinutes` | Fetch from the remote every N minutes while the panel is open (silent; `0` disables) | `0` |
@@ -309,7 +310,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 与本地文件对比 | 第三栏变更文件右键 → 与当前本地文件对比 |
 | 看当前文件未提交的改动 | 编辑器 / 资源管理器右键 → 查看差异 |
 | 挑选提交中的单个文件 | 第三栏变更文件右键 → 挑选文件 |
-| 文件历史(原生) | 编辑器 / 资源管理器右键 → GitCharm → 文件历史(原生)（打开时间线） |
+| 文件历史 | 编辑器 / 资源管理器右键 → GitCharm → 文件历史——默认是 GitCharm 自带面板（提交列表 + 所选提交的改动），`idea-git.fileHistory` 可切到 VS Code 时间线 |
 | 显示 Blame | 编辑器右键 → 显示提交信息，或点击行号区域 |
 
 ## 设置项
@@ -321,6 +322,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | `idea-git.cache.enabled` | 启用分支信息缓存以提高启动速度（缓存持久保存，仅在仓库变化或执行 Git 操作时更新） | `true` |
 | `idea-git.prefetchOnStartup` | 扩展激活后立即预取面板首屏，打开时无需等待；会在启动时多跑几条 Git 命令 | `true` |
 | `idea-git.pullStrategy` | 拉取远程分支的更新策略：`merge`（合并式）或 `rebase`（变基式） | `merge` |
+| `idea-git.fileHistory` | 「文件历史」打开的界面：`custom`（GitCharm 自带面板）或 `native`（VS Code 时间线） | `custom` |
 | `idea-git.language` | 界面显示语言：`auto` / `zh-cn` / `en` | `auto` |
 | `idea-git.debug` | 启用调试日志（输出到扩展宿主控制台） | `false` |
 | `idea-git.autoFetchMinutes` | 面板打开期间每隔 N 分钟静默 fetch 一次远端（`0` 表示关闭） | `0` |
