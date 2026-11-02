@@ -1011,7 +1011,7 @@ canvas.graph-canvas {
     gap: 4px;
     margin-left: 10px;
     margin-right: 8px;
-    max-width: 45%;
+    max-width: 20%;
     min-width: 0;
     overflow: hidden;
     position: relative;
