@@ -158,7 +158,7 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **CHANGELOG 分两份，每次发布两份都要写**：根目录 `CHANGELOG.md` 面向用户，随 VSIX 发布并在市场页展示——每个版本只留简短明确的几条，只说用户能感知的变化，不写文件名、函数名、实测数据；`docs/CHANGELOG-detailed.md` 面向维护者，保持详细程度（踩坑原因、实测数据、涉及的函数与文件），`docs/` 不进 VSIX。新增条目一律写在两份文件的最上方，版本号与日期保持一致。
 - **禁止自动切换分支**：不主动 checkout。
 - **禁止 push**，除非用户明确要求；用户说"提交并推送"时才一次性执行 add/commit/push。
-- **发布流程触发词："项目升级"**：提交当前改动 → 按上条规则 bump 版本号并更新 CHANGELOG/README → `--no-ff` 合 main；不推送（除非用户要求）。发布由用户在自己终端执行（agent shell 无 VSCE_PAT），合入后提醒重新 `vsce publish`。
+- **发布流程触发词："项目升级"**：完整 runbook 在项目 skill `.qoder/skills/project-upgrade/SKILL.md`（提交当前改动 → 按上条规则 bump 版本号并更新 CHANGELOG/README → `--no-ff` 合 main；不推送，合入后提醒用户重新 `vsce publish`）。**版本号补丁位不进到 10**：`0.1.9` 之后直接 `0.2.0`（用户 2026-11-02 要求，版本号里不要出现"10"）。四处版本号（package.json、lock 根节点与 `packages[""]`、CSDN 说明头部）用 `node .qoder/skills/project-upgrade/scripts/bump-version.mjs <x.y.z>` 一次改齐，不要手改。
 
 ## 10. 环境杂项
 

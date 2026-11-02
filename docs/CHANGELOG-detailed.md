@@ -2,6 +2,35 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.2.0] - 2026-11-02
+
+本版全部来自 0.1.9 的实机反馈：三处修复（「全部分支」的范围、blame 跳转后上翻页串线、窄行里整块消失的徽章）加一处排版收紧（徽章列上限 45% → 20%）。三处的共同点是"数据本身没错，是取数据的范围画错了"——所以每条都配了源码断言级回归测试。
+
+### 变更
+
+- **提交行徽章列上限 45% → 20%**（`media/webview.css` 的 `.refs`）：这个百分比按 CSS 解析的是 `.msgline` 的宽度，不是整行。实测（预览 harness，同一批 mock 行）700px 行宽下长分支名徽章 117px → 97px（名字只剩约 7 个字符），1180px 行宽下短名徽章仍然完整；徽章始终落在行的可视区内（`clipped` 恒为 −8px，即行的 `margin-right`）。`+N` 计数在行宽 ≥480px 时完整可见，330px 及以下会被裁掉尾巴——这在 45% 时同样存在（那时是 260px 起），完整列表由 `.refs-popover` 兜底。
+
+### 修复
+
+- **「全部分支」的提交范围是 `--branches --remotes`，不是 `--all`**（`ALL_BRANCHES_SCOPE`，`src/services/gitService.ts` 的 `buildArgs` 与 `countCommitsAfter`）：`--all` 说的是 `refs/` 底下每一个 ref，于是标签独占的提交、`refs/stash`、以及 agent 宿主写在 `refs/agents/<session>/checkpoints/turn/N` 的检查点提交全都涌进列表。实测本仓库 `--all` 201 行、`--branches --remotes` 198 行，多出的 3 行永远拿不到徽章（分支列表与 ref 装饰只读 `refs/heads|remotes|tags`），左侧树里也没有对应行，看起来就是"提交历史莫名其妙"。两处必须同一个范围：rooted 窗口的 `--skip` 是按 `countCommitsAfter` 从尾段倒着算的，计数走 `--all`、列表走 branches+remotes 就会在中间留一段空洞。空仓库这条 argv 同样安全（`git log --branches --remotes` exit 0 空输出；加 `HEAD` 就会在 unborn 分支上 fatal）。
+- **blame 跳转后向上翻页读的是"确实包含这条提交的那一条 ref"**（`_rootUpScope()` + `_revRoot.up`，`src/views/graphView.ts`）：上半段原先按面板当前的 rev 范围查，两种错法——默认「全部分支」下那是"一切分支的后代集合"，别的分支的提交会混进来；面板停在不含这条提交的分支时，`rev-list <scope> --not <提交>` 直接回答"整个 scope"（实测 33 条外来提交 vs 应为 0），现象就是"往上翻着翻着又冒出一段时间线"。取值顺序：面板当前分支 → 检出的分支（`getCurrentBranch`，blame 走的就是它）→ `for-each-ref --contains` 扫到的第一个分支（本地名排在远程名前，`parseContainingBranchRefs`）→ 都没有就当上面没有提交（标签独占 / 悬空提交的真答案）。`up` 与 root 一起创建、作为 promise 存在 `_revRoot` 上，`_rootedDescendants`（算 `after`）与 `_loadMoreUp`（算 `skip`）共用同一个解析结果——reveal 与聚焦触发的加载会同时在跑，各算一份就会有一边把上面那段画丢。老 git 没有 `for-each-ref --contains` 时 `getBranchesContaining` 返回 undefined，退回"按面板分支"，退路不反过来把行吃掉。
+- **徽章不再被整块裁出可视区**（`media/webview.css` + `media/webview.js` 的 `refChipHtml`）：徽章列曾 `flex: none` 且不限宽，实测行宽 480px 起溢出 72.6px、260px 溢出 292.6px，行的 `overflow: hidden` 把整块徽章连 `+N` 一起裁掉；图列关闭时另有 `#rows.no-refs .refs { display: none }` 直接藏掉徽章。现在 `.msg` 是 `flex: 1 1 0; min-width: 0`（吃剩余并优先出省略号），`.refs` 是 `flex: 0 0 auto` + `max-width: 20%`，省略号只切新加的 `.chip-name`，`.chip-more` `flex: none` 永不参与收缩，`no-refs` 那条规则删除——"这个提交在哪个分支上"不能因为隐藏图列就没有答案。
+
+### 测试
+
+- 新增 `src/test/logScopeAndRow.test.ts`（源码断言，因为这几处都住在 import vscode 的模块里）：钉住 `ALL_BRANCHES_SCOPE` 的字面值、`buildArgs` 与 `countCommitsAfter` 里不再出现 `--all`、向上翻页的两半都走 `await root.up` 且从不传 `branch: root.branch`、`_rootUpScope` 三个探测的顺序、`_setRoot(hash)` 在 reveal 第一个 await 之前，以及行的排版不变量（`.msg` 的 flex、`.refs` 的上限、`.chip-name` 的省略号、`.chip-more` 的 `flex: none`、`no-refs` 不得复活）。
+- `src/test/gitParsing.test.ts` 新增 `parseContainingBranchRefs` 三例：本地名排在远程名前、丢掉 `refs/remotes/*/HEAD` 与标签 / stash、空输出给空数组。
+
+### 文档
+
+- AGENTS.md：§7 提交行那条改写为"消息吃剩余 + 徽章列封顶 20% + 省略号只切 `.chip-name` + 禁止用 `no-refs` 隐藏徽章"；§8 新增「全部分支 = `--branches --remotes`（`countCommitsAfter` 必须同范围）」与「rooted 列表上半段走 `_rootUpScope()` 解析出的 ref」两条，并把 `_firstPageRows` 那条的计数写成 `rev-list --count <up> --not <hash>`。
+
+### 验证
+
+- compile / lint（0 error，66 warning）/ test 全绿，399 例 93 组。
+- 真实仓库核对：`--all` 201 行 vs `--branches --remotes` 198 行，修复后列表里 agent 检查点提交 0 条、标签徽章仍在。
+- 预览 harness + headless Chrome 量过 260 / 330 / 480 / 700 / 1180px 五档行宽（数字见上）。
+
 ## [0.1.9] - 2026-10-31
 
 本版主题是标签：推送前先问远端、本地与远端一次看清、每一行都能就地处理；提交行的引用徽章收成一枚，消息回到最前面。途中修掉一个"打包后附注标签全成假差异"的解析错误——它不是显示问题，而是把整个仓库的标签都判成了"两边不同"。
