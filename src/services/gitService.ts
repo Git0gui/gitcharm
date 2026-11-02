@@ -55,6 +55,7 @@ import {
     refsTagsFirst,
     parseLsRemoteTags,
     parseTagRefList,
+    parseContainingBranchRefs,
     RemoteTagRef,
     matchRemoteBranch,
     resolvePushTarget,
@@ -209,6 +210,18 @@ let _tempSeq = 0;
 
 /** Top-level git dir files whose contents the caches depend on. */
 const WATCHED_STATE_FILES = new Set(['HEAD', 'index', 'packed-refs', 'commondir']);
+
+/**
+ * The 「全部分支」 scope. `--all` is not it: `--all` means every ref under refs/,
+ * so the list also picks up commits that belong to no branch at all. Measured in
+ * this repo: 201 rows with `--all`, 198 with the three `refs/agents/<session>/
+ * checkpoints/turn/N` commits an agent host leaves behind taken out; those rows
+ * get no badge and no line in the tree on the left, because the decorations and
+ * the branch list only read refs/heads, refs/remotes and refs/tags. Stash
+ * entries polluted the same list for the same reason. Local + remote is also
+ * what IDEA's "All branches" walks.
+ */
+const ALL_BRANCHES_SCOPE = ['--branches', '--remotes'];
 
 /** Outcome of a tag push: what went out, and which tags the guard held back. */
 export interface TagPushResult {
@@ -2617,10 +2630,44 @@ export class GitService {
      */
     async countCommitsAfter(fromHash: string, topRev?: string): Promise<number> {
         assertHash(fromHash);
-        if (topRev) {assertRef(topRev);}
-        const output = await this.executeGitArgs(['rev-list', '--count', topRev ?? '--all', '--not', fromHash]);
+        // Must be the same scope the list itself walks (ALL_BRANCHES_SCOPE when no
+        // rev is given): the rooting window's `--skip` is derived from this count,
+        // so a count over a wider ref set leaves a hole between the commit and the
+        // rows loaded above it.
+        const scope = topRev ? [assertRef(topRev)] : ALL_BRANCHES_SCOPE;
+        const output = await this.executeGitArgs(['rev-list', '--count', ...scope, '--not', fromHash]);
         const count = Number.parseInt(output.trim(), 10);
         return Number.isFinite(count) && count > 0 ? count : 0;
+    }
+
+    /**
+     * Whether `hash` sits in `rev`'s history. The answer is the exit code, so the
+     * output is dropped; a ref that does not resolve answers "no" like any other
+     * non-ancestor.
+     */
+    async isAncestorOf(hash: string, rev: string): Promise<boolean> {
+        assertHash(hash);
+        assertRef(rev);
+        try {
+            await this.executeGitArgs(['merge-base', '--is-ancestor', hash, rev]);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Every local and remote branch whose history contains `hash` — local names
+     * first, so a topic wins over its `origin/` counterpart. Returns undefined
+     * when the question could not be asked (`--contains` on for-each-ref needs a
+     * recent git) which is a different answer from "no branch contains it".
+     */
+    async getBranchesContaining(hash: string): Promise<string[] | undefined> {
+        assertHash(hash);
+        const output = await this.executeGitArgs([
+            'for-each-ref', '--contains', hash, '--format=%(refname)', 'refs/heads/', 'refs/remotes/'
+        ]).catch(() => undefined);
+        return output === undefined ? undefined : parseContainingBranchRefs(output);
     }
 
     /**
@@ -2670,7 +2717,11 @@ export class GitService {
             } else {
                 // Positional revs are validated, not sanitised: argv spawn means no
                 // shell interpolation, and a legal ref can never start with '-'.
-                a.push(useBranch ? assertRef(useBranch) : '--all');
+                if (useBranch) {
+                    a.push(assertRef(useBranch));
+                } else {
+                    a.push(...ALL_BRANCHES_SCOPE);
+                }
                 if (excludeAncestorsOf) {
                     // `top --not <hash>` is that hash's descendant set; `..` cannot be
                     // used because assertRef rejects it (a real ref never contains one).

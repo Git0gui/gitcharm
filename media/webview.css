@@ -991,11 +991,13 @@ canvas.graph-canvas {
     pointer-events: none; 
     z-index: 1; 
 }
-/* Graph column hidden → branch/tag badges hidden with it (see renderRows). */
-#rows.no-refs .refs { display: none; }
-/* Subject and badges share the flexible cell, in that order. The subject keeps
-   its natural width and only yields — with an ellipsis — when the row is too
-   narrow for both, so badges are never clipped by a long message. */
+/* Subject and badges share the flexible cell, subject first, and both must stay
+   on screen: the badges say which branch and which tag the commit is on, and a
+   row whose badges disappeared reads as "this commit belongs to nothing". So the
+   subject is the one that yields — it grows into whatever the badge cell leaves
+   and ellipsizes there — and the badge cell is capped below the full row width,
+   which is what used to push it out of view: `flex: none` plus an uncapped branch
+   name made the row's own `overflow: hidden` clip the tail. */
 .msgline {
     flex: 1;
     min-width: 0;
@@ -1003,13 +1005,14 @@ canvas.graph-canvas {
     align-items: center;
     overflow: hidden;
 }
-.refs { 
-    display: flex; 
-    flex: none;
-    gap: 4px; 
+.refs {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 4px;
     margin-left: 10px;
     margin-right: 8px;
-    max-width: 280px;
+    max-width: 45%;
+    min-width: 0;
     overflow: hidden;
     position: relative;
 }
@@ -1031,6 +1034,8 @@ canvas.graph-canvas {
     opacity: 1;
 }
 .chip {
+    display: inline-flex;
+    align-items: center;
     font-size: 10px;
     padding: 1px 8px;
     border-radius: 10px;
@@ -1038,9 +1043,14 @@ canvas.graph-canvas {
     color: var(--vscode-badge-foreground, #fff);
     white-space: nowrap;
     transition: all 0.15s ease;
-    /* Reduced to one badge per commit, so this one carries a long branch name
-       on its own: cut it with an ellipsis instead of running into the date. */
+    /* One badge per commit, so this one carries a long branch name on its own.
+       The name is the only part allowed to give way: the badge box and its `+N`
+       counter shrink to nothing else, so a row that has refs always shows refs. */
+    min-width: 0;
     max-width: 100%;
+}
+.chip-name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -1050,6 +1060,7 @@ canvas.graph-canvas {
 /* The rest of a commit's refs fold into this counter; the hover popover spells
    them out, so the row keeps its width for the subject. */
 .chip-more {
+    flex: none;
     margin-left: 5px;
     padding: 0 4px;
     border-radius: 8px;
@@ -1072,8 +1083,11 @@ canvas.graph-canvas {
 .chip.cur { background: #2d6da8; }
 .chip.remote { background: #5a4a7a; }
 .msg {
-    flex: 0 1 auto;
-    min-width: 48px;
+    /* Grows into whatever the capped badge cell leaves, and is the first thing to
+       ellipsize: the subject keeps the majority of the row by construction (the
+       badges cannot exceed 45% of it). */
+    flex: 1 1 0;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
