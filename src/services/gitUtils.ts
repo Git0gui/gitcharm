@@ -858,6 +858,28 @@ export function parseTagRefList(output: string): Map<string, string> {
     return tags;
 }
 
+/**
+ * `for-each-ref --contains <hash> --format=%(refname)` lines into branch names,
+ * local ones before remote ones. for-each-ref sorts the two namespaces together,
+ * so `refs/heads/x` and `refs/remotes/origin/x` interleave by name; a rooted
+ * commit list wants the developer's own branch when it has one. `<remote>/HEAD`
+ * is the symbolic default branch, not a line of history, so it is left out.
+ */
+export function parseContainingBranchRefs(output: string): string[] {
+    const local: string[] = [];
+    const remote: string[] = [];
+    for (const line of output.split('\n')) {
+        const ref = line.trim();
+        if (ref.startsWith('refs/heads/')) {
+            local.push(ref.substring('refs/heads/'.length));
+        } else if (ref.startsWith('refs/remotes/')) {
+            const name = ref.substring('refs/remotes/'.length);
+            if (name && !name.endsWith('/HEAD')) {remote.push(name);}
+        }
+    }
+    return [...local, ...remote];
+}
+
 /** How local tags differ from the remote's, by tag name. */
 export interface TagDiff {
     /** On the remote, absent locally — deleted here, or never fetched. */

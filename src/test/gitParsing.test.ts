@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { parseBranchCache, serializeBranchCache, BRANCH_CACHE_VERSION } from '../services/branchCacheStore';
-import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parseWorktreeList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, parseDiffTreeRawNumstat, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern, parseDiffPreview, EMPTY_TREE_HASH } from '../services/gitUtils';
+import { parseTrackInfo, parseSymbolicRef, parseRefPath, parseWorkingTreeSummary, parseStatusEntries, operationFromStateFiles, isOperationStateFile, remoteUrlToWebBase, commitWebUrl, branchWebUrl, parseGitConfigRemoteUrl, parseGitConfigRemoteNames, pickFetchRemote, remoteNameFromUpstream, matchRemoteBranch, resolvePushTarget, repositoryKey, collectRepositoryRoots, discoverRepositoryRoots, tagNameProblem, peeledCommitFromTagObject, parseStashList, parseWorktreeList, parsePathFilter, mergeCommitFileStats, parseReflogList, formatGitError, classifyGitNetworkFailure, isMissingGitBinary, parseDiffTreeRawNumstat, redactUrlCredentials, gitFailureHost, isEmptyCommitStop, emptyCommitStopInfo, parseWindowsProxySettings, parseRemoteList, assertRemoteName, matchesBranchPattern, parseDiffPreview, parseContainingBranchRefs, EMPTY_TREE_HASH } from '../services/gitUtils';
 import { t } from '../i18n';
 
 describe('parseTrackInfo', () => {
@@ -1427,5 +1427,38 @@ describe('parseDiffTreeRawNumstat', () => {
 
     it('returns one empty group for empty output', () => {
         assert.deepEqual(parseDiffTreeRawNumstat(''), []);
+    });
+});
+
+describe('parseContainingBranchRefs', () => {
+    it('puts local branches before their remote counterparts', () => {
+        // for-each-ref sorts both namespaces together, so the raw order is by
+        // name — the rooted list wants the developer's own branch first.
+        const out = [
+            'refs/heads/v0.1.10/log-list-and-blame-jump',
+            'refs/remotes/origin/v0.1.10/log-list-and-blame-jump',
+            'refs/heads/main',
+            ''
+        ].join('\n');
+        assert.deepEqual(parseContainingBranchRefs(out), [
+            'v0.1.10/log-list-and-blame-jump',
+            'main',
+            'origin/v0.1.10/log-list-and-blame-jump'
+        ]);
+    });
+
+    it('drops the remote HEAD symbol and other namespaces', () => {
+        const out = [
+            'refs/remotes/origin/HEAD',
+            'refs/remotes/origin/main',
+            'refs/tags/v0.1.9',
+            'refs/stash',
+            ''
+        ].join('\n');
+        assert.deepEqual(parseContainingBranchRefs(out), ['origin/main']);
+    });
+
+    it('answers empty, not undefined, when no branch contains the commit', () => {
+        assert.deepEqual(parseContainingBranchRefs(''), []);
     });
 });

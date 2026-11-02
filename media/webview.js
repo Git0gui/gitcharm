@@ -817,7 +817,10 @@ function isRemoteRefName(name) {
 
 /** One badge per commit: the host sorts tags first, so a tagged commit shows the
  *  tag. The rest of the refs fold into a `+N` counter and are spelled out by the
- *  hover popover — a row belongs to the subject, not to a wall of branch names. */
+ *  hover popover — a row belongs to the subject, not to a wall of branch names.
+ *  The name is the only part that gives way when the row is narrow: it ellipsizes
+ *  inside `.chip-name`, so the badge and its counter stay on screen — a row whose
+ *  refs vanished entirely reads as "this commit is on nothing". */
 function refChipHtml(name, extra, tags) {
     var isTag = tags.indexOf(name) >= 0;
     var cls = 'chip';
@@ -825,7 +828,8 @@ function refChipHtml(name, extra, tags) {
     else if (name === state.current) {cls += ' cur';}
     else if (isRemoteRefName(name)) {cls += ' remote';}
     return '<span class="' + cls + '"' + (isTag ? ' data-tag="' + esc(name) + '"' : '') + '>' +
-        esc(name) + (extra > 0 ? '<span class="chip-more">+' + extra + '</span>' : '') + '</span>';
+        '<span class="chip-name">' + esc(name) + '</span>' +
+        (extra > 0 ? '<span class="chip-more">+' + extra + '</span>' : '') + '</span>';
 }
 
 function renderRows(appendOnly) {
@@ -962,9 +966,6 @@ function renderRows(appendOnly) {
     });
 
     var wrap = document.getElementById('rows');
-    // The graph switch hides lane colours, and without lanes the branch badges
-    // are just a second copy of the tree on the left — they only cost message width.
-    wrap.classList.toggle('no-refs', state.graphVisible === false);
     if (from > 0) {
         // The canvas sits at index 0, so the appended rows are always the tail.
         var kids = wrap.children;

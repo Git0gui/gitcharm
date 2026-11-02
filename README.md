@@ -22,18 +22,11 @@
 
 ## What's New
 
-### Tag management — see both sides, settle them one row at a time
+### The commit list says what it means
 
-Tags drift: one side has a tag the other never got, or the same name points at two different commits. **Manage Tags** (toolbar → Manage Tags…) puts local and remote in a single table so each row can be settled where it is read:
-
-- **Every tag on both sides**, with its state — remote only / local only / pointing elsewhere / in sync. *Differences only* is on by default, so the table opens on the rows that need a decision instead of a wall of "nothing changed"; untick it to see the whole list.
-- **Every row can be acted on**: fetch, push, overwrite local, delete local, delete remote — in-sync rows included, because keeping a tag and deleting it are both decisions. Only a row whose action you actually picked can be ticked, so "N selected" always matches what will run.
-- **Commit hashes are buttons**: click one and the details panel shows that commit — message, author, changed files. The dialog stops short of that column, so with the dialog open the file list still scrolls, still opens a diff on double-click, and its splitter is still draggable.
-- **Nothing is sent blind.** Pushing reads the remote first: a tag the remote already carries at the same commit is skipped, one it carries at a *different* commit is left alone and reported — a batch never overwrites it. A tag sitting on a commit that isn't on the target remote's branches isn't pushed at all: a tag that arrives before its branch is a broken release marker.
-- **Deleting asks where**: local only, or local and remote together — the remote half goes first, and if it fails your local tags stay exactly as they were. A repository with no remote gets a read-only local list and one clear sentence, not a fatal that looks like a damaged repository.
-- **Annotated tags survive `git gc` and cloning**: the peeled commit is what gets compared, so they no longer read as "pointing elsewhere" across the whole repository — and their badges land on the right commit again.
-
-Also in this release: a commit row now carries **one** refs badge (`+N` folds the rest, hover lists every branch and tag with its own icon, tags first), and the message is back at the front of the row, the way IDEA's log reads.
+- **"All branches" means branches.** The list used to walk every ref the repository owns, so commits that belong to no branch at all — a tag's own object, a stash, the checkpoint commits another tool quietly leaves behind — showed up with no badge and no row in the branch tree, which reads like a broken history. They are gone; tags and branches still decorate the rows they belong to.
+- **Paging up from a jumped-to commit stays on its timeline.** Clicking a blame annotation roots the log at that commit. The rows above it used to be "whatever descendants the current view happens to have", which could paste an unrelated history on top — 33 commits from another branch in one real repository. Now the upward half is walked from a ref that genuinely contains the commit, and when no branch does (a tag-only or dangling commit) there simply is nothing above it.
+- **The message leads; the refs never disappear.** Branch and tag badges used to be clipped out of the row once it got narrow, and hidden wholesale when the graph column was switched off. They now take at most a fifth of the line and always stay visible — the badge ellipsizes its own name while `+N` holds its ground, and hovering still lists every branch and tag with its own icon.
 
 ## Overview
 
@@ -221,18 +214,11 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 标签管理——两边一次看清，逐行就地处理
+### 提交列表说的就是它字面上的意思
 
-标签最容易漂：一边有另一边没有，或者同名标签指向两个不同的提交。「标签管理」（工具栏 → 标签管理…）把本地与远端列进同一张表，读着就能把每一行处理掉：
-
-- **两边所有标签**都在表里，状态写明白——仅远端 / 仅本地 / 指向不同 / 已同步。「只看差异」默认勾着，表格打开就是需要拿主意的那几行，而不是满屏"没有变化"；取消勾选即看全量。
-- **每一行都能操作**：拉取、推送、覆盖本地、删本地、删远端——已同步的行也算，因为"留着"和"删掉"同样是决定。只有真的选了操作的行才能勾选，"已选择 N"永远等于将要执行的 N 行。
-- **提交号是按钮**：点一下，右侧详情栏就显示那个提交的消息、作者与变更文件。对话框给这一栏让出位置，所以它开着的时候文件照样能滚、能双击看差异，栏宽分隔条也照样能拖。
-- **推送前先看远端**：远端已有且指向同一提交的跳过；远端已有但指向别的提交的**不覆盖**，单独报出来交给对话框处理——批量不会替用户做覆盖的决定。标签所在提交还没在目标远端的分支上，这个标签根本不推：标签比分支先到远端，就是一个坏了的发布标记。
-- **删除会问目的地**：只删本地，或本地和远端一起删——先删远端，那一半失败时本地原样不动。没配远端的仓库得到一份只读的本地清单和一句明白话，而不是一条看起来像仓库损坏的 fatal。
-- **`git gc` 或 clone 之后附注标签依然正确**：比对的是剥开后的提交，不再把整仓库的标签都报成"指向不同"，标签徽章也重新落在对的提交上。
-
-同一版还有：提交行的引用徽章**只剩一枚**（其余折成 `+N`，悬停逐条列出并各带图标，标签排在分支前），消息回到行的最前面——和 IDEA 的 Log 读法一致。
+- **「全部分支」只看分支**：以前这条列表走的是仓库里每一个 ref，于是不属于任何分支的提交——标签自己的对象、贮藏、别的工具悄悄留下的检查点提交——会带着空徽章冒出来，左侧分支树里也找不到对应行，读起来就像历史坏了。它们不再出现，而标签与分支照旧装饰在属于它们的那一行上。
+- **从 blame 跳过来之后，往上翻还是同一条时间线**：点编辑器里的提交信息，会把列表改根到那条提交。它上面那一段以前按"当前视图碰巧拥有的子提交"来取，结果能把一段毫不相干的历史叠上去——真实仓库里实测多出 33 条别的分支的提交。现在上半段从一条确实包含它的 ref 往上走；没有任何分支包含它（标签独占或悬空提交）时，上面就是没有提交。
+- **消息在前，引用也不会消失**：以前行一窄，分支与标签徽章就被整块裁出可视区，关掉提交图还会干脆隐藏。现在徽章最多占消息那一栏宽度的两成、始终可见，名字太长由徽章自己出省略号、`+N` 稳稳留在原位，悬停照样逐条列出每个分支和标签并各带图标。
 
 ## 概览
 

@@ -81,8 +81,19 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * rooting by itself (see `_listRev`). `above` counts the descendants already
      * painted above the commit, `after` how many exist in total, so upward
      * paging knows which slice to ask for next.
+     *
+     * `up` is which ref those descendants are walked from — see `_rootUpScope`.
+     * It is a promise created with the root so that every load racing with this
+     * reveal awaits the same answer instead of one of them seeing an unresolved
+     * scope and painting the commit with nothing above it.
      */
-    private _revRoot: { rev: string; branch: string | undefined; above: number; after: number } | undefined;
+    private _revRoot: {
+        rev: string;
+        branch: string | undefined;
+        up: Promise<string | undefined>;
+        above: number;
+        after: number;
+    } | undefined;
     private _pendingReveal: { hash: string; file?: string } | undefined;
     /**
      * Bumped by every query that repaints the whole commit list. Focusing the
@@ -221,7 +232,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // Rooted before the first await: focusing the view can start its own
         // first load in this very tick, and a page fetched against the branch
         // tip would paint over the reveal and leave the commit off-screen.
-        this._revRoot = { rev: hash, branch: this._branch, above: 0, after: 0 };
+        this._setRoot(hash);
         if (!this._view || !this._webviewReady) {
             // A hidden view has destroyed its DOM; the reveal is replayed after
             // the next 'ready' handshake instead of into a dead frame.
@@ -230,6 +241,46 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
 
         void this._revealFrom(hash, file);
+    }
+
+    /** Root the list at `rev`, under the scope currently shown. */
+    private _setRoot(rev: string): void {
+        this._revRoot = { rev, branch: this._branch, up: this._rootUpScope(rev), above: 0, after: 0 };
+    }
+
+    /**
+     * Which ref the rows *above* a revealed commit are walked from. They have to
+     * be that commit's own descendants, so the ref must contain it — and the
+     * scope the panel happens to be on is a perfectly ordinary way of not
+     * containing it: blame reports commits for the checked-out branch while the
+     * list may be pointed at another one, or at 「全部分支」. Walking such a scope
+     * makes `rev-list <scope> --not <commit>` answer with the whole of it, so
+     * every row above the commit belongs to a different line of history
+     * (measured: revealing the tip of v0.1.7/conflict-orientation-hint while the
+     * panel sat on HEAD answered 33, and those 33 were HEAD's own commits).
+     *
+     * So: the branch the panel is showing, else the checked-out branch, else the
+     * first branch that does contain it. Nothing only when no branch contains it
+     * — a tag-only or dangling commit — and then the list has nothing above it,
+     * which is the truth. The panel's own scope is kept for the older-git path
+     * where the containing scan is unavailable, so a failed probe never takes
+     * away rows the user scrolled up to see.
+     */
+    private async _rootUpScope(rev: string): Promise<string | undefined> {
+        try {
+            const candidates: string[] = [];
+            if (this._branch) {candidates.push(this._branch);}
+            const current = await this._gitService.getCurrentBranch();
+            if (current && current !== this._branch) {candidates.push(current);}
+            for (const candidate of candidates) {
+                if (await this._gitService.isAncestorOf(rev, candidate)) {return candidate;}
+            }
+            const containing = await this._gitService.getBranchesContaining(rev);
+            return containing ? containing[0] : this._branch;
+        } catch (error) {
+            logger.debug(`[GitCharm] up-scope probe failed for ${rev.substring(0, 12)}: ${formatGitError(error)}`);
+            return this._branch;
+        }
     }
 
     /**
@@ -256,7 +307,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            this._revRoot = { rev: targetHash, branch: this._branch, above: 0, after: 0 };
+            // Re-root only when the scope moved since revealCommit claimed it:
+            // `_collect` below re-seeds `above`/`after` either way, and building a
+            // second root would run the up-scope probe twice.
+            if (!this._revRoot || this._revRoot.rev !== targetHash || this._revRoot.branch !== this._branch) {
+                this._setRoot(targetHash);
+            }
             const payload = await this._collect(true, ticket);
             if (!payload) {return;}
             this._post({ command: 'setData', ...payload });
@@ -2096,13 +2152,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private async _rootedDescendants(force: boolean): Promise<{ commits: GraphCommit[]; above: number; after: number }> {
         const root = this._revRoot;
         if (!root) {return { commits: [], above: 0, after: 0 };}
-        const after = await this._gitService.countCommitsAfter(root.rev, root.branch);
+        const up = await root.up;
+        if (!up) {return { commits: [], above: 0, after: 0 };}
+        const after = await this._gitService.countCommitsAfter(root.rev, up);
         const want = Math.min(GraphViewProvider.REVEAL_SIDE, after);
         if (want === 0) {return { commits: [], above: 0, after };}
         const data = await this._gitService.getCommitGraphData({
             limit: want,
             skip: after - want,
-            branch: root.branch,
+            branch: up,
             excludeAncestorsOf: root.rev,
             force
         });
@@ -2280,7 +2338,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }
             const remaining = root.after - root.above;
             const limit = Math.min(GraphViewProvider.PAGE_MORE, remaining);
-            if (limit <= 0) {
+            // The same ref the count came from — `after` and `--skip` are two
+            // halves of one walk, so a different scope here would page in rows
+            // from another history or leave a hole above the first window.
+            const up = await root.up;
+            if (!up || limit <= 0) {
                 this._hasMoreAbove = false;
                 this._post({ command: 'prependCommits', commits: [], hasMoreAbove: false });
                 return;
@@ -2288,7 +2350,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const data = await this._gitService.getCommitGraphData({
                 limit,
                 skip: Math.max(0, remaining - limit),
-                branch: root.branch,
+                branch: up,
                 excludeAncestorsOf: root.rev
             });
             // The root or the list changed while the chunk was loading.
