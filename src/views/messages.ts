@@ -39,6 +39,13 @@ export interface PersistedViewState {
     fileViewMode?: 'tree' | 'flat';
     /** false hides the commit graph column entirely (useful in branch-heavy repos). */
     graphVisible?: boolean;
+    /**
+     * The file row the cursor was on in the detail panel, and how far that list was
+     * scrolled. Both describe the commit named by `selectedHash`, so the webview
+     * only applies them once that commit's file list has been painted again.
+     */
+    fileCursor?: string;
+    filesScrollTop?: number;
     /** Epoch ms stamped by the host when the snapshot is flushed; drives the session-restore TTL window. */
     savedAt?: number;
     /**

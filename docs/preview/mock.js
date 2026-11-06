@@ -401,6 +401,75 @@
                 }
             ]
         }),
+        /**
+         * Hiding the panel destroys the third column with the rest of the frame, and
+         * it was the part that never came back: the commit was re-selected, its files
+         * were re-listed, but the row the user had been reading was gone. That row
+         * cannot arrive with the commits — it belongs to a detail one round-trip later
+         * — so this scene walks the whole journey: setCommits, then the snapshot, then
+         * the stub's own answer, which is where the cursor and the list's scrollbar go
+         * back. Flat mode, because the remembered file is the last row of seven.
+         */
+        fileRestore: Object.assign({}, base, {
+            select: '',
+            steps: [
+                { do: 'style', sel: '#d-files', prop: 'height', value: '96px' },
+                { do: 'style', sel: '#d-files', prop: 'flex', value: 'none' },
+                // #d-files scrolls smoothly, and headless virtual time never advances
+                // that compositor animation — the frame would show the position it
+                // started from. Pin the end of it, which is what the user sees.
+                { do: 'style', sel: '#d-files', prop: 'scrollBehavior', value: 'auto' },
+                { msg: { command: 'setCommits', commits: commits, hasMore: true } },
+                {
+                    msg: {
+                        command: 'restoreViewState',
+                        state: {
+                            selectedHash: 'bd864ce52328c724b8506009414e9b70bf436ff4',
+                            detailVisible: true,
+                            fileViewMode: 'flat',
+                            fileCursor: 'src/test/gitParsing.test.ts',
+                            filesScrollTop: 100
+                        }
+                    }
+                }
+            ]
+        }),
+        /**
+         * The same snapshot of a commit that no longer carries that file: the wait is
+         * spent and dropped. A remembered row must never reappear under a different
+         * changeset, and it must not keep waiting for one either.
+         */
+        fileRestoreStale: Object.assign({}, base, {
+            select: '',
+            steps: [
+                { do: 'style', sel: '#d-files', prop: 'height', value: '96px' },
+                { do: 'style', sel: '#d-files', prop: 'flex', value: 'none' },
+                { msg: { command: 'setCommits', commits: commits, hasMore: true } },
+                {
+                    msg: {
+                        command: 'restoreViewState',
+                        state: {
+                            selectedHash: 'bd864ce52328c724b8506009414e9b70bf436ff4',
+                            detailVisible: true,
+                            fileViewMode: 'flat',
+                            fileCursor: 'media/webview.js',
+                            filesScrollTop: 80
+                        }
+                    }
+                }
+            ]
+        }),
+        /**
+         * The row click now goes through the same function the arrow keys use, so
+         * this is the frame that proves the two paths still mark one row and only
+         * one — the click path used to duplicate three lines of it.
+         */
+        fileClick: Object.assign({}, base, {
+            steps: [
+                { do: 'click', sel: row('bd864ce52328c724b8506009414e9b70bf436ff4') },
+                { do: 'click', sel: file('src/services/gitUtils.ts') }
+            ]
+        }),
         /** Same menu with the file still on disk: the entry stays clickable. */
         fileMenuWithSource: Object.assign({}, base, {
             steps: [
