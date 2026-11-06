@@ -84,10 +84,59 @@ describe('rooted list (blame jump / reveal commit)', () => {
     });
 
     it('is claimed before the first await of the reveal', () => {
-        const reveal = body(provider, /revealCommit\(hash: string, file\?: string\)[\s\S]*?\n {4}\}/);
+        const reveal = body(provider, /revealCommit\(hash: string, file\?: string, opts\?: RevealOptions\)[\s\S]*?\n {4}\}/);
         const focus = reveal.indexOf("executeCommand('idea-git.mainView.focus')");
         const root = reveal.indexOf('_setRoot(hash)');
         assert.ok(root > focus, 'a load that focusing starts must not run against the branch tip');
+    });
+
+    it('moves the panel scope to the ref that contains the commit', () => {
+        const adopt = body(provider, /private async _adoptRevealScope\(\): Promise<void> \{[\s\S]*?\n {4}\}/);
+        assert.ok(/if \(!up \|\| up === this\._branch \|\| !this\._branchExists\(up\)\)/.test(adopt),
+            'an unresolved or nonexistent scope must leave the panel where it was');
+        assert.ok(/_revRoot = \{ \.\.\.root, branch: up \}/.test(adopt),
+            'the rooted window has to remember the new scope, or the next refresh drops the rows above');
+        const reveal = body(provider, /private async _revealFrom\([\s\S]*?\n {4}\}/);
+        assert.ok(reveal.indexOf('await this._adoptRevealScope()') < reveal.indexOf('this._collect('),
+            'the scope must be adopted before the page is collected: rows, tree highlight and the tip baseline all read it');
+        assert.ok(!/_lastKnownBranch/.test(adopt), 'the HEAD poll baseline is not the panel scope');
+    });
+
+    it('never lets a filter hide the commit the user jumped to', () => {
+        const pageFilters = body(provider, /private _pageFilters\(\)[\s\S]*?\n {4}\}/);
+        assert.ok(/_isRootedList\(\) \? \{\} : this\._filters/.test(pageFilters),
+            'a search term that matches nothing else would otherwise drop the revealed row and the scroll target with it');
+        assert.ok((provider.match(/filters: this\._pageFilters\(\)/g) || []).length >= 2,
+            'both the first page and the paged window must go through it');
+        assert.ok(/_hasActiveFilters\(\)/.test(body(provider, /private async _collect\([\s\S]*?\n {4}\}/)),
+            'the list says out loud that the filters are paused');
+    });
+
+    it('leaves the rooted view through the banner', () => {
+        assert.ok(/postMessage\(\{ command: 'leaveReveal' \}\)/.test(script), 'the banner button has somewhere to send');
+        const leave = body(provider, /case 'leaveReveal':[\s\S]*?break;/);
+        assert.ok(/_reload\(false, true\)/.test(leave), 'a full reload is what clears the root and repaints the branch tip');
+        assert.ok(/id="rev-bar"/.test(provider), 'the banner is part of the panel frame, not injected per reveal');
+        assert.ok(/#rev-bar \{[^}]*display: none/.test(sheet), 'and hidden until a rooted list shows it');
+        assert.ok(/function renderRootedBar\(\)/.test(script), 'and the webview draws it on every list repaint');
+        assert.ok(/state\.rooted = m\.rooted \|\| null;/.test(script),
+            'setData is the only writer of the banner, so a reload cannot leave it stale');
+    });
+
+    it('switches repository first when the blame came from another one', () => {
+        const reveal = body(provider, /revealCommit\(hash: string, file\?: string, opts\?: RevealOptions\)[\s\S]*?\n {4}\}/);
+        assert.ok(reveal.indexOf('this._switchAndReveal(') < reveal.indexOf('this._setRoot(hash)'),
+            'rooting before switching would search the hash in the wrong repository');
+        const guard = body(provider, /private _revealRepository\([\s\S]*?\n {4}\}/);
+        assert.ok(/listRepositories\(\)/.test(guard),
+            'a public command must not be able to move the panel to any .git on disk');
+    });
+
+    it('lands the preview on the blamed lines', () => {
+        const lines = body(provider, /function revealLines\([\s\S]*?\n\}/);
+        assert.ok(/Math\.floor\(first\) < 1/.test(lines), 'a number outside the file is no anchor at all');
+        assert.ok(!/first \+ 1/.test(lines), 'the numbers arrive in the commit\u0027s own 1-based space, not the editor\u0027s');
+        assert.ok(/\.dl\.hit \{/.test(sheet), 'and the row it matches has to be visibly lit');
     });
 });
 

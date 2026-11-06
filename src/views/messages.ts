@@ -80,6 +80,25 @@ export interface TagSyncDecision {
     action: TagSyncOperation;
 }
 
+/**
+ * Where a jump into the commit list came from. blame annotations and the
+ * line/file-history panels know things the panel cannot infer from a hash:
+ * which repository the commit lives in, and which lines the user was looking at.
+ */
+export interface RevealOptions {
+    /** Repository owning the commit; the panel switches there first when it differs. */
+    repoPath?: string;
+    /**
+     * 1-based inclusive lines **in that commit's version of the file** — the
+     * same numbering the third panel's inline preview prints. blame reports them
+     * from the annotation header and the line-history tab from its stored
+     * `origLines`; today's editor lines are a different space and would land on
+     * the wrong row as soon as the file moved on.
+     */
+    startLine?: number;
+    endLine?: number;
+}
+
 /** Messages sent from the extension host to the webview. */
 export type ExtToWebviewMessage =
     | {
@@ -100,6 +119,13 @@ export type ExtToWebviewMessage =
         /** External history change: re-render rows without clearing what is selected. */
         preserveSelection?: boolean;
         searchContext?: { query?: string; resultCount?: number };
+        /**
+         * The rows are rooted at a revealed commit instead of a branch tip, so the
+         * panel can say so and offer the way back. `filtersPaused` is why the typed
+         * filters are not narrowing this list: a rooted page is the commit's own
+         * history, and filtering it could hide the very row the user jumped to.
+         */
+        rooted?: { hash: string; filtersPaused: boolean };
     }
     | {
         command: 'syncFilters';
@@ -188,6 +214,12 @@ export type ExtToWebviewMessage =
         hash: string;
         /** File to select in the changed-files list, e.g. the blamed file. */
         file?: string;
+        /**
+         * 1-based lines to land on inside that file's preview, in the numbering
+         * of the revealed commit's own version of the file (see RevealOptions).
+         */
+        startLine?: number;
+        endLine?: number;
     }
     | { command: 'restoreViewState'; state: PersistedViewState }
     | { command: 'loading'; area: 'rows' | 'detail' | 'branches' | 'search' | 'multiCommits'; on: boolean }
@@ -269,6 +301,8 @@ export type WebviewToExtMessage =
     | { command: 'setFilters'; text?: string; regex?: boolean; caseSensitive?: boolean; author?: string; from?: string; to?: string; path?: string }
     | { command: 'loadMore' }
     | { command: 'loadMoreUp' }
+    /** The banner under the filter bar: go back to the branch tip this list was taken off. */
+    | { command: 'leaveReveal' }
     | { command: 'selectCommit'; hash: string; force?: boolean }
     | { command: 'selectCommits'; hashes: string[] }
     | { command: 'selectStash'; index: number }

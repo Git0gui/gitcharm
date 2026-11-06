@@ -20,7 +20,7 @@ import {
     ParsedPatch
 } from '../services/lineHistory';
 import { buildFileLogArgs, parseFileLog } from '../services/fileHistory';
-import { LineHistoryExtMessage, LineHistoryWebviewMessage } from './messages';
+import { LineHistoryExtMessage, LineHistoryWebviewMessage, RevealOptions } from './messages';
 import { openEditorDiff } from '../commands/helpers';
 
 /**
@@ -68,7 +68,7 @@ export class LineHistoryPanel {
         git: GitService,
         extensionUri: vscode.Uri,
         target: LineHistoryTarget,
-        onRevealCommit: (hash: string, file: string) => void
+        onRevealCommit: (hash: string, file: string, opts: RevealOptions) => void
     ): LineHistoryPanel {
         const mode = target.mode ?? 'lines';
         const existing = LineHistoryPanel._current.get(mode);
@@ -100,7 +100,7 @@ export class LineHistoryPanel {
         private readonly _git: GitService,
         extensionUri: vscode.Uri,
         target: LineHistoryTarget,
-        private readonly _onRevealCommit: (hash: string, file: string) => void
+        private readonly _onRevealCommit: (hash: string, file: string, opts: RevealOptions) => void
     ) {
         this._target = target;
         this._mode = target.mode ?? 'lines';
@@ -166,7 +166,7 @@ export class LineHistoryPanel {
                 const file = this._mode === 'file' && commit?.path
                     ? commit.path
                     : this._target.file;
-                this._onRevealCommit(message.hash, file);
+                this._onRevealCommit(message.hash, file, this._revealOpts(commit));
                 return;
             }
             case 'refresh':
@@ -393,6 +393,21 @@ export class LineHistoryPanel {
 
     private _commit(hash: string): LineHistoryCommit | undefined {
         return this._commits.find(c => c.hash === hash);
+    }
+
+    /**
+     * What the graph panel needs besides the hash: the repository this blame
+     * walk belongs to and the lines the commit contributed, numbered inside
+     * that commit's version of the file. Today's editor lines are a different
+     * space and would land on the wrong row as soon as the file moved on.
+     */
+    private _revealOpts(commit: LineHistoryCommit | undefined): RevealOptions {
+        const numbers = commit?.origLines ?? [];
+        return {
+            repoPath: this._target.repoPath,
+            startLine: numbers.length ? Math.min(...numbers) : undefined,
+            endLine: numbers.length ? Math.max(...numbers) : undefined
+        };
     }
 
     private async _postDiff(hash: string, requestId: number, full: boolean): Promise<void> {

@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, FileStat, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
-import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
+import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, RevealOptions, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
@@ -27,10 +27,25 @@ interface GraphPayload {
     inProgress?: OperationKind;
     favorites: string[];
     recent: string[];
+    /** Set when the rows are rooted at a revealed commit rather than a branch tip. */
+    rooted?: { hash: string; filtersPaused: boolean };
 }
 
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
 const ALL_COMMITS_ROW = '__all__';
+/**
+ * The preview rows are numbered from 1 and a selection dragged upwards arrives
+ * reversed, so straighten and validate the pair here — the panel must never
+ * have to guess which end came first. Numbers that are missing or out of range
+ * mean "there is no line to land on", which is a plain commit jump.
+ */
+function revealLines(opts?: RevealOptions): { start: number; end: number } | undefined {
+    const first = opts?.startLine;
+    if (typeof first !== 'number' || !Number.isFinite(first) || Math.floor(first) < 1) {return undefined;}
+    const start = Math.floor(first);
+    const last = opts?.endLine;
+    return { start, end: typeof last === 'number' && Number.isFinite(last) ? Math.max(start, Math.floor(last)) : start };
+}
 /** How often to re-read HEAD while the panel is visible (watcher backstop). */
 const BRANCH_POLL_MS = 2000;
 /**
@@ -94,7 +109,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         above: number;
         after: number;
     } | undefined;
-    private _pendingReveal: { hash: string; file?: string } | undefined;
+    private _pendingReveal: { hash: string; file?: string; opts?: RevealOptions } | undefined;
     /**
      * Bumped by every query that repaints the whole commit list. Focusing the
      * view can start a branch-tip load in the same tick as a reveal, so the two
@@ -225,10 +240,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * rooted at that commit, so it lands with its newer commits above and its
      * history below, and both directions scroll. `file` is the path the blame
      * came from; the panel selects that row in the changed-files list once the
-     * commit's detail arrives.
+     * commit's detail arrives, and `opts` carries what the blaming surface knows
+     * and the panel cannot guess: the repository the commit belongs to, and the
+     * lines the annotation covered.
      */
-    revealCommit(hash: string, file?: string): void {
+    revealCommit(hash: string, file?: string, opts?: RevealOptions): void {
         vscode.commands.executeCommand('idea-git.mainView.focus');
+        const repoPath = this._revealRepository(opts?.repoPath);
+        const current = this._gitService.repositoryPath;
+        if (repoPath && current && repositoryKey(current) !== repositoryKey(repoPath)) {
+            // A linked worktree or a second folder of the workspace owns this
+            // commit. Showing the panel's own repository and then reporting the
+            // hash as missing would read as a broken jump, so move first.
+            void this._switchAndReveal(hash, file, repoPath, opts);
+            return;
+        }
         // Rooted before the first await: focusing the view can start its own
         // first load in this very tick, and a page fetched against the branch
         // tip would paint over the reveal and leave the commit off-screen.
@@ -236,11 +262,43 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (!this._view || !this._webviewReady) {
             // A hidden view has destroyed its DOM; the reveal is replayed after
             // the next 'ready' handshake instead of into a dead frame.
-            this._pendingReveal = { hash, file };
+            this._pendingReveal = { hash, file, opts };
             return;
         }
 
-        void this._revealFrom(hash, file);
+        void this._revealFrom(hash, file, opts);
+    }
+
+    /**
+     * Switch to the repository a reveal came from, then perform the reveal there.
+     * `switchRepository` clears any pending reveal by design (it belongs to the
+     * previous root), so the request is re-claimed only once it has returned.
+     */
+    private async _switchAndReveal(hash: string, file: string | undefined, repoPath: string, opts?: RevealOptions): Promise<void> {
+        try {
+            await this.switchRepository(repoPath);
+        } catch (error) {
+            logger.warn('[GitCharm] Switching repository for a reveal failed:', error);
+        }
+        this._setRoot(hash);
+        if (!this._view || !this._webviewReady) {
+            this._pendingReveal = { hash, file, opts };
+            return;
+        }
+        void this._revealFrom(hash, file, opts);
+    }
+
+    /**
+     * A reveal may only move the panel to a repository the panel already knows
+     * about: `idea-git.revealCommit` is a public command, so the path arriving
+     * with it is not ours. `listRepositories()` is the switcher's own inventory.
+     */
+    private _revealRepository(repoPath: string | undefined): string | undefined {
+        if (!repoPath) {return undefined;}
+        return this._gitService.listRepositories()
+            .some(repo => repositoryKey(repo.path) === repositoryKey(repoPath))
+            ? repoPath
+            : undefined;
     }
 
     /** Root the list at `rev`, under the scope currently shown. */
@@ -289,7 +347,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * own left a one-row panel with no context, and a commit outside the loaded
      * page could not be scrolled to in the first place.
      */
-    private async _revealFrom(targetHash: string, file?: string): Promise<void> {
+    private async _revealFrom(targetHash: string, file?: string, opts?: RevealOptions): Promise<void> {
         // Claim the paint before the query: a reload already in flight would
         // otherwise be allowed to land on top of the rooted list.
         const ticket = ++this._dataTicket;
@@ -313,14 +371,51 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             if (!this._revRoot || this._revRoot.rev !== targetHash || this._revRoot.branch !== this._branch) {
                 this._setRoot(targetHash);
             }
+            // Before the query, so the rows, the tree highlight and the poll
+            // baseline are all computed against the scope actually being shown.
+            await this._adoptRevealScope();
             const payload = await this._collect(true, ticket);
             if (!payload) {return;}
+            const lines = revealLines(opts);
             this._post({ command: 'setData', ...payload });
-            this._post({ command: 'revealCommit', hash: targetHash, file });
+            this._post({
+                command: 'revealCommit',
+                hash: targetHash,
+                file,
+                startLine: lines?.start,
+                endLine: lines?.end
+            });
         } catch (error) {
             this._dropReveal(targetHash);
             vscode.window.showErrorMessage(t('view.findCommitFailed', { error: formatGitError(error) }));
         }
+    }
+
+    /**
+     * Put the branch tree on the history the revealed rows belong to.
+     *
+     * The panel keeps its own scope across a reveal, which is exactly what reads
+     * as "jumped somewhere and the left tree says something else": blame reports
+     * the checked-out branch while the list was pointed at another one or at
+     * 「全部分支」, and `_rootUpScope` has already worked out which ref those rows
+     * came from. Adopting it makes the highlight, the upward paging and the next
+     * tip poll all agree with what is on screen.
+     *
+     * Nothing is adopted when the resolved ref is the current scope (the usual
+     * case), a ref that no longer resolves, or nothing at all — a tag-only commit
+     * has no branch to name, and inventing one would be a lie.
+     */
+    private async _adoptRevealScope(): Promise<void> {
+        const root = this._revRoot;
+        if (!root) {return;}
+        const up = await root.up;
+        if (!up || up === this._branch || !this._branchExists(up)) {return;}
+        logger.debug(`[GitCharm] Reveal moves the list scope from ${this._branch || 'all branches'} to ${up}`);
+        this._branch = up;
+        // The root carries the scope it was built for; `_isRootedList()` compares
+        // them, so a root left naming the previous branch would silently degrade
+        // to a branch-tip list the moment the scope moved.
+        this._revRoot = { ...root, branch: up };
     }
 
     /**
@@ -1243,6 +1338,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'loadMoreUp':
                     await this._loadMoreUp();
                     break;
+                case 'leaveReveal':
+                    // The banner's way out. `_reload` drops the rooting itself;
+                    // keepSelected means the commit the user was reading stays
+                    // selected when it is still on the first page of the branch.
+                    await this._reload(false, true);
+                    break;
                 case 'selectCommit':
                     this._postLoading('detail', true);
                     try {
@@ -1397,7 +1498,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     if (this._pendingReveal) {
                         const pending = this._pendingReveal;
                         this._pendingReveal = undefined;
-                        void this._revealFrom(pending.hash, pending.file);
+                        void this._revealFrom(pending.hash, pending.file, pending.opts);
                     }
                     if (this._pendingReflog) {
                         const pending = this._pendingReflog;
@@ -2138,6 +2239,24 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Filters for the rows being listed. A rooted list ignores them: the user
+     * jumped to one commit and asked what it and its history are, so applying the
+     * term still typed in the search box could drop the very row they landed on —
+     * the panel would show a list without the commit they clicked, and the row
+     * they came for would be nowhere on screen. The banner says the filters are
+     * paused rather than silently disagreeing with the boxes.
+     */
+    private _pageFilters(): LogFilters {
+        return this._isRootedList() ? {} : this._filters;
+    }
+
+    /** Whether anything is narrowing the list — enough to be worth mentioning. */
+    private _hasActiveFilters(): boolean {
+        const f = this._filters;
+        return !!(f.text || f.path || f.author || f.from || f.to);
+    }
+
+    /**
      * The rows a rooted list shows *above* the rooted commit: the commits that
      * came after it, taken next to the commit rather than next to the tip so the
      * graph stays connected through the row the user asked for. The panel's text
@@ -2186,7 +2305,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._gitService.getCommitGraphData({
                 limit: pageLimit,
                 branch: this._listRev(),
-                filters: this._filters,
+                filters: this._pageFilters(),
                 force
             }),
             // Two extra spawns, and only while the list is rooted.
@@ -2271,7 +2390,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             hasMoreAbove: this._hasMoreAbove,
             headHash,
             inProgress,
-            ...this._branchMarks(details.current)
+            ...this._branchMarks(details.current),
+            // The banner is part of the data, not a one-off toast: setData is a
+            // screen message, so a re-shown panel restores it with the rows.
+            rooted: this._isRootedList() && this._revRoot
+                ? { hash: this._revRoot.rev, filtersPaused: this._hasActiveFilters() }
+                : undefined
         };
     }
 
@@ -2296,7 +2420,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     limit: GraphViewProvider.LOAD_WINDOW,
                     skip: this._loaded,
                     branch: this._listRev(),
-                    filters: this._filters
+                    filters: this._pageFilters()
                 });
                 // The list was replaced (reveal, refresh) while this page was in
                 // flight: appending it to the new list would duplicate or skip rows.
@@ -2749,6 +2873,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 <button id="tg-graph" type="button" data-title="${t('ui.hideGraph')}">
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.6"/><circle cx="4" cy="12.5" r="1.6"/><circle cx="11.5" cy="8" r="1.6"/><path d="M4 5.1v5.8M5.4 4.4l4.6 2.8M5.4 11.6l4.6-2.8"/></svg>
                 </button>
+            </div>
+            <div id="rev-bar" style="display: none;">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="1.6"/><path d="M8 .8v2M8 13.2v2M.8 8h2M13.2 8h2"/></svg>
+                <span id="rev-text"></span>
+                <button id="rev-leave" type="button"></button>
             </div>
             <div id="scroll"><div id="top-loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows"></div><div id="loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows-busy" class="busy"><span class="spin"></span>${t('ui.loadingCommits')}</div></div>
         </div>

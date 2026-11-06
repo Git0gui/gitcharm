@@ -5,6 +5,7 @@ import { formatGitError } from './services/gitUtils';
 import { GitAskpass } from './services/askpass';
 import { logger } from './services/logger';
 import { GraphViewProvider } from './views/graphView';
+import type { RevealOptions } from './views/messages';
 import { BlameProvider } from './services/blameProvider';
 import { GitBlobFileSystemProvider } from './services/blobFs';
 import { gitBlobUri, openEditorDiff } from './commands/helpers';
@@ -159,12 +160,12 @@ export function activate(ctx: vscode.ExtensionContext) {
     );
 
     // Git-blame annotations in the editor gutter
-    const blameProvider = new BlameProvider(gitService, (hash, file) => graphView.revealCommit(hash, file));
+    const blameProvider = new BlameProvider(gitService, (hash, file, opts) => graphView.revealCommit(hash, file, opts));
     ctx.subscriptions.push(
         blameProvider,
         vscode.commands.registerCommand('idea-git.toggleBlame', () => blameProvider.toggle()),
-        vscode.commands.registerCommand('idea-git.revealCommit', (hash: string, file?: string) => {
-            if (hash) {graphView.revealCommit(hash, file);}
+        vscode.commands.registerCommand('idea-git.revealCommit', (hash: string, file?: string, opts?: RevealOptions) => {
+            if (hash) {graphView.revealCommit(hash, file, opts);}
         })
     );
 
