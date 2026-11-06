@@ -193,6 +193,16 @@ var state = {
     lastClickedIndex: -1, // For Shift+click range selection
     /** File a reveal/blame jump asked to select once its detail arrives. */
     revealFile: '',
+    /**
+     * The same jump's 1-based line range, kept until the preview that answers it
+     * is painted — the file row is only selected once the commit's detail lands.
+     */
+    revealLines: null,
+    /**
+     * The list is rooted at a revealed commit instead of a branch tip, and the
+     * banner that says so carries { hash, filtersPaused }.
+     */
+    rooted: null,
     /** Paths of the merged file list that exist in the working tree. */
     multiExistingPaths: [],
     // Which row the arrow keys are on in the tree and file list. Kept as an
@@ -202,6 +212,11 @@ var state = {
     fileCursor: '',
     /** The file whose diff is shown under the list; null hides that strip. */
     preview: null,
+    /**
+     * The lines a blame jump wants inside that strip: { path, start, end } (1-based),
+     * consumed the first time a preview of that path is painted.
+     */
+    previewAnchor: null,
     detail: null,
     /**
      * A stash picked in the tree, shown in place of the commit detail. It carries
@@ -222,30 +237,49 @@ var state = {
     currentRepository: '',
     iconPack: null,
     _pendingScrollTop: null,
-    _pendingRestore: null
+    _pendingRestore: null,
+    /**
+     * The file row the cursor was on before the panel was hidden, kept until that
+     * commit's file list exists again. It is a separate slot because the list it
+     * belongs to arrives one round-trip after the commit selection is restored.
+     */
+    _pendingFileRestore: null
 };
 
 /* ---------- view state persistence (Git Graph-style, via workspaceState) ---------- */
 var _viewStateTimer = null;
+function _postViewState() {
+    _viewStateTimer = null;
+    vscode.postMessage({
+        command: 'saveViewState',
+        state: {
+            branch: state.selectedBranch || '',
+            selectedHash: state.selectedHash || '',
+            scrollTop: document.getElementById('scroll').scrollTop,
+            detailVisible: state.detailVisible !== false,
+            collapsed: state.collapsed,
+            collapsedSec: state.collapsedSec,
+            expandedFolder: state.expandedFolder,
+            fileViewMode: state.fileViewMode || 'tree',
+            graphVisible: state.graphVisible !== false,
+            fileCursor: state.fileCursor || '',
+            filesScrollTop: document.getElementById('d-files').scrollTop || 0
+        }
+    });
+}
 function saveViewState() {
     if (_viewStateTimer) clearTimeout(_viewStateTimer);
-    _viewStateTimer = setTimeout(function () {
-        vscode.postMessage({
-            command: 'saveViewState',
-            state: {
-                branch: state.selectedBranch || '',
-                selectedHash: state.selectedHash || '',
-                scrollTop: document.getElementById('scroll').scrollTop,
-                detailVisible: state.detailVisible !== false,
-                collapsed: state.collapsed,
-                collapsedSec: state.collapsedSec,
-                expandedFolder: state.expandedFolder,
-                fileViewMode: state.fileViewMode || 'tree',
-                graphVisible: state.graphVisible !== false
-            }
-        });
-    }, 400);
+    _viewStateTimer = setTimeout(_postViewState, 400);
 }
+
+// Hiding the panel destroys this frame, and the pending 400ms timer dies with it:
+// hand over what changed in the last moment before the DOM goes away.
+document.addEventListener('visibilitychange', function () {
+    if (document.hidden && _viewStateTimer) {
+        clearTimeout(_viewStateTimer);
+        _postViewState();
+    }
+});
 
 // Apply a scroll position saved before the rows were rendered
 function applyPendingScroll() {
@@ -298,6 +332,8 @@ function applyRestoreNow() {
         if (pr.scrollTop) { document.getElementById('scroll').scrollTop = pr.scrollTop; }
         applyDetailVisibility();
         state._pendingRestore = null;
+        // The file row belongs to that same commit, so it has no owner any more.
+        state._pendingFileRestore = null;
     }
     // else: commits not loaded yet — keep _pendingRestore for the next data render
 }
@@ -1039,7 +1075,7 @@ function selectCommitIndex(index, extend) {
     // The row under the cursor is the "current" one even when extending upward,
     // where the last hash in the range would be the other end of it.
     state.selectedHash = hash;
-    state.fileCursor = '';
+    clearFileCursor();
     applyRowSelection();
     rows[at].scrollIntoView({ block: 'nearest' });
     loadSelectedDetail();
@@ -1427,7 +1463,7 @@ function selectStash(index) {
     state.multiCommits = null;
     state.multiFiles = null;
     state.detail = null;
-    state.fileCursor = '';
+    clearFileCursor();
     state.detailVisible = true;
     applyRowSelection();
     renderTree();
@@ -2265,6 +2301,34 @@ function fillUpIfNoScroll() {
     vscode.postMessage({ command: 'loadMoreUp' });
 }
 
+/**
+ * The banner under the filter bar while the list is rooted at a revealed commit.
+ * Without it the rows simply look wrong: fewer than a page, a commit in the
+ * middle instead of at the top, and a search box that appears to have stopped
+ * working — all of that is the rooting, and the only exit is naming it.
+ */
+function renderRootedBar() {
+    var bar = document.getElementById('rev-bar');
+    var text = document.getElementById('rev-text');
+    if (!bar || !text) {return;}
+    var r = state.rooted;
+    if (!r) {
+        bar.style.display = 'none';
+        text.innerHTML = '';
+        return;
+    }
+    var html = esc(T('ui.rootedAt', { hash: (r.hash || '').substring(0, 8) }));
+    if (r.filtersPaused) {html += '<span class="rev-note">' + esc(T('ui.rootedFilters')) + '</span>';}
+    text.innerHTML = html;
+    var leave = document.getElementById('rev-leave');
+    if (leave) {leave.textContent = T('ui.rootedBack');}
+    bar.style.display = 'flex';
+}
+
+document.getElementById('rev-leave').addEventListener('click', function () {
+    vscode.postMessage({ command: 'leaveReveal' });
+});
+
 /* ---------- delayed busy overlays (only show for slow operations) ---------- */
 var busyTimers = {};
 
@@ -2623,7 +2687,7 @@ document.getElementById('rows').addEventListener('click', function (e) {
     
     // Update selectedHash for backward compatibility
     state.selectedHash = state.selectedHashes.length > 0 ? state.selectedHashes[state.selectedHashes.length - 1] : null;
-    state.fileCursor = '';
+    clearFileCursor();
 
     // Update UI
     applyRowSelection();
@@ -2747,12 +2811,12 @@ document.getElementById('d-files').addEventListener('click', function (e) {
     // two-column diff in the editor. Only stash files preview inline on this
     // branch — commit files keep the editor as their diff surface.
     var file = e.target.closest('.frow.file');
-    if (file) {
-        state.fileCursor = file.getAttribute('data-path');
-        applyFileCursor();
-        if (state.stashDetail) {requestFilePreview(state.fileCursor);}
-    }
+    if (file) {selectFileRow(file);}
 });
+
+// Where the file list was scrolled is part of "where I was", and the remembered
+// position is only as good as the last save — same reason #scroll reports its own.
+document.getElementById('d-files').addEventListener('scroll', saveViewState);
 
 // Double-click a file in the detail panel to open its commit diff (was single-click)
 document.getElementById('d-files').addEventListener('dblclick', function (e) {
@@ -2825,6 +2889,7 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
  */
 function clearPreview() {
     state.preview = null;
+    state.previewAnchor = null;
     renderPreview();
 }
 
@@ -2841,8 +2906,24 @@ function requestFilePreview(path) {
     vscode.postMessage({ command: 'filePreview', path: path, hash: state.selectedHash || undefined, hashes: hashes, stash: stash });
 }
 
-function diffLineHtml(line) {
-    return '<div class="dl ' + esc(line.kind || 'context') + '">' +
+/**
+ * Whether a preview row is one of the lines a blame jump asked to land on.
+ * The editor numbers the file as it stands today, the preview's right column
+ * numbers it as the commit wrote it; they agree whenever nothing has touched the
+ * file since — which is exactly the case the jump is for. A deleted line has no
+ * right-hand number at all, so fall back to the left one rather than showing
+ * nothing. A range that matches neither is not the same file any more, and the
+ * preview stays where it always was.
+ */
+function isAnchorLine(line, anchor) {
+    if (!anchor) {return false;}
+    if (line.next !== undefined && line.next >= anchor.start && line.next <= anchor.end) {return true;}
+    return line.old !== undefined && line.old >= anchor.start && line.old <= anchor.end;
+}
+
+function diffLineHtml(line, anchor) {
+    var hit = isAnchorLine(line, anchor) ? ' hit' : '';
+    return '<div class="dl ' + esc(line.kind || 'context') + hit + '">' +
         '<span class="dn">' + (line.old === undefined ? '' : line.old) + '</span>' +
         '<span class="dn">' + (line.next === undefined ? '' : line.next) + '</span>' +
         '<span class="dt">' + esc(line.text || '') + '</span></div>';
@@ -2870,6 +2951,7 @@ function renderPreview() {
     // Binary/error answers already say everything worth saying; repeating git's
     // own "Binary files … differ" header under the note adds nothing.
     var lines = (p.binary || p.error) ? [] : (p.lines || []);
+    var anchor = (state.previewAnchor && state.previewAnchor.path === p.path) ? state.previewAnchor : null;
     var html = '';
     if (p.error) {
         html += '<div class="dp-note err">' + esc(T('preview.failed', { error: p.error })) + '</div>';
@@ -2878,12 +2960,26 @@ function renderPreview() {
     } else if (p.empty) {
         html += '<div class="dp-note">' + esc(T('preview.empty')) + '</div>';
     }
-    html += lines.map(diffLineHtml).join('');
+    html += lines.map(function (l) { return diffLineHtml(l, anchor); }).join('');
     if (p.truncated) {
         html += '<div class="dp-note">' + esc(T('preview.truncated', { n: lines.length })) + '</div>';
     }
     body.innerHTML = html;
     body.scrollTop = 0;
+    if (anchor) {
+        // Consumed either way: a second render of the same file is the user's own
+        // click, and jumping back down to the blamed lines would fight them.
+        state.previewAnchor = null;
+        var first = body.querySelector('.dl.hit');
+        if (first) {
+            // Measured against the rendered rows rather than a computed offset:
+            // the strip's own scroll box is the only thing that moves here, and the
+            // panel can be zoomed, so line heights are not a known constant.
+            var box = body.getBoundingClientRect();
+            var row = first.getBoundingClientRect();
+            body.scrollTop = Math.max(0, body.scrollTop + (row.top - box.top) - body.clientHeight / 3);
+        }
+    }
 }
 
 document.getElementById('dp-close').addEventListener('click', clearPreview);
@@ -3020,12 +3116,47 @@ function fileRowList() {
     return Array.from(document.querySelectorAll('#d-files .frow'));
 }
 
+/**
+ * Drop the file cursor. The list it pointed into is being replaced, so both the
+ * mark and any restore still waiting for that list are stale from this moment on
+ * — a remembered row must never reappear under a commit the user just picked.
+ */
+function clearFileCursor() {
+    state.fileCursor = '';
+    state._pendingFileRestore = null;
+}
+
 /** Re-mark the cursor row after the list was rebuilt (collapse, new selection). */
 function applyFileCursor() {
     if (!state.fileCursor) {return;}
     fileRowList().forEach(function (row) {
         row.classList.toggle('kcur', row.getAttribute('data-path') === state.fileCursor);
     });
+}
+
+/**
+ * Put the cursor back on the file the panel showed before it was hidden. The file
+ * list only exists once a commit's detail has been painted, so this waits for that
+ * answer — and consumes itself either way: a path that is no longer in the list is
+ * gone, not something to keep looking for in the next commit's files. It only marks
+ * a row and moves the list's own scrollbar, so it costs the host nothing and never
+ * re-asks for data.
+ */
+function applyPendingFileRestore() {
+    var pending = state._pendingFileRestore;
+    if (!pending) {return;}
+    state._pendingFileRestore = null;
+    var rows = fileRowList();
+    for (var i = 0; i < rows.length; i++) {
+        if (!isDirRow(rows[i]) && rows[i].getAttribute('data-path') === pending.path) {
+            state.fileCursor = pending.path;
+            applyFileCursor();
+            // Deliberately not scrollIntoView: that would also move the commit
+            // list, undoing the scroll position restored with it.
+            document.getElementById('d-files').scrollTop = pending.scrollTop;
+            return;
+        }
+    }
 }
 
 function selectFileRow(row) {
@@ -3035,6 +3166,7 @@ function selectFileRow(row) {
     // A stash's files preview as the cursor moves; a commit's files keep the
     // editor as their only diff surface on this branch.
     if (!isDirRow(row) && state.stashDetail) {requestFilePreview(state.fileCursor);}
+    saveViewState();
 }
 
 /** Select the file a blame/reveal jump asked for, once its detail is painted. */
@@ -3046,9 +3178,21 @@ function selectRevealedFile() {
     for (var i = 0; i < rows.length; i++) {
         if (!isDirRow(rows[i]) && rows[i].getAttribute('data-path') === path) {
             selectFileRow(rows[i]);
+            // The jump also named lines. Commit files otherwise keep the editor as
+            // their diff surface, but "what happened to these lines" has no answer
+            // in the row list, so this one request opens the strip underneath it.
+            var want = state.revealLines;
+            state.revealLines = null;
+            if (want) {
+                state.previewAnchor = { path: path, start: want.start, end: want.end };
+                requestFilePreview(path);
+            }
             return;
         }
     }
+    // The blamed file is not in this commit's list (renamed since, or the blame
+    // came from a different revision): the anchor belongs to a row that is not here.
+    state.revealLines = null;
 }
 
 function isDirRow(row) {
@@ -3537,6 +3681,8 @@ window.addEventListener('message', function (ev) {
         state.hasMoreAbove = !!m.hasMoreAbove;
         state.loadingMoreAbove = false;
         state.revealFile = '';
+        state.rooted = m.rooted || null;
+        renderRootedBar();
         setTopLoader(false);
         state.headHash = m.headHash || '';
         state.inProgress = m.inProgress || null;
@@ -3673,6 +3819,9 @@ window.addEventListener('message', function (ev) {
             existingPaths: m.existingPaths || []
         };
         renderDetail();
+        // The remembered row goes first: a reveal that arrived with this detail is
+        // the newer intent, and it re-marks the cursor over it.
+        applyPendingFileRestore();
         selectRevealedFile();
     } else if (m.command === 'filePreviewResponse') {
         // Clicking another file (or another commit) fires a new request; a patch
@@ -3708,6 +3857,9 @@ window.addEventListener('message', function (ev) {
         // The blamed file is selected in the changed-files list as soon as this
         // commit's detail lands; setDetail calls selectRevealedFile().
         state.revealFile = m.file || '';
+        state.revealLines = m.startLine
+            ? { start: m.startLine, end: m.endLine || m.startLine }
+            : null;
         if (state.stashDetail) {
             state.stashDetail = null;
             renderTree();
@@ -3857,6 +4009,11 @@ window.addEventListener('message', function (ev) {
         var vs = m.state || {};
         if (vs.branch) { state.selectedBranch = vs.branch; renderTree(); }
         state._pendingRestore = vs;
+        // A file row belongs to a commit's detail, which is still one round-trip
+        // away — only a snapshot that really restores a selection can own a row.
+        state._pendingFileRestore = (vs.selectedHash && vs.fileCursor)
+            ? { path: vs.fileCursor, scrollTop: vs.filesScrollTop || 0 }
+            : null;
         applyRestoreNow();
     } else if (m.command === 'loading') {
         setBusy(m.area, !!m.on);
@@ -3894,6 +4051,7 @@ window.addEventListener('message', function (ev) {
         state.multiFiles = m.files || [];
         state.multiExistingPaths = m.existingPaths || [];
         renderDetail();
+        applyPendingFileRestore();
     }
 });
 

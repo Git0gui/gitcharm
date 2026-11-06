@@ -52,8 +52,8 @@ export function registerLineHistoryCommands(
                 const endLine = selection ? Math.max(selection.start.line, selection.end.line) : 0;
 
                 const payload: LineHistoryTarget = { repoPath, file: rel, startLine, endLine, text };
-                LineHistoryPanel.show(gitService, ctx.extensionUri, payload, (hash, file) => {
-                    graphView.revealCommit(hash, file);
+                LineHistoryPanel.show(gitService, ctx.extensionUri, payload, (hash, file, opts) => {
+                    graphView.revealCommit(hash, file, opts);
                 });
             } catch (error) {
                 vscode.window.showErrorMessage(t('lineHistory.openFailed', { error: formatGitError(error) }));

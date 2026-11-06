@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, FileStat, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
-import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
+import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, RevealOptions, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
@@ -11,6 +11,7 @@ import { EMPTY_TREE_HASH, isOperationStateFile, mergeCommitFileStats, repository
 import { openEditorDiff } from '../commands/helpers';
 import { GitBlobFileSystemProvider } from '../services/blobFs';
 import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
+import { parseFirstPage, serializeFirstPage } from '../services/firstPageStore';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -27,10 +28,25 @@ interface GraphPayload {
     inProgress?: OperationKind;
     favorites: string[];
     recent: string[];
+    /** Set when the rows are rooted at a revealed commit rather than a branch tip. */
+    rooted?: { hash: string; filtersPaused: boolean };
 }
 
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
 const ALL_COMMITS_ROW = '__all__';
+/**
+ * The preview rows are numbered from 1 and a selection dragged upwards arrives
+ * reversed, so straighten and validate the pair here — the panel must never
+ * have to guess which end came first. Numbers that are missing or out of range
+ * mean "there is no line to land on", which is a plain commit jump.
+ */
+function revealLines(opts?: RevealOptions): { start: number; end: number } | undefined {
+    const first = opts?.startLine;
+    if (typeof first !== 'number' || !Number.isFinite(first) || Math.floor(first) < 1) {return undefined;}
+    const start = Math.floor(first);
+    const last = opts?.endLine;
+    return { start, end: typeof last === 'number' && Number.isFinite(last) ? Math.max(start, Math.floor(last)) : start };
+}
 /** How often to re-read HEAD while the panel is visible (watcher backstop). */
 const BRANCH_POLL_MS = 2000;
 /**
@@ -69,6 +85,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private static readonly AUTO_FETCH_FIRST_DELAY_MS = 5000;
     /** A visibility event this soon after resolve is the same show, not a new one. */
     private static readonly SHOW_RELOAD_GRACE_MS = 1000;
+    /** How long the startup prefetch waits when the panel was last left closed. */
+    private static readonly HIDDEN_PREFETCH_DELAY_MS = 1500;
 
     private _view: vscode.WebviewView | undefined;
     private _gitService: GitService;
@@ -94,7 +112,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         above: number;
         after: number;
     } | undefined;
-    private _pendingReveal: { hash: string; file?: string } | undefined;
+    private _pendingReveal: { hash: string; file?: string; opts?: RevealOptions } | undefined;
     /**
      * Bumped by every query that repaints the whole commit list. Focusing the
      * view can start a branch-tip load in the same tick as a reveal, so the two
@@ -149,6 +167,22 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /** Keyed list of starred branches, one entry per repository of the workspace. */
     private static readonly FAVORITES_KEY = 'idea-git.favoriteBranches';
     private _favorites: FavoriteStore;
+    /**
+     * The first page the panel last painted (see firstPageStore). One entry per
+     * workspace, the same way the branch cache keeps one: the payload carries the
+     * repoPath and the tip it belongs to, and is ignored when either disagrees.
+     */
+    private static readonly FIRST_PAGE_KEY = 'idea-git.firstPageCache';
+    /**
+     * Whether the panel was visible when this workspace last closed. Running the
+     * whole first-page query while the workbench is still starting competes with
+     * the editor for the same cores, and a panel nobody opened is not slow for
+     * anyone — so an unseen panel defers the query to just after startup.
+     */
+    private static readonly PANEL_VISIBLE_KEY = 'idea-git.panelVisible';
+    private _prefetchDelay: NodeJS.Timeout | undefined;
+    /** The rows on screen are the remembered page; see _takeSnapshotPaint(). */
+    private _rowsPaintedFromSnapshot = false;
     // Theme folder currently granted to the webview (undefined = none)
     private _grantedThemeRoot: string | undefined;
 
@@ -225,10 +259,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * rooted at that commit, so it lands with its newer commits above and its
      * history below, and both directions scroll. `file` is the path the blame
      * came from; the panel selects that row in the changed-files list once the
-     * commit's detail arrives.
+     * commit's detail arrives, and `opts` carries what the blaming surface knows
+     * and the panel cannot guess: the repository the commit belongs to, and the
+     * lines the annotation covered.
      */
-    revealCommit(hash: string, file?: string): void {
+    revealCommit(hash: string, file?: string, opts?: RevealOptions): void {
         vscode.commands.executeCommand('idea-git.mainView.focus');
+        const repoPath = this._revealRepository(opts?.repoPath);
+        const current = this._gitService.repositoryPath;
+        if (repoPath && current && repositoryKey(current) !== repositoryKey(repoPath)) {
+            // A linked worktree or a second folder of the workspace owns this
+            // commit. Showing the panel's own repository and then reporting the
+            // hash as missing would read as a broken jump, so move first.
+            void this._switchAndReveal(hash, file, repoPath, opts);
+            return;
+        }
         // Rooted before the first await: focusing the view can start its own
         // first load in this very tick, and a page fetched against the branch
         // tip would paint over the reveal and leave the commit off-screen.
@@ -236,15 +281,50 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (!this._view || !this._webviewReady) {
             // A hidden view has destroyed its DOM; the reveal is replayed after
             // the next 'ready' handshake instead of into a dead frame.
-            this._pendingReveal = { hash, file };
+            this._pendingReveal = { hash, file, opts };
             return;
         }
 
-        void this._revealFrom(hash, file);
+        void this._revealFrom(hash, file, opts);
+    }
+
+    /**
+     * Switch to the repository a reveal came from, then perform the reveal there.
+     * `switchRepository` clears any pending reveal by design (it belongs to the
+     * previous root), so the request is re-claimed only once it has returned.
+     */
+    private async _switchAndReveal(hash: string, file: string | undefined, repoPath: string, opts?: RevealOptions): Promise<void> {
+        try {
+            await this.switchRepository(repoPath);
+        } catch (error) {
+            logger.warn('[GitCharm] Switching repository for a reveal failed:', error);
+        }
+        this._setRoot(hash);
+        if (!this._view || !this._webviewReady) {
+            this._pendingReveal = { hash, file, opts };
+            return;
+        }
+        void this._revealFrom(hash, file, opts);
+    }
+
+    /**
+     * A reveal may only move the panel to a repository the panel already knows
+     * about: `idea-git.revealCommit` is a public command, so the path arriving
+     * with it is not ours. `listRepositories()` is the switcher's own inventory.
+     */
+    private _revealRepository(repoPath: string | undefined): string | undefined {
+        if (!repoPath) {return undefined;}
+        return this._gitService.listRepositories()
+            .some(repo => repositoryKey(repo.path) === repositoryKey(repoPath))
+            ? repoPath
+            : undefined;
     }
 
     /** Root the list at `rev`, under the scope currently shown. */
     private _setRoot(rev: string): void {
+        // The rows about to be shown are an answer about one commit, not the
+        // re-verified page the snapshot painted, so the paint credit is spent.
+        this._rowsPaintedFromSnapshot = false;
         this._revRoot = { rev, branch: this._branch, up: this._rootUpScope(rev), above: 0, after: 0 };
     }
 
@@ -289,7 +369,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * own left a one-row panel with no context, and a commit outside the loaded
      * page could not be scrolled to in the first place.
      */
-    private async _revealFrom(targetHash: string, file?: string): Promise<void> {
+    private async _revealFrom(targetHash: string, file?: string, opts?: RevealOptions): Promise<void> {
         // Claim the paint before the query: a reload already in flight would
         // otherwise be allowed to land on top of the rooted list.
         const ticket = ++this._dataTicket;
@@ -313,14 +393,51 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             if (!this._revRoot || this._revRoot.rev !== targetHash || this._revRoot.branch !== this._branch) {
                 this._setRoot(targetHash);
             }
+            // Before the query, so the rows, the tree highlight and the poll
+            // baseline are all computed against the scope actually being shown.
+            await this._adoptRevealScope();
             const payload = await this._collect(true, ticket);
             if (!payload) {return;}
+            const lines = revealLines(opts);
             this._post({ command: 'setData', ...payload });
-            this._post({ command: 'revealCommit', hash: targetHash, file });
+            this._post({
+                command: 'revealCommit',
+                hash: targetHash,
+                file,
+                startLine: lines?.start,
+                endLine: lines?.end
+            });
         } catch (error) {
             this._dropReveal(targetHash);
             vscode.window.showErrorMessage(t('view.findCommitFailed', { error: formatGitError(error) }));
         }
+    }
+
+    /**
+     * Put the branch tree on the history the revealed rows belong to.
+     *
+     * The panel keeps its own scope across a reveal, which is exactly what reads
+     * as "jumped somewhere and the left tree says something else": blame reports
+     * the checked-out branch while the list was pointed at another one or at
+     * 「全部分支」, and `_rootUpScope` has already worked out which ref those rows
+     * came from. Adopting it makes the highlight, the upward paging and the next
+     * tip poll all agree with what is on screen.
+     *
+     * Nothing is adopted when the resolved ref is the current scope (the usual
+     * case), a ref that no longer resolves, or nothing at all — a tag-only commit
+     * has no branch to name, and inventing one would be a lie.
+     */
+    private async _adoptRevealScope(): Promise<void> {
+        const root = this._revRoot;
+        if (!root) {return;}
+        const up = await root.up;
+        if (!up || up === this._branch || !this._branchExists(up)) {return;}
+        logger.debug(`[GitCharm] Reveal moves the list scope from ${this._branch || 'all branches'} to ${up}`);
+        this._branch = up;
+        // The root carries the scope it was built for; `_isRootedList()` compares
+        // them, so a root left naming the previous branch would silently degrade
+        // to a branch-tip list the moment the scope moved.
+        this._revRoot = { ...root, branch: up };
     }
 
     /**
@@ -361,25 +478,48 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Load what the first panel render needs while the panel is still closed.
      * VS Code creates the view lazily, so without this the first open pays for
      * `git log`, the branch list and HEAD after the user is already looking at a
-     * skeleton. The queries match the first open's down to the cache key, so
-     * that open becomes a cache hit instead of a second round of spawns.
+     * skeleton. The page is taken from `_firstPageRows` — the very call the first
+     * open makes — because anything else drifts out of agreement with it and the
+     * open stops being a cache hit. A static test pins that.
      */
     prefetchFirstPage(): void {
         if (!vscode.workspace.getConfiguration('idea-git').get<boolean>('prefetchOnStartup', true)) {return;}
+        if (!this._gitService.repositoryPath || this._prefetchTask || this._prefetchDelay) {return;}
+
+        // The workbench restores the last layout, so a panel that was closed when
+        // the window last quit is likely closed again — and then these spawns run
+        // next to the editor's own startup work for nobody who is looking. Opening
+        // the view cancels the wait and fires immediately.
+        const endedHidden = this._memento.get<boolean>(GraphViewProvider.PANEL_VISIBLE_KEY) === false;
+        if (endedHidden) {
+            this._prefetchDelay = setTimeout(() => {
+                this._prefetchDelay = undefined;
+                this._runStartupPrefetch();
+            }, GraphViewProvider.HIDDEN_PREFETCH_DELAY_MS);
+            return;
+        }
+        this._runStartupPrefetch();
+    }
+
+    private _runStartupPrefetch(): void {
         if (!this._gitService.repositoryPath || this._prefetchTask) {return;}
 
         // The remembered branch is what the view restores, so the warmed graph
-        // must be the same one. A branch deleted since then falls back to all refs.
+        // must be the same one — `_firstPageRows` reads `_branch`, not a parameter.
+        // A branch deleted since then leaves the scope at all refs.
         const remembered = this._restorableState()?.branch;
-        const branch = remembered && this._gitService.getBranchTipHash(remembered) ? remembered : undefined;
+        if (remembered && this._gitService.getBranchTipHash(remembered)) {
+            this._branch = remembered;
+        }
+
+        // Kicked off before the guard below exists: `_firstPageRows` waits for
+        // `_prefetchTask`, so installing it first would make the task await itself.
+        const first = this._firstPageRows(false);
         this._prefetchTask = (async () => {
             try {
                 await Promise.all([
-                    this._gitService.getCommitGraphData({
-                        limit: GraphViewProvider.PAGE_FIRST,
-                        branch,
-                        filters: {}
-                    }),
+                    first,
+                    // Warms the refs snapshot the divergence arrows read next.
                     this._gitService.getBranchesWithDetails(false),
                     this._gitService.getHeadHash()
                 ]);
@@ -390,6 +530,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 this._prefetchTask = undefined;
             }
         })();
+    }
+
+    /**
+     * Record whether the panel is on screen, for the next window's startup only:
+     * it is what decides whether the prefetch runs straight away or waits. Reading
+     * it back as `=== false` means an unrecorded first run behaves as visible.
+     */
+    private _rememberPanelVisibility(visible: boolean): void {
+        void this._memento.update(GraphViewProvider.PANEL_VISIBLE_KEY, visible);
     }
 
     /**
@@ -495,9 +644,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             Promise.all([
                 this._loadAndDisplayBranches(dropped),
                 this._loadAndDisplayCommits()
-            ]).catch(error => {
-                vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
-            });
+            ])
+                // Worktrees sit in the same tree as the branches, but reading them
+                // is a spawn of its own — it waits its turn behind the two sections
+                // the user opened the panel to look at. An add/remove made here is
+                // still reported at once, through refreshWorktrees().
+                .then(() => this._postWorktrees())
+                .catch(error => {
+                    vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
+                });
             void this._refreshDivergence();
             return state;
         }
@@ -536,6 +691,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._pendingReveal = undefined;
         this._pendingReflog = undefined;
         this._pendingViewState = undefined;
+        // A prefetch that is still waiting out a quiet startup was scheduled for
+        // the repository the panel was showing; the reload below loads this one.
+        if (this._prefetchDelay) {
+            clearTimeout(this._prefetchDelay);
+            this._prefetchDelay = undefined;
+        }
         // Retract the old repository's state immediately: the watcher below is
         // the only other writer of this row and it now points at a different .git.
         this._post({ command: 'setInProgress', inProgress: null });
@@ -1243,6 +1404,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 case 'loadMoreUp':
                     await this._loadMoreUp();
                     break;
+                case 'leaveReveal':
+                    // The banner's way out. `_reload` drops the rooting itself;
+                    // keepSelected means the commit the user was reading stays
+                    // selected when it is still on the first page of the branch.
+                    await this._reload(false, true);
+                    break;
                 case 'selectCommit':
                     this._postLoading('detail', true);
                     try {
@@ -1397,7 +1564,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     if (this._pendingReveal) {
                         const pending = this._pendingReveal;
                         this._pendingReveal = undefined;
-                        void this._revealFrom(pending.hash, pending.file);
+                        void this._revealFrom(pending.hash, pending.file, pending.opts);
                     }
                     if (this._pendingReflog) {
                         const pending = this._pendingReflog;
@@ -1472,12 +1639,28 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._branch = savedView.branch;
         }
 
+        // Step 2.5: paint the remembered first page before any git command runs.
+        // The check is a filesystem read, so rows are on screen while the real
+        // query below is still in flight; the load that follows revalidates and
+        // replaces them.
+        void this._paintPersistedFirstPage();
+
+        // The panel is open now, so a prefetch that is still waiting out a quiet
+        // startup has no reason left to wait.
+        if (this._prefetchDelay) {
+            clearTimeout(this._prefetchDelay);
+            this._prefetchDelay = undefined;
+            this._runStartupPrefetch();
+        }
+        this._rememberPanelVisibility(webviewView.visible !== false);
+
         // Step 3: probe git / repository / commits, then load branches AND commits
         // in parallel only when there is history to load.
         void this.refreshRepoState();
 
         // Re-query (current branch included) every time the panel is shown again
         webviewView.onDidChangeVisibility(() => {
+            this._rememberPanelVisibility(!!webviewView.visible);
             if (webviewView.visible) {
                 void this._onPanelShown();
             } else {
@@ -1834,6 +2017,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     dispose(): void {
+        if (this._prefetchDelay) {
+            clearTimeout(this._prefetchDelay);
+            this._prefetchDelay = undefined;
+        }
         this._stopBranchCheck();
         this._flushViewState();
     }
@@ -2138,6 +2325,24 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Filters for the rows being listed. A rooted list ignores them: the user
+     * jumped to one commit and asked what it and its history are, so applying the
+     * term still typed in the search box could drop the very row they landed on —
+     * the panel would show a list without the commit they clicked, and the row
+     * they came for would be nowhere on screen. The banner says the filters are
+     * paused rather than silently disagreeing with the boxes.
+     */
+    private _pageFilters(): LogFilters {
+        return this._isRootedList() ? {} : this._filters;
+    }
+
+    /** Whether anything is narrowing the list — enough to be worth mentioning. */
+    private _hasActiveFilters(): boolean {
+        const f = this._filters;
+        return !!(f.text || f.path || f.author || f.from || f.to);
+    }
+
+    /**
      * The rows a rooted list shows *above* the rooted commit: the commits that
      * came after it, taken next to the commit rather than next to the tip so the
      * graph stays connected through the row the user asked for. The panel's text
@@ -2186,7 +2391,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._gitService.getCommitGraphData({
                 limit: pageLimit,
                 branch: this._listRev(),
-                filters: this._filters,
+                filters: this._pageFilters(),
                 force
             }),
             // Two extra spawns, and only while the list is rooted.
@@ -2194,6 +2399,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 ? this._rootedDescendants(force)
                 : Promise.resolve({ commits: [] as GraphCommit[], above: 0, after: 0 })
         ]);
+        if (!rooted && !this._hasActiveFilters()) {void this._persistFirstPage(page.commits);}
         return {
             commits: newer.commits.length > 0 ? [...newer.commits, ...page.commits] : page.commits,
             pageRows: page.commits.length,
@@ -2201,6 +2407,74 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             above: newer.above,
             after: newer.after
         };
+    }
+
+    /**
+     * Remember the page an opening panel asks for, so the next window can paint
+     * rows before git answers. Only a plain first page qualifies: a rooted list
+     * is an answer to "what happened around this commit", and a filtered one to
+     * a question the user typed — neither describes the repository, and neither
+     * is what a fresh panel asks for.
+     */
+    private _persistFirstPage(commits: GraphCommit[]): void {
+        const repoPath = this._gitService.repositoryPath;
+        if (!repoPath || commits.length === 0) {return;}
+        const branch = this._branch;
+        const hasMore = commits.length >= GraphViewProvider.PAGE_FIRST;
+        // The tip is the promise the snapshot will be held to; a page saved
+        // without one cannot be revalidated, so it is not saved at all.
+        void this._tipOfDisplayedRev().then(tip => {
+            const payload = tip
+                ? serializeFirstPage({ repoPath, branch, tip, commits, hasMore })
+                : undefined;
+            if (payload) {void this._memento.update(GraphViewProvider.FIRST_PAGE_KEY, payload);}
+        }).catch(error => {
+            logger.debug('[GitCharm] First page not remembered:', error);
+        });
+    }
+
+    /**
+     * Paint the remembered first page while the real query is still running.
+     *
+     * The tip is what makes this honest: the rows may only go up while the rev
+     * they were walked from still points at the same commit, and then they are
+     * not a resemblance of the answer but the answer itself. Everything else
+     * that could disagree — another repository, another branch, a reveal in
+     * flight, rows that already arrived — falls through to the skeleton bars and
+     * the normal load.
+     */
+    private async _paintPersistedFirstPage(): Promise<void> {
+        if (this._pendingReveal || this._revRoot || this._hasActiveFilters()) {return;}
+        const raw = this._memento.get<string>(GraphViewProvider.FIRST_PAGE_KEY);
+        if (!raw) {return;}
+        const snap = parseFirstPage(raw);
+        if (!snap || snap.repoPath !== this._gitService.repositoryPath
+            || snap.branch !== this._branch) {return;}
+        const tip = await this._tipOfDisplayedRev();
+        if (!tip || tip !== snap.tip) {return;}
+        // Anything delivered in the meantime is newer than what was remembered,
+        // and a reveal that started while the tip was read outranks this paint.
+        if (this._loadedHashes.size > 0 || this._pendingReveal || this._revRoot) {return;}
+
+        this._loaded = snap.commits.length;
+        this._hasMore = snap.hasMore;
+        this._loadedHashes = new Set(snap.commits.map(c => c.hash));
+        logger.debug(`[GitCharm] Painting ${snap.commits.length} remembered rows for tip ${tip.slice(0, 8)}`);
+        this._rowsPaintedFromSnapshot = true;
+        this._post({ command: 'setCommits', commits: snap.commits, hasMore: snap.hasMore });
+    }
+
+    /**
+     * One-shot: was the list currently on screen the remembered page? The load
+     * that verifies it re-sends the same rows, and session restore has already
+     * been applied to them — selection, folds and scroll position included. A
+     * plain setData would wipe all three and the snapshot would have cost the
+     * user the very state it was painted to protect.
+     */
+    private _takeSnapshotPaint(): boolean {
+        const painted = this._rowsPaintedFromSnapshot;
+        this._rowsPaintedFromSnapshot = false;
+        return painted;
     }
 
     /**
@@ -2221,7 +2495,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._firstPageRows(force),
             // A vanished branch must also disappear from the tree immediately;
             // the cached list would keep the row that produced the error.
-            this._gitService.getBranchesWithDetails(force || dropped)
+            // Names only: this payload carries `b => b.name`, so waiting for the
+            // refs snapshot here would delay the tree for data it never shows.
+            this._gitService.getBranchesWithDetails(force || dropped, false)
         ]);
         logger.debug(`[GitCharm] _collect got ${first.pageRows} commits for rev=${rev || 'all'} (+${first.commits.length - first.pageRows} above)`);
         const commits = first.commits;
@@ -2271,7 +2547,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             hasMoreAbove: this._hasMoreAbove,
             headHash,
             inProgress,
-            ...this._branchMarks(details.current)
+            ...this._branchMarks(details.current),
+            // The banner is part of the data, not a one-off toast: setData is a
+            // screen message, so a re-shown panel restores it with the rows.
+            rooted: this._isRootedList() && this._revRoot
+                ? { hash: this._revRoot.rev, filtersPaused: this._hasActiveFilters() }
+                : undefined
         };
     }
 
@@ -2296,7 +2577,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     limit: GraphViewProvider.LOAD_WINDOW,
                     skip: this._loaded,
                     branch: this._listRev(),
-                    filters: this._filters
+                    filters: this._pageFilters()
                 });
                 // The list was replaced (reveal, refresh) while this page was in
                 // flight: appending it to the new list would duplicate or skip rows.
@@ -2405,7 +2686,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._post({
                 command: 'setData',
                 ...payload,
-                preserveSelection,
+                preserveSelection: preserveSelection || this._takeSnapshotPaint(),
                 searchContext: hasSearchFilter ? {
                     query: this._filters.text ?? this._filters.path,
                     resultCount: payload.commits.length
@@ -2479,8 +2760,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (!this._view || this._repoState !== 'ready') {return;}
         
         try {
-            // Get cached branch data (fast, no git commands if cache hit)
-            const detailsPromise = this._gitService.getBranchesWithDetails(force);
+            // Names only, straight off the refs files. Ahead/behind is not in
+            // this message and arrives through setDivergence, so the tree must
+            // not queue behind the refs snapshot on the way to the screen.
+            const detailsPromise = this._gitService.getBranchesWithDetails(force, false);
             
             // Get head hash in parallel (may require git command, but don't block branches)
             const headHashPromise = this._gitService.getHeadHash().catch(() => '');
@@ -2488,9 +2771,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             // Update branches immediately when ready
             const details = await detailsPromise;
             this._postBranchList(details);
-            // Stashes and worktrees live in the same tree, so they load alongside it.
+            // Stashes live in the same tree and are read straight off refs/stash,
+            // so they load alongside it. Worktrees are a spawn, and refreshRepoState
+            // posts them once the two main sections are on screen.
             void this._postStashes();
-            void this._postWorktrees();
 
             // Update head hash separately when ready (don't wait for it)
             const headHash = await headHashPromise;
@@ -2499,56 +2783,6 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }
         } catch (error) {
             vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: formatGitError(error) }));
-        }
-    }
-
-    /**
-     * Generate initial HTML with branches only, commits will load asynchronously.
-     */
-    private async _getInitialHtml(): Promise<string> {
-        try {
-            // Load branches, head hash, and in-progress operation in parallel for speed
-            const [details, headHash, inProgress] = await Promise.all([
-                this._gitService.getBranchesWithDetails(false),
-                this._gitService.getHeadHash().catch(() => ''),
-                this._gitService.getInProgressOperation().catch(() => undefined)
-            ]);
-            
-            const repoPath = this._gitService.repositoryPath;
-            
-            // Create payload with empty commits (will be filled later)
-            const payload: GraphPayload = {
-                commits: [],
-                local: details.local.map(b => b.name),
-                remote: details.remote.map(b => b.name),
-                currentBranch: details.current,
-                selectedBranch: this._branch || '',
-                repoName: repoPath ? path.basename(repoPath) : '',
-                hasMore: false,
-                hasMoreAbove: false,
-                headHash,
-                inProgress,
-                ...this._branchMarks(details.current)
-            };
-            
-            return this._getHtmlForWebview(payload);
-        } catch (error) {
-            // Fallback to empty state if branches fail to load
-            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: formatGitError(error) }));
-            return this._getHtmlForWebview({
-                commits: [],
-                local: [],
-                remote: [],
-                currentBranch: '',
-                selectedBranch: '',
-                repoName: '',
-                hasMore: false,
-                hasMoreAbove: false,
-                headHash: '',
-                inProgress: undefined,
-                favorites: [],
-                recent: []
-            });
         }
     }
 
@@ -2749,6 +2983,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 <button id="tg-graph" type="button" data-title="${t('ui.hideGraph')}">
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="3.5" r="1.6"/><circle cx="4" cy="12.5" r="1.6"/><circle cx="11.5" cy="8" r="1.6"/><path d="M4 5.1v5.8M5.4 4.4l4.6 2.8M5.4 11.6l4.6-2.8"/></svg>
                 </button>
+            </div>
+            <div id="rev-bar" style="display: none;">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="1.6"/><path d="M8 .8v2M8 13.2v2M.8 8h2M13.2 8h2"/></svg>
+                <span id="rev-text"></span>
+                <button id="rev-leave" type="button"></button>
             </div>
             <div id="scroll"><div id="top-loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows"></div><div id="loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows-busy" class="busy"><span class="spin"></span>${t('ui.loadingCommits')}</div></div>
         </div>

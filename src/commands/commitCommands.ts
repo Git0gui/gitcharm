@@ -889,7 +889,7 @@ export function registerCommitCommands(
                 gitService,
                 ctx.extensionUri,
                 { repoPath, file: rel, startLine: 0, endLine: 0, text: '', mode: 'file' },
-                (hash, file) => graphView.revealCommit(hash, file)
+                (hash, file, opts) => graphView.revealCommit(hash, file, opts)
             );
         })
     );

@@ -363,6 +363,113 @@
             hasMoreAbove: true,
             steps: [{ do: 'event', type: 'scroll', sel: '#scroll' }]
         }),
+        /**
+         * The remembered page is painted first, then the normal load re-validates it.
+         * That second `setData` is the one message that resets selection, folds and
+         * scroll, and it lands right after the view state was restored — so without
+         * `preserveSelection` the user watches the row they had selected and the
+         * scroll they had left at get wiped by a refresh they never asked for.
+         * The list is shortened here so the scroll offset is visible in one frame.
+         */
+        snapshotRestore: Object.assign({}, base, {
+            select: '',
+            steps: [
+                { do: 'style', sel: '#scroll', prop: 'maxHeight', value: '210px' },
+                { msg: { command: 'setCommits', commits: commits, hasMore: true } },
+                {
+                    msg: {
+                        command: 'restoreViewState',
+                        state: {
+                            selectedHash: '091e77ed2a299884c744ed094c735b7e71702521',
+                            scrollTop: 150,
+                            detailVisible: true
+                        }
+                    }
+                },
+                {
+                    msg: {
+                        command: 'setData',
+                        commits: commits,
+                        local: local,
+                        remote: remote,
+                        currentBranch: 'main',
+                        selectedBranch: 'main',
+                        headHash: '153fcf858610d56a4daf93ef269427a52809913e',
+                        hasMore: true,
+                        preserveSelection: true
+                    }
+                }
+            ]
+        }),
+        /**
+         * Hiding the panel destroys the third column with the rest of the frame, and
+         * it was the part that never came back: the commit was re-selected, its files
+         * were re-listed, but the row the user had been reading was gone. That row
+         * cannot arrive with the commits — it belongs to a detail one round-trip later
+         * — so this scene walks the whole journey: setCommits, then the snapshot, then
+         * the stub's own answer, which is where the cursor and the list's scrollbar go
+         * back. Flat mode, because the remembered file is the last row of seven.
+         */
+        fileRestore: Object.assign({}, base, {
+            select: '',
+            steps: [
+                { do: 'style', sel: '#d-files', prop: 'height', value: '96px' },
+                { do: 'style', sel: '#d-files', prop: 'flex', value: 'none' },
+                // #d-files scrolls smoothly, and headless virtual time never advances
+                // that compositor animation — the frame would show the position it
+                // started from. Pin the end of it, which is what the user sees.
+                { do: 'style', sel: '#d-files', prop: 'scrollBehavior', value: 'auto' },
+                { msg: { command: 'setCommits', commits: commits, hasMore: true } },
+                {
+                    msg: {
+                        command: 'restoreViewState',
+                        state: {
+                            selectedHash: 'bd864ce52328c724b8506009414e9b70bf436ff4',
+                            detailVisible: true,
+                            fileViewMode: 'flat',
+                            fileCursor: 'src/test/gitParsing.test.ts',
+                            filesScrollTop: 100
+                        }
+                    }
+                }
+            ]
+        }),
+        /**
+         * The same snapshot of a commit that no longer carries that file: the wait is
+         * spent and dropped. A remembered row must never reappear under a different
+         * changeset, and it must not keep waiting for one either.
+         */
+        fileRestoreStale: Object.assign({}, base, {
+            select: '',
+            steps: [
+                { do: 'style', sel: '#d-files', prop: 'height', value: '96px' },
+                { do: 'style', sel: '#d-files', prop: 'flex', value: 'none' },
+                { msg: { command: 'setCommits', commits: commits, hasMore: true } },
+                {
+                    msg: {
+                        command: 'restoreViewState',
+                        state: {
+                            selectedHash: 'bd864ce52328c724b8506009414e9b70bf436ff4',
+                            detailVisible: true,
+                            fileViewMode: 'flat',
+                            fileCursor: 'media/webview.js',
+                            filesScrollTop: 80
+                        }
+                    }
+                }
+            ]
+        }),
+        /**
+         * The row click now goes through the same function the arrow keys use, so
+         * this is the frame that proves the two paths still mark one row and only
+         * one — the click path used to duplicate three lines of it.
+         */
+        fileClick: Object.assign({}, base, {
+            steps: [
+                { do: 'click', sel: row('bd864ce52328c724b8506009414e9b70bf436ff4') },
+                { do: 'click', sel: file('src/services/gitUtils.ts') }
+            ]
+        }),
         /** Same menu with the file still on disk: the entry stays clickable. */
         fileMenuWithSource: Object.assign({}, base, {
             steps: [

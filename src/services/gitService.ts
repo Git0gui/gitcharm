@@ -17,6 +17,7 @@ import { GitAskpass } from './askpass';
 import { PersistedBranchCache } from './persistedBranchCache';
 import { resolveCommonDir, resolveGitDir } from './gitPaths';
 import { readWindowsSystemProxy } from './systemProxy';
+import { REFS_SNAPSHOT_ARGS, RefsSnapshot, parseRefsSnapshot } from './refsSnapshot';
 import { logger } from './logger';
 import {
     GitCommit,
@@ -26,7 +27,6 @@ import {
     LruCache,
     parseLogLine,
     parseGraphLine,
-    parseTrackInfo,
     parseSymbolicRef,
     parseRefPath,
     parseWorkingTreeSummary,
@@ -54,7 +54,6 @@ import {
     remoteNameFromUpstream,
     refsTagsFirst,
     parseLsRemoteTags,
-    parseTagRefList,
     parseContainingBranchRefs,
     RemoteTagRef,
     matchRemoteBranch,
@@ -288,13 +287,17 @@ export class GitService {
     // HEAD's checkout log, also read from disk: it records checkouts made outside
     // this extension, which is the only way "recent branches" can mean anything.
     private _recentBranches = new RecentBranchReader(() => this._repositoryPath);
-    private _trackInfoCache: { at: number; map: BranchTrackMap } | undefined;
-    private _trackInfoPromise: Promise<BranchTrackMap> | undefined;
-    // Tag name -> commit hash. `for-each-ref` is what peels annotated tags whose
-    // object lives in a pack file; the refs-directory read can only inflate
-    // loose objects and would otherwise report the tag-object hash.
-    private _tagRefsCache: { at: number; map: Map<string, string> } | undefined;
-    private _tagRefsPromise: Promise<Map<string, string>> | undefined;
+    /**
+     * The single refs snapshot behind both branch divergence info and tag→commit
+     * mapping: one `for-each-ref refs/heads refs/tags` answers both, and the two
+     * queries used to run separately on every first paint. 3s TTL + in-flight
+     * dedupe, invalidated by ref-mutating operations. Tag names still need the
+     * peel only git can do — an annotated tag whose object is packed has no loose
+     * file to inflate, so a refs-directory read would report the tag-object hash
+     * and the badge would silently vanish.
+     */
+    private _refsSnapshotCache: { at: number; snap: RefsSnapshot } | undefined;
+    private _refsSnapshotPromise: Promise<RefsSnapshot | undefined> | undefined;
     // Persistent branch cache (workspaceState Memento, versioned payload)
     private _persistedCache: PersistedBranchCache;
     
@@ -1245,8 +1248,7 @@ export class GitService {
     invalidateVolatile(): void {
         this._graphCache.clear();
         this._branchCache.clear();
-        this._trackInfoCache = undefined;
-        this._tagRefsCache = undefined;
+        this._refsSnapshotCache = undefined;
         // Head hashes must be re-read: divergence checks compare them against
         // remote-tracking refs, and a stale cache hides the arrows.
         this._refsReader.invalidate();
@@ -1556,7 +1558,7 @@ export class GitService {
         await this._execMutate(['branch', branchName, startPoint]);
         // Invalidate refs cache after branch creation
         this._refsReader.invalidate();
-        this._trackInfoCache = undefined;
+        this._refsSnapshotCache = undefined;
     }
 
     /**
@@ -1568,7 +1570,7 @@ export class GitService {
         await this._execMutate(['branch', flag, branchName]);
         // Invalidate all caches after branch deletion
         this._refsReader.invalidate();
-        this._trackInfoCache = undefined;
+        this._refsSnapshotCache = undefined;
         this._branchCache.clear();
         // Also clear persisted cache
         this._persistedCache.clear();
@@ -1679,7 +1681,7 @@ export class GitService {
         await this._execMutate(['branch', '-m', oldName, newName]);
         // Invalidate all caches after branch rename
         this._refsReader.invalidate();
-        this._trackInfoCache = undefined;
+        this._refsSnapshotCache = undefined;
         this._branchCache.clear();
         // Also clear persisted cache
         this._persistedCache.clear();
@@ -2293,12 +2295,20 @@ export class GitService {
     }
 
     /**
-     * Get detailed branch info with upstream and ahead/behind counts
+     * Get detailed branch info with upstream and ahead/behind counts.
+     *
+     * `withTrack: false` is the paint path: the branch tree and the badges under
+     * it carry names only (`setBranches`/`setData` map every entry down to one),
+     * and those names are already on disk, so the tree must not queue behind the
+     * refs snapshot. Divergence has its own message (`setDivergence`) and its own
+     * cache entry, and arrows arriving one frame later is what already happens.
+     * The two variants are cached under separate keys: a names-only entry must
+     * never answer a caller that reads `upstream` or `ahead`.
      */
-    async getBranchesWithDetails(force: boolean = false): Promise<BranchDetails> {
-        const key = `${this._repositoryPath ?? ''}|details`;
+    async getBranchesWithDetails(force: boolean = false, withTrack: boolean = true): Promise<BranchDetails> {
+        const key = `${this._repositoryPath ?? ''}|details${withTrack ? '' : '|names'}`;
         let details: BranchDetails;
-        
+
         if (!force) {
             const hit = this._branchCache.get(key);
             if (hit) {
@@ -2308,13 +2318,17 @@ export class GitService {
                 return details;
             }
         }
-        
-        details = await this._loadBranchDetails();
+
+        details = await this._loadBranchDetails(withTrack);
         this._branchCache.set(key, details);
-        
-        // Persist to file for next startup
-        this._persistedCache.save(this._repositoryPath || '', { local: details.local, remote: details.remote });
-        
+
+        // Persist to file for next startup. Only the full variant: writing the
+        // names-only list would store zeros for ahead/behind and the next window
+        // would open with the divergence arrows erased.
+        if (withTrack) {
+            this._persistedCache.save(this._repositoryPath || '', { local: details.local, remote: details.remote });
+        }
+
         return details;
     }
 
@@ -2381,40 +2395,37 @@ export class GitService {
     }
 
     /**
-     * Shared `for-each-ref` track-info query (upstream + ahead/behind per local
-     * branch). Concurrent callers share one in-flight spawn and results are
-     * cached for a short TTL; invalidated by ref-mutating operations.
+     * Shared refs snapshot: upstream + ahead/behind per local branch and the
+     * commit every tag peels to, from one `for-each-ref`. Concurrent callers
+     * share the in-flight spawn; a failure is not cached (the next caller tries
+     * again, and the tag path still has the filesystem reader).
      */
-    private _getBranchTrackInfo(): Promise<BranchTrackMap> {
+    private _getRefsSnapshot(): Promise<RefsSnapshot | undefined> {
         const TTL_MS = 3000;
-        if (this._trackInfoCache && (Date.now() - this._trackInfoCache.at) < TTL_MS) {
-            return Promise.resolve(this._trackInfoCache.map);
+        if (this._refsSnapshotCache && (Date.now() - this._refsSnapshotCache.at) < TTL_MS) {
+            return Promise.resolve(this._refsSnapshotCache.snap);
         }
-        if (this._trackInfoPromise) {
-            return this._trackInfoPromise;
+        if (this._refsSnapshotPromise) {
+            return this._refsSnapshotPromise;
         }
-        this._trackInfoPromise = this.executeGitArgs([
-            'for-each-ref', 'refs/heads/', '--format=%(refname:short)|%(upstream:short)|%(upstream:track)'
-        ]).then(output => {
-            const map: BranchTrackMap = new Map();
-            for (const line of output.split('\n').filter(l => l.trim())) {
-                const parts = line.split('|');
-                // Strip surrounding quotes that some git builds add around refnames
-                const name = parts[0]?.replace(/^"|"$/g, '') || '';
-                if (!name) {continue;}
-                const upstream = parts[1]?.replace(/^"|"$/g, '') || '';
-                const { ahead, behind } = parseTrackInfo(parts[2]);
-                map.set(name, { upstream: upstream || undefined, ahead, behind });
-            }
-            this._trackInfoCache = { at: Date.now(), map };
-            return map;
+        this._refsSnapshotPromise = this.executeGitArgs([...REFS_SNAPSHOT_ARGS]).then(output => {
+            const snap = parseRefsSnapshot(output);
+            this._refsSnapshotCache = { at: Date.now(), snap };
+            return snap;
         }).catch(error => {
-            logger.debug('[GitCharm] for-each-ref track info failed:', error);
-            return new Map() as BranchTrackMap;
+            logger.debug('[GitCharm] for-each-ref snapshot failed:', error);
+            return undefined;
         }).finally(() => {
-            this._trackInfoPromise = undefined;
+            this._refsSnapshotPromise = undefined;
         });
-        return this._trackInfoPromise;
+        return this._refsSnapshotPromise;
+    }
+
+    /**
+     * Upstream + divergence for every local branch.
+     */
+    private async _getBranchTrackInfo(): Promise<BranchTrackMap> {
+        return (await this._getRefsSnapshot())?.branches ?? new Map();
     }
 
     /**
@@ -2500,16 +2511,22 @@ export class GitService {
         }));
     }
 
-    private async _loadBranchDetails(): Promise<BranchDetails> {
+    private async _loadBranchDetails(withTrack: boolean): Promise<BranchDetails> {
         // Cold-path design: no subprocess for names. Branch names come straight
         // from the refs files (incl. packed-refs); upstream/track info comes from
         // one shared for-each-ref spawn.
-        const [currentBranch, trackMap] = await Promise.all([
-            this.getCurrentBranch(),
-            this._getBranchTrackInfo()
-        ]);
-
+        const currentBranch = await this.getCurrentBranch();
         const names = this._refsReader.readBranchNames();
+
+        if (!withTrack && (names.local.length > 0 || names.remote.length > 0)) {
+            return {
+                current: currentBranch,
+                local: names.local.map(name => ({ name, ahead: 0, behind: 0 })),
+                remote: names.remote.map(name => ({ name }))
+            };
+        }
+
+        const trackMap = await this._getBranchTrackInfo();
 
         if (names.local.length === 0 && names.remote.length === 0) {
             // Nothing readable on disk (unborn branch, inaccessible refs): ask git
@@ -2898,30 +2915,13 @@ export class GitService {
      * lightweight tags, so the fallback keeps those as they are.
      */
     async getTagRefs(): Promise<Map<string, string>> {
-        const TTL_MS = 3000;
-        if (this._tagRefsCache && (Date.now() - this._tagRefsCache.at) < TTL_MS) {
-            return new Map(this._tagRefsCache.map);
+        const snap = await this._getRefsSnapshot();
+        if (!snap) {
+            // No git binary or no repository yet: the filesystem reader is
+            // still right for loose tags, and it never throws.
+            return this._refsReader.readTagRefs();
         }
-        if (this._tagRefsPromise) {return new Map(await this._tagRefsPromise);}
-        this._tagRefsPromise = (async () => {
-            try {
-                const output = await this.executeGitArgs(
-                    ['for-each-ref', 'refs/tags', '--format=%(objectname)\t%(*objectname)\t%(refname:short)'],
-                    { timeoutMs: 10000 }
-                );
-                const map = parseTagRefList(output);
-                this._tagRefsCache = { at: Date.now(), map };
-                return map;
-            } catch (error) {
-                // No git binary or no repository yet: the filesystem reader is
-                // still right for loose tags, and it never throws.
-                logger.debug(`[GitCharm] for-each-ref tags failed: ${String(error)}`);
-                return this._refsReader.readTagRefs();
-            } finally {
-                this._tagRefsPromise = undefined;
-            }
-        })();
-        return new Map(await this._tagRefsPromise);
+        return new Map(snap.tags);
     }
 
     /** Every tag with the commit it points at, newest names last. */

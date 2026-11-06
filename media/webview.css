@@ -124,6 +124,54 @@ svg { flex: none; }
     flex-wrap: nowrap;
     min-width: 0;
 }
+/* Rooted list banner: the commit list is parked on one commit (a blame or
+   line-history jump), so the bar says where and gives the only way back. */
+#rev-bar {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    flex: none;
+    background: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.12));
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+    font-size: 11px;
+    animation: slideDown 0.2s ease-out;
+}
+#rev-bar > svg {
+    flex: none;
+    color: var(--vscode-textLink-foreground, #3794ff);
+}
+#rev-text {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-foreground);
+}
+#rev-text .rev-note {
+    color: var(--vscode-descriptionForeground, #888);
+}
+#rev-text .rev-note::before {
+    content: ' · ';
+}
+#rev-leave {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    background: transparent;
+    border: 1px solid var(--vscode-button-border, rgba(0, 0, 0, 0.4));
+    border-radius: 6px;
+    color: var(--vscode-textLink-foreground, #3794ff);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#rev-leave:hover {
+    background: rgba(77, 163, 255, 0.16);
+    border-color: var(--vscode-textLink-foreground, #3794ff);
+}
 .tb {
     flex: 1 1 0;
     min-width: 0;
@@ -1240,6 +1288,12 @@ canvas.graph-canvas {
 .dl.hunk { background: rgba(128, 128, 128, 0.10); }
 .dl.hunk .dt { color: #4da3ff; }
 .dl.meta .dt { color: var(--vscode-descriptionForeground, #888); font-style: italic; }
+/* A line the blame annotation covered, when the jump asked for it. Composed on
+   top of add/del so the change colour survives. */
+.dl.hit {
+    background: rgba(77, 163, 255, 0.18);
+    box-shadow: inset 2px 0 0 var(--vscode-textLink-foreground, #3794ff);
+}
 #main.no-detail #right { display: none; }
 /* Branch divergence arrows - thicker and more visible */
 .barr { 

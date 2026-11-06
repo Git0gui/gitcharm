@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { GitService } from './gitService';
+import type { RevealOptions } from '../views/messages';
 import { t } from '../i18n';
 
 export interface BlameInfo {
     hash: string;
     /** Repository-relative path of the blamed file; the panel selects it. */
     file: string;
+    /** Absolute repository path blamed at compute time — the panel may be on another one. */
+    repo: string;
     author: string;
     time: number;
     summary: string;
@@ -66,16 +69,27 @@ function measureTextPixels(text: string, fontSize: number): number {
     return em * fontSize;
 }
 
+/**
+ * One blame pass over a document. Two arrays share the editor's line numbering:
+ * the commit behind each line, and that line's number inside the blamed
+ * commit's own version of the file — the coordinate the commit's diff preview
+ * uses, so a jump from the gutter can land on the right row.
+ */
+interface BlameEntry {
+    lines: BlameInfo[];
+    origins: number[];
+}
+
 export class BlameProvider implements vscode.Disposable {
     private _decoration: vscode.TextEditorDecorationType;
     private _endDecoration: vscode.TextEditorDecorationType;
-    private readonly _cache = new Map<string, BlameInfo[]>();
+    private readonly _cache = new Map<string, BlameEntry>();
     private readonly _active = new Set<string>();
     private readonly _disposables: vscode.Disposable[] = [];
 
     constructor(
         private readonly _git: GitService,
-        private readonly _onReveal: (hash: string, file: string) => void
+        private readonly _onReveal: (hash: string, file: string, opts: RevealOptions) => void
     ) {
         this._decoration = this._createDecorationType();
         this._endDecoration = this._createEndDecorationType();
@@ -100,8 +114,11 @@ export class BlameProvider implements vscode.Disposable {
             if (e.kind !== vscode.TextEditorSelectionChangeKind.Mouse) {return;}
             const sel = e.selections[0];
             if (!sel || sel.active.character !== 0) {return;}
-            const info = this._cache.get(key)?.[sel.active.line];
-            if (info && !ZERO_HASH.test(info.hash)) {this._onReveal(info.hash, info.file);}
+            const entry = this._cache.get(key);
+            const info = entry?.lines[sel.active.line];
+            if (info && !ZERO_HASH.test(info.hash)) {
+                this._onReveal(info.hash, info.file, this._revealOpts(entry!, info, sel.active.line));
+            }
         }));
 
         this._disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
@@ -125,7 +142,8 @@ export class BlameProvider implements vscode.Disposable {
             provideHover: (doc, pos) => {
                 const key = doc.uri.toString();
                 if (!this._active.has(key)) {return undefined;}
-                const info = this._cache.get(key)?.[pos.line];
+                const entry = this._cache.get(key);
+                const info = entry?.lines[pos.line];
                 if (!info) {return undefined;}
 
                 const md = new vscode.MarkdownString();
@@ -140,7 +158,8 @@ export class BlameProvider implements vscode.Disposable {
                 md.appendText(info.author);
                 md.appendMarkdown(` · ${fmtRelativeTimeFromEpoch(info.time)} <small>(${fmtDay(info.time)})</small>\n\n`);
                 md.appendMarkdown(`\`${info.hash.substring(0, 8)}\`\n\n`);
-                md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${encodeURIComponent(JSON.stringify([info.hash, info.file]))})`);
+                const args = encodeURIComponent(JSON.stringify([info.hash, info.file, this._revealOpts(entry!, info, pos.line)]));
+                md.appendMarkdown(`[${t('blame.viewInIdeaGit')}](command:idea-git.revealCommit?${args})`);
                 return new vscode.Hover(md);
             }
         }));
@@ -153,6 +172,26 @@ export class BlameProvider implements vscode.Disposable {
         this._disposables.length = 0;
         this._decoration.dispose();
         this._endDecoration.dispose();
+    }
+
+    /**
+     * What a jump into the panel needs beyond the hash: which repository the
+     * annotation came from (the panel may be showing another one) and which
+     * lines to land on. One commit annotates a run of consecutive lines, and
+     * that run is what the user was pointing at; the numbers sent along are the
+     * run's positions inside the commit's file, not the editor's.
+     */
+    private _revealOpts(entry: BlameEntry, info: BlameInfo, index: number): RevealOptions {
+        let start = index;
+        let end = index;
+        while (start > 0 && entry.lines[start - 1]?.hash === info.hash) {start--;}
+        while (end + 1 < entry.lines.length && entry.lines[end + 1]?.hash === info.hash) {end++;}
+        const numbers = entry.origins.slice(start, end + 1).filter(n => n >= 1);
+        return {
+            repoPath: info.repo,
+            startLine: numbers.length ? Math.min(...numbers) : undefined,
+            endLine: numbers.length ? Math.max(...numbers) : undefined
+        };
     }
 
     private _createDecorationType(): vscode.TextEditorDecorationType {
@@ -182,18 +221,18 @@ export class BlameProvider implements vscode.Disposable {
         }
 
         if (!this._cache.has(key)) {
-            const blame = await this._compute(ed.document);
-            if (!blame) {
+            const entry = await this._compute(ed.document);
+            if (!entry) {
                 vscode.window.showWarningMessage(t('blame.noInfo'));
                 return;
             }
-            this._cache.set(key, blame);
+            this._cache.set(key, entry);
         }
         this._active.add(key);
         this._apply(ed);
     }
 
-    private async _compute(doc: vscode.TextDocument): Promise<BlameInfo[] | undefined> {
+    private async _compute(doc: vscode.TextDocument): Promise<BlameEntry | undefined> {
         const repo = this._git.repositoryPath;
         if (!repo) {return undefined;}
         const rel = path.relative(repo, doc.uri.fsPath).replace(/\\/g, '/');
@@ -208,18 +247,25 @@ export class BlameProvider implements vscode.Disposable {
         if (!out) {return undefined;}
 
         const meta = new Map<string, BlameInfo>();
-        const result: BlameInfo[] = [];
-        let cur: { hash: string; line: number } | undefined;
+        const lines: BlameInfo[] = [];
+        const origins: number[] = [];
+        let cur: { hash: string; orig: number; final: number } | undefined;
 
         for (const ln of out.split('\n')) {
-            const head = /^([0-9a-f]{40}) \d+ (\d+)/.exec(ln);
+            const head = /^([0-9a-f]{40}) (\d+) (\d+)/.exec(ln);
             if (head) {
-                cur = { hash: head[1], line: parseInt(head[2], 10) };
-                if (!meta.has(cur.hash)) {meta.set(cur.hash, { hash: cur.hash, file: rel, author: '', time: 0, summary: '' });}
+                // The header carries the line's position in the blamed commit
+                // first and in the blamed file second; only the latter is where
+                // the annotation goes, the former is what a jump lands on.
+                cur = { hash: head[1], orig: parseInt(head[2], 10), final: parseInt(head[3], 10) };
+                if (!meta.has(cur.hash)) {meta.set(cur.hash, { hash: cur.hash, file: rel, repo, author: '', time: 0, summary: '' });}
                 continue;
             }
             if (ln.startsWith('\t')) {
-                if (cur) {result[cur.line - 1] = meta.get(cur.hash)!;}
+                if (cur) {
+                    lines[cur.final - 1] = meta.get(cur.hash)!;
+                    origins[cur.final - 1] = cur.orig;
+                }
                 cur = undefined;
                 continue;
             }
@@ -230,11 +276,11 @@ export class BlameProvider implements vscode.Disposable {
                 else if (ln.startsWith('summary ')) {e.summary = ln.substring(8);}
             }
         }
-        return result;
+        return { lines, origins };
     }
 
     private _apply(editor: vscode.TextEditor): void {
-        const blame = this._cache.get(editor.document.uri.toString());
+        const blame = this._cache.get(editor.document.uri.toString())?.lines;
         if (!blame) {return;}
 
         const fontSize = vscode.workspace.getConfiguration('editor').get<number>('fontSize', 14);
