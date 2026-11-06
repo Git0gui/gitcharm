@@ -61,7 +61,8 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 
 - **分支/tag 映射走 `RefsReader`**：直接读 git 目录下的 refs（`resolveGitDir()` + `commondir`，loose + packed-refs），5s TTL；ref 变更操作后必须 `invalidate()`。禁止为取分支列表 spawn `git branch`。
 - **外部变更靠 `watchRepositoryChanges()`**：`fs.watch` git 目录（HEAD/index/packed-refs + refs 递归），250ms 防抖后 `invalidateVolatile()`。这是 vscode.git `onDidChangeState` 删除后的唯一事件驱动失效来源；订阅者用 `Disposable` 归还，最后一个 token 释放时才真正关监听。
-- **ahead/behind 走 `_getBranchTrackInfo()`**：单次 `for-each-ref refs/heads/ --format=%(refname:short)|%(upstream:short)|%(upstream:track)`，3s TTL + in-flight Promise 去重；格式化的 track 字符串要剥字面引号。
+- **ahead/behind 与标签徽章共用一次 refs 快照**（`_getRefsSnapshot()` → `src/services/refsSnapshot.ts` 的 `REFS_SNAPSHOT_ARGS`：一条 `for-each-ref refs/heads refs/tags --format=…`，3s TTL + in-flight Promise 去重，失败不缓存）：`_getBranchTrackInfo()` 和 `getTagRefs()` 只是读它的两张 Map，**不要再为 track 或标签各起一次 `for-each-ref`**（合并前是两次，实测 46ms + 35ms，都压在首屏关键路径上）。格式化的 track 字符串要剥字面引号。分支/标签 ref 名一律走 `RefsReader`（纯 fs），所以**分支名可以先上屏、箭头晚到**（`setDivergence`）。首屏因此只付两次子进程：一次 `git log`、一次 `for-each-ref`——这两个数字由 `docs/perf/coldstart.mjs` 钉住（≤2 spawn；记住的那一页重画 <10ms 且 0 spawn），改动首屏取数顺序后跑它。
+- **分支名先行的代价是 divergence 必须自己补一刀**：`getBranchesWithDetails(force, withTrack)` 第二参数为 false 时只给名字，那条路径**不写持久化分支缓存**（缓存里存的必须是完整行），否则启动快了一点、左树的远端信息却长期是旧的。
 - **divergence 箭头展示必须实时**：`_refreshDivergence` 用 `force=true` 绕过 TTL。
 - **持久化一律用 `ExtensionContext.workspaceState`（Memento）**，禁止往工作区写缓存文件（`.vscode/.qoder` 下的旧缓存文件机制已删除，`PersistedBranchCache` 负责一次性迁移）。
 - 持久化结构必须带 `version` 字段 + schema 校验，加载失败要自愈（丢弃坏数据），历史污染数据（如带引号的分支名）在加载时清洗。
@@ -69,6 +70,8 @@ media/                  webview 前端（webview.js / graph.css / codicons）
 - **webview 隐藏时调 `releaseHeavyCaches()`**：清 `_filesCache` / `_detailCache`，保留 `_commitIndex`（LRU 200）与图缓存。
 - **切换分支后必须创建全新的 GraphCommit 对象**，禁止复用任何缓存引用（vscode.git 共享引用曾导致跨分支污染）。
 - 视图状态（分支/选中 hash/滚动位置/折叠态/详情可见性）由 webview 防抖 400ms 上报，扩展侧再防抖 400ms 写 Memento；隐藏/dispose 时必须 flush。
+- **启动预取（`prefetchFirstPage`）只有一个口径：它必须调 `_firstPageRows()` 本身**，不许自己拼 `getCommitGraphData` 的参数。预取和首屏是同一个问题的两次回答，任何一处"顺手优化一下参数"都会让面板拿到的是另一套分支范围/分页大小/筛选条件（静态回归测试 `src/test/prefetchScope.test.ts` 就是钉这一条的）。它同时暖 refs 快照与 HEAD，所以首屏的箭头是 0 次子进程。**上一次会话没人看过面板（`idea-git.panelVisible` 为 false）就延后 1500ms 再跑**，别和窗口自己的启动抢 CPU；`resolveWebviewView` 一旦开跑就取消延时、立刻执行，两条路只能有一条在跑。
+- **首屏那一页可以先画后校验**（`src/services/firstPageStore.ts` + `_paintPersistedFirstPage()`）：一次 `git log -n 20` 是"打开窗口"到"看见历史"之间最贵的东西（实测 43–58ms），而它读的是不可变历史，所以把上一页记住、开屏立刻画出来，再让正常加载覆盖它。**让它安全的是那个 tip**：保存时记下页面所走的那个 rev 的 tip，重画前用一次纯 fs 读比一次，tip 没动就不是"相似的页"而是"同一页"。红线：只记**无筛选、非 rooted** 的第一页（`_firstPageRows` 里判），repoPath / branch / tip 任一对不上就不画，`_pendingReveal` 或 `_revRoot` 存在时不画（那正是"blame 跳过来的定位列表"，覆盖它等于把用户刚定位到的提交滚走），已经有行上屏（`_loadedHashes` 非空）也不画。**记住的页在 `restoreViewState` 之前就上屏**，所以任何紧随其后的 `_reload`（刷新按钮、外部新提交）都必须带 `preserveSelection`——由 `_takeSnapshotPaint()` 一次性发放，画过就消耗，别让它粘在后面的加载上。回归测试 `src/test/prefetchScope.test.ts`、`src/test/firstPageStore.test.ts`；行为侧用 stub webview 跑 `resolveWebviewView` 看消息顺序。
 
 ## 5. 服务层与测试
 

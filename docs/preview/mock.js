@@ -363,6 +363,44 @@
             hasMoreAbove: true,
             steps: [{ do: 'event', type: 'scroll', sel: '#scroll' }]
         }),
+        /**
+         * The remembered page is painted first, then the normal load re-validates it.
+         * That second `setData` is the one message that resets selection, folds and
+         * scroll, and it lands right after the view state was restored — so without
+         * `preserveSelection` the user watches the row they had selected and the
+         * scroll they had left at get wiped by a refresh they never asked for.
+         * The list is shortened here so the scroll offset is visible in one frame.
+         */
+        snapshotRestore: Object.assign({}, base, {
+            select: '',
+            steps: [
+                { do: 'style', sel: '#scroll', prop: 'maxHeight', value: '210px' },
+                { msg: { command: 'setCommits', commits: commits, hasMore: true } },
+                {
+                    msg: {
+                        command: 'restoreViewState',
+                        state: {
+                            selectedHash: '091e77ed2a299884c744ed094c735b7e71702521',
+                            scrollTop: 150,
+                            detailVisible: true
+                        }
+                    }
+                },
+                {
+                    msg: {
+                        command: 'setData',
+                        commits: commits,
+                        local: local,
+                        remote: remote,
+                        currentBranch: 'main',
+                        selectedBranch: 'main',
+                        headHash: '153fcf858610d56a4daf93ef269427a52809913e',
+                        hasMore: true,
+                        preserveSelection: true
+                    }
+                }
+            ]
+        }),
         /** Same menu with the file still on disk: the entry stays clickable. */
         fileMenuWithSource: Object.assign({}, base, {
             steps: [

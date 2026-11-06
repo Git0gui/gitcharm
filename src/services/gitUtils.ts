@@ -842,23 +842,6 @@ export function parseLsRemoteTags(output: string): RemoteTagRef[] {
 }
 
 /**
- * Parse `git for-each-ref refs/tags --format=%(objectname)%09%(*objectname)%09%(refname:short)`.
- * `%(*objectname)` is the commit an annotated tag peels to and empty for a
- * lightweight tag, whose object name already is the commit.
- */
-export function parseTagRefList(output: string): Map<string, string> {
-    const hashRe = /^[0-9a-f]{40,64}$/i;
-    const tags = new Map<string, string>();
-    for (const line of output.split('\n')) {
-        if (!line) {continue;}
-        const [object, peeled, name] = line.split('\t');
-        if (!name || !hashRe.test(object ?? '')) {continue;}
-        tags.set(name, peeled && hashRe.test(peeled) ? peeled : object);
-    }
-    return tags;
-}
-
-/**
  * `for-each-ref --contains <hash> --format=%(refname)` lines into branch names,
  * local ones before remote ones. for-each-ref sorts the two namespaces together,
  * so `refs/heads/x` and `refs/remotes/origin/x` interleave by name; a rooted
