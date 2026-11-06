@@ -22,11 +22,13 @@
 
 ## What's New
 
-### The commit list says what it means
+### The panel picks up where you left it
 
-- **"All branches" means branches.** The list used to walk every ref the repository owns, so commits that belong to no branch at all — a tag's own object, a stash, the checkpoint commits another tool quietly leaves behind — showed up with no badge and no row in the branch tree, which reads like a broken history. They are gone; tags and branches still decorate the rows they belong to.
-- **Paging up from a jumped-to commit stays on its timeline.** Clicking a blame annotation roots the log at that commit. The rows above it used to be "whatever descendants the current view happens to have", which could paste an unrelated history on top — 33 commits from another branch in one real repository. Now the upward half is walked from a ref that genuinely contains the commit, and when no branch does (a tag-only or dangling commit) there simply is nothing above it.
-- **The message leads; the refs never disappear.** Branch and tag badges used to be clipped out of the row once it got narrow, and hidden wholesale when the graph column was switched off. They now take at most a fifth of the line and always stay visible — the badge ellipsizes its own name while `+N` holds its ground, and hovering still lists every branch and tag with its own icon.
+- **Opening it no longer waits for git.** The page of history you were last looking at paints immediately, then the real load replaces it — and that first page is only trusted when the branch tip it came from hasn't moved, so it is the same page rather than a similar one. Branch names appear straight away; the ahead/behind arrows follow a moment later.
+- **A blame jump says where you are.** The panel used to root the log at the commit and say nothing else. Now the branch tree on the left switches to the branch that actually carries that commit, a banner names the commit and explains that filtering is paused while you're here, and **Back to branch** sits right next to it. In a multi-folder workspace a commit from another repository switches the panel over first, instead of answering "commit not found".
+- **The lines you blamed open where they are.** Jumping in from a few lines of blame selects that file in the third column and expands those lines, rather than leaving you to find the row again.
+- **Filters can't hide the commit you jumped to.** The rooted view used to be searched with the panel's filter still applied, so when the filter didn't match that commit nothing visibly happened when you clicked. Your text is kept — it just pauses until you leave the rooted view.
+- **Closing and re-opening the panel returns you to the file you were reading** — the highlighted row and how far that list was scrolled, not just the commit it belongs to.
 
 ## Overview
 
@@ -86,7 +88,7 @@ GitCharm provides a three-panel Git log view:
 
 ### Performance
 
-- **Instant open**: three-phase progressive loading (skeleton → branches → commits), startup < 10ms; the first page is optionally prefetched right after activation, so the panel opens with data already in hand
+- **Instant open**: the page of history you last saw is painted from disk before any git command runs, and only when the branch tip it was taken from hasn't moved — the live load then replaces it. Branch names come straight off the filesystem and the ahead/behind arrows arrive a moment later
 - **Filesystem refs**: resolves the git directory (plain clones, linked worktrees, shared `commondir`) and parses its refs (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
 - **No built-in git extension needed**: GitCharm never activates or reads `vscode.git`; branch lists, the current branch and ahead/behind counts all come from our own refs reader and a single `for-each-ref`, so the panel works even with the built-in Git extension disabled
 - **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; a filesystem watch on the git directory drops stale caches when you commit, fetch or switch branches elsewhere
@@ -96,7 +98,7 @@ GitCharm provides a three-panel Git log view:
 ### Experience & Reliability
 
 - **Bilingual UI**: fully localized interface, follows editor language or set manually
-- **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list
+- **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list — down to the file row you were reading and how far that list was scrolled, even if you closed the panel in the same second you clicked it
 - **Keyboard navigation**: Tab moves between the branch tree, commit list and file pane; arrows walk rows, Home / End / PageUp / PageDown jump, Enter opens the diff, and Shift+arrows extend a commit range
 - **Favorites**: mark branches from the branch row's context menu, then use the toolbar button to narrow the tree to just those — the button stays highlighted while the filter is on, and tells you how to mark a branch when nothing is favorited yet
 - **IDEA-style search box**: `.*` treats the keyword as an extended regular expression and `Cc` makes it case-sensitive, both living inside the box so the rule you are searching under is visible while you type. The default is a literal substring match — `( . *` are characters, not syntax — and both switches are part of the filter, so they survive re-showing the panel, a branch switch and a cached page
@@ -214,11 +216,13 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 提交列表说的就是它字面上的意思
+### 面板回到你离开时的样子
 
-- **「全部分支」只看分支**：以前这条列表走的是仓库里每一个 ref，于是不属于任何分支的提交——标签自己的对象、贮藏、别的工具悄悄留下的检查点提交——会带着空徽章冒出来，左侧分支树里也找不到对应行，读起来就像历史坏了。它们不再出现，而标签与分支照旧装饰在属于它们的那一行上。
-- **从 blame 跳过来之后，往上翻还是同一条时间线**：点编辑器里的提交信息，会把列表改根到那条提交。它上面那一段以前按"当前视图碰巧拥有的子提交"来取，结果能把一段毫不相干的历史叠上去——真实仓库里实测多出 33 条别的分支的提交。现在上半段从一条确实包含它的 ref 往上走；没有任何分支包含它（标签独占或悬空提交）时，上面就是没有提交。
-- **消息在前，引用也不会消失**：以前行一窄，分支与标签徽章就被整块裁出可视区，关掉提交图还会干脆隐藏。现在徽章最多占消息那一栏宽度的两成、始终可见，名字太长由徽章自己出省略号、`+N` 稳稳留在原位，悬停照样逐条列出每个分支和标签并各带图标。
+- **打开面板不再等 git**：上一次看到的那一页提交历史会立刻上屏，真正的加载随后覆盖它——而这一页只在它所属分支的 tip 没有移动时才被信任，所以它是"同一页"而不只是"相似的一页"。分支名先行出现，ahead/behind 箭头晚一点点跟上。
+- **从 blame 跳过来之后，面板说得出自己在看什么**：以前它只是把列表改根到那条提交，其余全靠用户猜。现在左边的分支树会切到真正承载这条提交的分支，列表上方有一条横幅写明"正在查看哪条提交、筛选已暂停"，旁边就是「返回分支」。多文件夹工作区里，提交属于另一个仓库时面板先切过去，不再只回一句"找不到提交"。
+- **blame 的那几行直接翻开**：从编辑器里某几行的 blame 跳过来，第三栏会选中那个文件并展开这几行的改动，不用自己再点一遍。
+- **筛选挡不住你跳过来的那条提交**：定位列表以前还带着面板的搜索词一起查，搜索词命中不到这条提交时，点下去界面毫无反应。你输入的文字不会被擦掉，只是在这段视图里暂停，返回分支后照旧生效。
+- **关掉再打开面板，会回到你正在读的那个文件**：高亮的那一行、文件列表滚动到哪里，都跟着一起回来，而不只是它所属的那条提交。
 
 ## 概览
 
@@ -278,7 +282,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ### 性能
 
-- **秒开**：三阶段渐进式加载（骨架屏 → 分支 → 提交），启动 < 10ms；激活后即预取首屏（可在设置里关闭），打开面板时数据已经就位
+- **秒开**：上一次看的那一页提交历史在任何 git 命令之前就从磁盘画出来，而且只在它所属分支的 tip 没动时才用（真正的加载随后覆盖它）；分支名直接读文件系统，ahead/behind 箭头晚一步补上
 - **直读 refs**：先定位 git 目录（普通克隆、linked worktree、共享 `commondir` 都能解析），再直接读 refs（loose + packed-refs），数百分支也不卡死，避免大量 `git rev-parse` 子进程
 - **不依赖内置 git 扩展**：全程不激活、不读取 `vscode.git`；分支列表、当前分支、超前/落后全部来自自研 refs 读取器 + 单条 `for-each-ref`，禁用内置 Git 扩展也能正常用
 - **智能缓存**：分支信息持久化到工作区状态（Memento），重启后立即可用；对 git 目录做文件监听，在别处提交 / 拉取 / 切分支时自动失效
@@ -288,7 +292,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 ### 体验与可靠性
 
 - **中英双语**：界面全量本地化，跟随编辑器语言或手动指定
-- **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口）
+- **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口），连你正在读哪一个文件、文件列表滚到哪里一起回来——哪怕你是在点开那一行的同一秒里关掉了面板
 - **三栏键盘导航**：Tab 在分支树、提交列表与文件列表之间切换；方向键选行，Home / End / PageUp / PageDown 跳转，Enter 打开差异，Shift+方向键扩展提交范围
 - **收藏分支**：分支行右键打星，工具栏"只看收藏的分支"按钮把树收窄到这些项，筛选生效时按钮高亮；一个都还没收藏时直接告诉你怎么收藏
 - **IDEA 式搜索框**：`.*` 把关键词当正则表达式匹配、`Cc` 区分大小写，两个开关长在框里——正在按什么规则搜，输入的时候就看得到。默认是字面子串匹配，`( . *` 是字符不是语法，不再因为一个左括号报正则错误；开关与关键词同属筛选条件，重新显示面板、换分支、复用缓存页都不会拿到错的那份答案

@@ -2,6 +2,47 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.2.1] - 2026-11-06
+
+本版三件事：把"打开面板到看见历史"之间最贵的那一次子进程挪到屏幕之后（首屏先画记住的那一页）、blame 跳转之后面板要能说清自己在看什么（五个用户自己去猜的地方换成答案）、面板重新显示时连"读到哪个文件"一起还回来。三者共同点是**竞态与口径**，不是逻辑写错——数据一直是对的，晚到、画错范围、或者根本没人记过。
+
+### 新增
+
+- **首屏那一页可以先画后校验**（`src/services/firstPageStore.ts` + `GraphViewProvider._paintPersistedFirstPage()`）：一次 `git log -n 20` 在本仓库实测 44.5ms，是"打开窗口"到"看见历史"之间最贵的东西，而它读的是不可变历史，所以把上一页连同"它是从哪个 rev 的 tip 走出来的"一起记住，重开时先用一次纯 fs 的 tip 比对校验、立刻画出来，正常加载晚到再覆盖。实测冷画 88.9ms / 2 次子进程 → 记住的页 7.74ms / 0 次（行上屏早了约 81ms 的 git 时间）。红线全在"相似不算相同"：只记无筛选、非 rooted 的第一页；repoPath / branch / tip 任一对不上就不画；`_pendingReveal` 或 `_revRoot` 存在时不画（那正是 blame 跳过来的定位列表，覆盖它等于把用户刚定位到的提交滚走）；`_loadedHashes` 非空也不画。
+- **blame 跳转后面包的五个猜测换成答案**（`src/views/graphView.ts` 的 `revealCommit` / `_collect` / `_setRoot`）：① 左树跟着切到承载该提交的 ref（`_rootUpScope` 本来就解析出来了，过去只用来查子提交、没告诉用户；在 `_collect` 之前 adopt 进 `_branch`，行、`selectedBranch`、`_lastKnownTip` 才是同一个范围，而 HEAD 轮询的基线 `_lastKnownBranch` 不能跟着动，否则一次跳转会被下一轮读成"外部提交"再刷一遍）；② 定位态是一条看得见的横幅 +「返回分支」（走一次全量 reload 清根）；③ rooted 列表一律不套面板过滤器——子提交段是"这条提交之后发生了什么"的上下文，而且过滤后的区间长度对不上未过滤的计数，`skip` 会算错；④ 跳转带仓库路径，多仓库工作区先切仓库再落根（路径必须在这台机器已发现的仓库里——`revealCommit` 是公开命令，不能让任意 `.git` 目录被钉住）；⑤ blame 的行区间落到第三栏。
+- **重新显示面板会回到关闭前正在读的那个文件**（`media/webview.js` 的 `_pendingFileRestore` + `src/views/messages.ts` 的 `fileCursor` / `filesScrollTop`）：快照此前只记到"选中哪条提交"，那一栏的文件行与它自己的滚动位置根本不在里面。存的是**路径而不是下标**（列表重排、目录折叠都会让下标指向隔壁文件）。文件列表比选中提交晚一次往返，所以它单独占一个一次性槽位：只在 `restoreViewState` 真的恢复了 `selectedHash` 时创建，`setDetail` 与 `multiCommitsResponse` 两个出口各消费一次，**消费即清空，找到与否都一样**（路径不在这一版文件里说明那次提交没动过它，那是"没有了"，不是"下一条提交再找找"）；任何新选中都经 `clearFileCursor()` 把标记和等待一起取消；blame / 标签跳转优先级始终高于记忆（`applyPendingFileRestore()` 排在 `selectRevealedFile()` 之前），标签管理对话框那条 `setDetail` 早退分支不消费它。回位只赋值 `#d-files` 的 `scrollTop`，**不用 `scrollIntoView`**——那会连提交列表的滚动条一起移动，把刚恢复好的位置顶走。对宿主零成本：不新增子进程、不加缓存、不改任何 TTL，数据仍走 `_restorableState()` 的 repoPath + `SESSION_RESTORE_TTL_MS` 闸门。
+
+### 变更
+
+- **分支名先行、箭头晚到**（`src/services/refsSnapshot.ts`）：ahead/behind 与标签徽章此前各起一次 `for-each-ref`（实测 46ms + 35ms，都压在首屏关键路径上），现在合成一条 `for-each-ref refs/heads refs/tags --format=…`，3s TTL + in-flight 去重，`_getBranchTrackInfo()` 与 `getTagRefs()` 只是读它的两张 Map；箭头经 `setDivergence` 补上（实测 0.3ms / 0 次子进程）。
+- **启动预取口径与首屏同源**（`prefetchFirstPage` 只调 `_firstPageRows()` 本身）：任何一处"顺手优化一下参数"都会让面板拿到另一套分支范围 / 分页大小 / 筛选条件。上一次会话没人看过面板（`idea-git.panelVisible` 为 false）就延后 1500ms 再跑，别和窗口自己的启动抢 CPU；`resolveWebviewView` 一旦开跑就取消延时，两条路只能有一条在跑。
+- **删掉从未被调用的 `_getInitialHtml`**（它还在空闲态上跑被禁止的 `getInProgressOperation`），`git worktree list` 挪到页面之后才投递（实测 19.5ms，此前算进首屏）。
+- **webview 隐藏前补发一次视图状态**：防抖 400ms 的那条 `saveViewState` 会随 DOM 一起销毁，最后那一刻的点击与滚动原本永远丢掉（`document.addEventListener('visibilitychange', …)`）。
+
+### 修复
+
+- **记住的那一页必须能被紧随其后的加载保住**：它在 `restoreViewState` 之前就上屏，所以刷新按钮、外部新提交触发的任何一次 `_reload` 都要带 `preserveSelection`——由 `_takeSnapshotPaint()` 一次性发放，画过就消耗，别让它粘在后面的加载上。漏掉时的现象是"刚恢复的选中 / 折叠 / 滚动被 `setData` 抹掉、列表跳回顶部"。
+- **blame 行区间的坐标系**：编辑器行号与提交里的行号不是一个空间，文件往前走过就点错行。porcelain 头部 `<sha> <orig> <final>` 的 **orig** 才是"该提交那一版里的位置"，也正是行内预览打印的编号，协议按它定义（1-based，含首尾）；行历史面板用存好的 `origLines`，同一套口径。
+
+### 测试
+
+- 新增 `src/test/firstPageStore.test.ts`、`src/test/prefetchScope.test.ts`（钉住预取与首屏同一个口径、以及"记住的页"只在无筛选非 rooted 时存在）、`src/test/refsSnapshot.test.ts`、`src/test/fileRestore.test.ts`（8 例：快照带 `fileCursor`/`filesScrollTop`、滚动与点击都上报、隐藏时补发、槽位只在真有选中提交时创建、消费一次、不用 `scrollIntoView`、`clearFileCursor` 三处调用点、在 `selectRevealedFile()` 之前、tagSync 分支不消费）。
+- `docs/perf/coldstart.mjs` 把首屏的两个数字钉成门槛（首屏 ≤2 次 spawn；记住的那一页重画 <10ms 且 0 次 spawn），本版实测 88.9ms/2 与 7.74ms/0，PASS。
+- 预览场景新增 `snapshotRestore`（去掉 `preserveSelection` 就能复现列表跳回顶部）、`fileRestore`（命中）、`fileRestoreStale`（路径已不在列表里 → 静默丢弃）、`fileClick`（重构后的点击路径仍只标记一行）；`docs/preview/shot.mjs` 场景里给 `#d-files` 临时关 `scroll-behavior: smooth`——无头虚拟时间不推进平滑滚动动画，否则截出来永远是未滚动的那一帧（生产代码不动）。
+
+### 文档
+
+- AGENTS.md：§4 新增「首屏那一页可以先画后校验」的四条红线（无筛选/非 rooted、repoPath+branch+tip 全对才画、reveal 与 rooted 时不画、已有行不画）与「分支名先行的代价是 divergence 必须自己补一刀」，`prefetchFirstPage` 那条明确它只准调 `_firstPageRows()` 本身；§4 视图状态那条扩成两行，写清文件级快照存的是路径不是下标、一次性槽位的消费与取消规则、以及"不要用 `scrollIntoView` 回位"的原因。blame 那一行号口径（porcelain 的 orig）此前已在 §8 的行历史条目里，本版只是让第三栏与它对齐，没有重复记录。
+
+### 验证
+
+### 验证
+
+- compile / lint（0 error，66 warning，基线未变）/ test 全绿：445 例 102 组（较 0.2.0 的 399 例 93 组多 46 例）。
+- `docs/perf/coldstart.mjs` 本版发布前复跑：冷画 88.9ms / 2 次 spawn（`git log` 44.5ms + `for-each-ref` 34.1ms）、箭头 0.3ms / 0 次、worktree 19.5ms 在页面之后、记住的那一页 7.74ms / 0 次且 tip 命中——两个门槛（≤2 spawn、<10ms 且 0 spawn）均 PASS。
+- 文件级恢复用无头渲染逐场景核对 DOM：`fileRestore` 恰好一行带 `.kcur` 且落在记住的路径上、`fileRestoreStale` 记住的行不在列表里就 0 行高亮、原有 `snapshotRestore` 场景不受影响仍是 0 行、`fileClick` 重构后的点击路径仍只标记一行；并检查了成品截图确实在"滚动之后"的位置（为此场景里临时关掉平滑滚动）。
+- 尚未做实机（Extension Development Host）复核的部分：跨仓库 reveal 先切仓库、以及"面板隐藏前最后 400ms 的点击"在真实宿主里的补发时序——这两处目前只有代码路径与静态断言支撑。
+
 ## [0.2.0] - 2026-11-02
 
 本版全部来自 0.1.9 的实机反馈：三处修复（「全部分支」的范围、blame 跳转后上翻页串线、窄行里整块消失的徽章）加一处排版收紧（徽章列上限 45% → 20%）。三处的共同点是"数据本身没错，是取数据的范围画错了"——所以每条都配了源码断言级回归测试。
