@@ -175,6 +175,9 @@ var state = {
     stashes: [],
     worktrees: [],
     divergence: {},
+    hasRemote: false,
+    branchMenuStateLoaded: false,
+    branchesWithoutUpstream: [],
     detailVisible: false,
     current: INITIAL.currentBranch || '',
     selectedBranch: INITIAL.selectedBranch || '',
@@ -2527,8 +2530,8 @@ document.getElementById('tag-push').addEventListener('click', function () {
     var r = this.getBoundingClientRect();
     showMenu(r.left, r.bottom + 4, [
         ['pickPushTags', T('menu.pushTagPick')],
-        ['deleteTags', T('menu.deleteTags')],
-        ['remoteTags', T('menu.remoteTags')]
+        ['remoteTags', T('menu.remoteTags')],
+        ['deleteTags', T('menu.deleteTags')]
     ], function (action) {
         vscode.postMessage({ command: 'action', action: action });
     });
@@ -2602,39 +2605,44 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
     var isRemote = state.remote.indexOf(branch) >= 0;
     var isCurrent = branch === state.current;
     var isFavorite = state.favorites.indexOf(branch) >= 0;
+    var hasRemote = state.branchMenuStateLoaded && state.hasRemote;
+    var pushLabel = state.branchMenuStateLoaded && state.branchesWithoutUpstream.indexOf(branch) >= 0
+        ? T('pushDlg.firstPush')
+        : T('menu.push');
     
     var menuItems;
     if (isRemote) {
         menuItems = [
             ['checkout', T('menu.checkout')],
-            ['fetch', T('menu.fetchRemote')],
             ['newBranchFrom', T('menu.newBranchFrom')],
             ['compareBranch', T('menu.compareWithCurrent')]
         ];
+        if (hasRemote) {menuItems.splice(1, 0, ['fetch', T('menu.fetchRemote')]);}
     } else if (isCurrent) {
         // Current branch: only show applicable actions
-        menuItems = [
-            ['update', T('menu.pull')],
-            ['push', T('menu.push')],
-            ['newBranchFrom', T('menu.newBranchFrom')],
-            ['rename', T('menu.rename')],
-            ['openRemoteBranch', T('menu.openOnRemote')]
-        ];
+        menuItems = [];
+        if (hasRemote) {
+            menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);
+        }
+        menuItems.push(['newBranchFrom', T('menu.newBranchFrom')]);
+        if (hasRemote) {menuItems.push(['openRemoteBranch', T('menu.openOnRemote')]);}
+        menuItems.push(['rename', T('menu.rename')]);
     } else {
         // Other local branches: full action set
-        menuItems = [
-            ['checkout', T('menu.checkout')],
-            ['update', T('menu.pull')],
-            ['push', T('menu.push')],
+        menuItems = [['checkout', T('menu.checkout')]];
+        if (hasRemote) {menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);}
+        menuItems.push(
+            ['compareBranch', T('menu.compareWithCurrent')],
             ['merge', T('menu.merge')],
             ['rebase', T('menu.rebase')],
             ['newBranchFrom', T('menu.newBranchFrom')],
-            ['worktreeAdd', T('menu.worktreeAdd')],
-            ['compareBranch', T('menu.compareWithCurrent')],
+            ['worktreeAdd', T('menu.worktreeAdd')]
+        );
+        if (hasRemote) {menuItems.push(['openRemoteBranch', T('menu.openOnRemote')]);}
+        menuItems.push(
             ['rename', T('menu.rename')],
-            ['deleteBranch', T('menu.deleteBranch')],
-            ['openRemoteBranch', T('menu.openOnRemote')]
-        ];
+            ['deleteBranch', T('menu.deleteBranch')]
+        );
     }
 
     // Marking a branch is the one action every kind of row offers, so the
@@ -2721,43 +2729,41 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
     if (window._hideTooltip) window._hideTooltip();
     
     var hash = row.getAttribute('data-hash');
-    var isMultiSelect = state.selectedHashes.length > 1;
-    
-    // If the clicked commit is not in the current selection, clear selection and select only this one
-    if (state.selectedHashes.indexOf(hash) < 0) {
-        state.selectedHashes = [hash];
-        state.selectedHash = hash;
-        state.lastClickedIndex = Array.from(document.querySelectorAll('#rows .row')).indexOf(row);
-        applyRowSelection();
-        isMultiSelect = false;
-    }
+    // Right-clicking outside a multi-selection targets only that row without
+    // silently replacing the user's current selection.
+    var contextHashes = state.selectedHashes.indexOf(hash) >= 0
+        ? state.selectedHashes.slice()
+        : [hash];
+    var isMultiSelect = contextHashes.length > 1;
     
     var isHead = !!state.headHash && hash === state.headHash;
     var items = [];
     
     if (isMultiSelect) {
-        // Multi-select mode: allow cherry-pick, revert, drop, and squash
+        // Multi-select mode: routine history actions come before destructive drop.
         items = [
-            ['cherryPick', T('menu.cherryPick') + ' (' + state.selectedHashes.length + ')'],
-            ['revert', T('menu.revert') + ' (' + state.selectedHashes.length + ')'],
-            ['dropCommit', T('menu.dropCommit') + ' (' + state.selectedHashes.length + ')'],
-            ['squashCommits', T('menu.squashCommits') + ' (' + state.selectedHashes.length + ')']
+            ['cherryPick', T('menu.cherryPick') + ' (' + contextHashes.length + ')'],
+            ['revert', T('menu.revert') + ' (' + contextHashes.length + ')'],
+            ['squashCommits', T('menu.squashCommits') + ' (' + contextHashes.length + ')'],
+            ['copy', T('menu.copyHash')],
+            ['openRemoteCommit', T('menu.openOnRemote')],
+            ['dropCommit', T('menu.dropCommit') + ' (' + contextHashes.length + ')']
         ];
     } else {
-        // Single-select mode: show all options
         items = [
             ['showDiff', T('menu.showDiff')],
+            ['copy', T('menu.copyHash')],
+            ['openRemoteCommit', T('menu.openOnRemote')],
             ['cherryPick', T('menu.cherryPick')],
             ['revert', T('menu.revert')],
-            ['reset', T('menu.reset')]
+            ['newBranchFrom', T('menu.newBranchFrom')],
+            ['newTag', T('menu.newTag')]
         ];
         if (isHead) {
             items.push(['editMessage', T('menu.editMessage')]);
             items.push(['amend', T('menu.amend')]);
-            items.push(['dropCommit', T('menu.dropCommit')]);
+            items.push(['reset', T('menu.reset')]);
         }
-        items.push(['newBranchFrom', T('menu.newBranchFrom')]);
-        items.push(['newTag', T('menu.newTag')]);
 
         // The host knows which refs are tags, so only offer to manage the ones
         // actually sitting on this commit.
@@ -2767,16 +2773,14 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
             items.push(['pushTag', T('menu.pushTag') + ' (' + rowTags.length + ')']);
             items.push(['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')']);
         }
+        if (isHead) {items.push(['dropCommit', T('menu.dropCommit')]);}
     }
-    items.push(['openRemoteCommit', T('menu.openOnRemote')]);
-    items.push(['copy', T('menu.copyHash')]);
 
     showMenu(e.clientX, e.clientY, items, function (action) {
         if (action === 'copy' || action === 'copyMessage') {
-            var hashes = state.selectedHashes.length > 1 ? state.selectedHashes : [hash];
             navigator.clipboard.writeText(action === 'copy'
-                ? hashes.join('\n')
-                : hashes.map(function (h) {
+                ? contextHashes.join('\n')
+                : contextHashes.map(function (h) {
                     var c = (state.commits || []).find(function (x) { return x.hash === h; });
                     return (c ? c.shortHash + ' ' + (c.message || '') : h);
                 }).join('\n'));
@@ -2786,7 +2790,7 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
             command: 'action', 
             action: action, 
             hash: hash,
-            hashes: state.selectedHashes.length > 1 ? state.selectedHashes : undefined
+            hashes: contextHashes.length > 1 ? contextHashes : undefined
         });
     });
 });
@@ -2864,8 +2868,8 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     }
     items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],
-        ['fileCherryPick', T('menu.fileCherryPick')],
-        ['filterPath', T('menu.filterByPath')]
+        ['filterPath', T('menu.filterByPath')],
+        ['fileCherryPick', T('menu.fileCherryPick')]
     );
     showMenu(e.clientX, e.clientY, items, function (action) {
         if (action === 'filterPath') {
@@ -3656,11 +3660,17 @@ window.addEventListener('message', function (ev) {
         applyIconFont(state.iconPack);
         renderDetail();
     } else if (m.command === 'setRepoState') {
+        var nextRepository = m.currentRepository || '';
+        if (state.currentRepository && nextRepository !== state.currentRepository) {
+            state.branchMenuStateLoaded = false;
+            state.hasRemote = false;
+            state.branchesWithoutUpstream = [];
+        }
         state.repoState = m.state || 'ready';
         state.repoPendingFiles = typeof m.files === 'number' ? m.files : 0;
         state.repoFolder = m.folder || '';
         state.repositories = m.repositories || [];
-        state.currentRepository = m.currentRepository || '';
+        state.currentRepository = nextRepository;
         renderRepoSwitcher();
         if (state.repoState !== 'ready') {
             // No data will ever arrive to clear the startup skeleton
@@ -3791,6 +3801,27 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'loadMoreUpFailed') {
         // Keep hasMoreAbove for the same reason, on the upward side.
         setTopLoader(false);
+    } else if (m.command === 'queryCancelled') {
+        if (m.kind === 'detail') {
+            var expectedHashes = m.hashes || [];
+            var currentHashes = state.selectedHashes || [];
+            var sameSelection = expectedHashes.length === currentHashes.length
+                && expectedHashes.every(function (hash) { return currentHashes.indexOf(hash) >= 0; });
+            if (!sameSelection) { return; }
+            state.detail = null;
+            state.multiCommits = null;
+            state.multiFiles = null;
+            state.multiExistingPaths = [];
+            renderDetail();
+        } else {
+            var preview = state.preview;
+            var previewKey = m.stash !== undefined && m.stash !== null
+                ? 'stash:' + m.stash
+                : 'commit:' + m.hash;
+            if (preview && preview.loading === true && preview.path === m.path && preview.key === previewKey) {
+                clearPreview();
+            }
+        }
     } else if (m.command === 'setDetail') {
         if (m.origin === 'tagSync') {
             // A commit picked in the tag-diff dialog, not in the log: the row
@@ -3874,6 +3905,11 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'setDivergence') {
         console.log('[GitCharm Webview] Received divergence:', m.divergence);
         state.divergence = m.divergence || {};
+        if (typeof m.hasRemote === 'boolean') {
+            state.hasRemote = m.hasRemote;
+            state.branchMenuStateLoaded = true;
+        }
+        state.branchesWithoutUpstream = m.branchesWithoutUpstream || [];
         console.log('[GitCharm Webview] State divergence updated:', state.divergence);
         renderTree();
     } else if (m.command === 'setBranches') {
@@ -4997,9 +5033,9 @@ function showReflogDialog(scope, entries) {
         // first find out what happened, then either keep it or undo it.
         var items = [
             ['showDiff', T('reflog.menu.checkWhat')],
+            ['cherryPick', T('reflog.menu.pickBack')],
             ['newBranchFrom', T('reflog.menu.keepOnBranch')],
             ['reset', T('reflog.menu.undoToHere')],
-            ['cherryPick', T('reflog.menu.pickBack')],
             ['copy', T('menu.copyHash')]
         ];
         showMenu(e.clientX, e.clientY, items, function (action) {

@@ -2,7 +2,15 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runGit, splitNul, GitRunOptions } from './gitRunner';
+import { AsyncLocalStorage } from 'async_hooks';
+import {
+    runGit,
+    splitNul,
+    GitRunOptions,
+    GitCommandCancelledError,
+    isCancellableGitQuery,
+    isGitCommandCancelled
+} from './gitRunner';
 import {
     executeSquashGroups,
     orderHistoryOldestFirst,
@@ -331,6 +339,7 @@ export class GitService {
 
     // Credential prompts for remotes; absent when the host provides no askpass
     private readonly _askpass: GitAskpass | undefined;
+    private readonly _queryCancellation = new AsyncLocalStorage<AbortSignal>();
 
     constructor(memento: vscode.Memento, askpass?: GitAskpass) {
         this._askpass = askpass;
@@ -879,7 +888,10 @@ export class GitService {
         // first parent, so a parentless commit would otherwise report no files.
         const output = await this.executeGitArgs([
             'diff-tree', '--root', '--no-commit-id', '-r', '-M', '--raw', '--numstat', '-z', hash
-        ]).catch(() => '');
+        ]).catch(error => {
+            if (isGitCommandCancelled(error)) {throw error;}
+            return '';
+        });
 
         const files = parseDiffTreeRawNumstat(output)[0]?.files ?? [];
         this._filesCache.set(key, files);
@@ -913,7 +925,10 @@ export class GitService {
         const output = await this.executeGitArgs(
             ['diff-tree', '--stdin', '--root', '-r', '-M', '--raw', '--numstat', '-z'],
             { input: missing.join('\n') + '\n' }
-        ).catch(() => '');
+        ).catch(error => {
+            if (isGitCommandCancelled(error)) {throw error;}
+            return '';
+        });
         for (const group of parseDiffTreeRawNumstat(output)) {
             if (!group.hash) {continue;}
             this._filesCache.set(this._filesKey(group.hash), group.files);
@@ -1023,11 +1038,23 @@ export class GitService {
             throw new Error('No git repository found');
         }
         try {
-            return await runGit(args, { cwd: repo, ...opts });
+            const signal = isCancellableGitQuery(args)
+                ? (opts.signal ?? this._queryCancellation.getStore())
+                : undefined;
+            return await runGit(args, { cwd: repo, ...opts, signal });
         } catch (error) {
             this._noteMissingGit(error);
             throw error;
         }
+    }
+
+    /** Run a user-initiated read workflow with a signal inherited by Git queries. */
+    withQueryCancellation<T>(signal: AbortSignal, task: () => Promise<T>): Promise<T> {
+        return this._queryCancellation.run(signal, async () => {
+            const result = await task();
+            if (signal.aborted) {throw new GitCommandCancelledError([]);}
+            return result;
+        });
     }
 
     /**
@@ -2413,6 +2440,7 @@ export class GitService {
             this._refsSnapshotCache = { at: Date.now(), snap };
             return snap;
         }).catch(error => {
+            if (isGitCommandCancelled(error)) {throw error;}
             logger.debug('[GitCharm] for-each-ref snapshot failed:', error);
             return undefined;
         }).finally(() => {
@@ -2452,10 +2480,22 @@ export class GitService {
             await this._applyUntrackedDivergence(untracked, result);
             logger.debug('[GitCharm] getDivergenceInfo complete, total branches:', Object.keys(result).length);
         } catch (error) {
+            if (isGitCommandCancelled(error)) {throw error;}
             logger.debug('[GitCharm] Failed to get divergence info:', error);
         }
 
         return result;
+    }
+
+    /** State needed to show only meaningful push actions in the branch menu. */
+    async getBranchMenuState(): Promise<{ hasRemote: boolean; branchesWithoutUpstream: string[] }> {
+        const trackMap = await this._getBranchTrackInfo();
+        return {
+            hasRemote: this.getRemoteNames().length > 0,
+            branchesWithoutUpstream: [...trackMap]
+                .filter(([, info]) => !info.upstream)
+                .map(([name]) => name)
+        };
     }
 
     /**
@@ -2506,6 +2546,7 @@ export class GitService {
                     result[name] = { ahead, behind };
                 }
             } catch (error) {
+                if (isGitCommandCancelled(error)) {throw error;}
                 logger.debug('[GitCharm] Untracked divergence fallback failed for', name, error);
             }
         }));

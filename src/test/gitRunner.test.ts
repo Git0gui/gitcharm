@@ -1,6 +1,13 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { tokenizeCommand, splitNul, buildSpawnSpec } from '../services/gitRunner';
+import {
+    tokenizeCommand,
+    splitNul,
+    buildSpawnSpec,
+    isCancellableGitQuery,
+    isGitCommandCancelled,
+    runGit
+} from '../services/gitRunner';
 
 describe('tokenizeCommand', () => {
     it('splits plain commands on spaces', () => {
@@ -84,5 +91,27 @@ describe('buildSpawnSpec', () => {
         });
         assert.equal(spec.env.GIT_SEQUENCE_EDITOR, 'cp /tmp/todo');
         assert.equal(spec.env.LC_ALL, 'C');
+    });
+});
+
+describe('cancellable Git queries', () => {
+    it('allows read queries but not repository-changing commands', () => {
+        assert.equal(isCancellableGitQuery(['log', '--all']), true);
+        assert.equal(isCancellableGitQuery(['status', '--porcelain', '-z']), true);
+        assert.equal(isCancellableGitQuery(['remote', '-v']), true);
+        assert.equal(isCancellableGitQuery(['worktree', 'list']), true);
+        assert.equal(isCancellableGitQuery(['fetch', 'origin']), false);
+        assert.equal(isCancellableGitQuery(['checkout', 'main']), false);
+        assert.equal(isCancellableGitQuery(['reset', '--hard']), false);
+        assert.equal(isCancellableGitQuery(['branch', '-D', 'main']), false);
+    });
+
+    it('rejects a query cancelled before it can spawn', async () => {
+        const controller = new AbortController();
+        controller.abort();
+        await assert.rejects(
+            runGit(['status'], { cwd: process.cwd(), signal: controller.signal }),
+            error => isGitCommandCancelled(error)
+        );
     });
 });

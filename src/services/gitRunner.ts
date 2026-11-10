@@ -18,6 +18,8 @@ export interface GitRunOptions {
     input?: string;
     /** Max stdout bytes before the process is killed. Default 64MB. */
     maxBuffer?: number;
+    /** Abort only read-only queries when the user cancels their progress notification. */
+    signal?: AbortSignal;
 }
 
 export interface GitError extends Error {
@@ -26,6 +28,7 @@ export interface GitError extends Error {
     stdout: string;
     gitArgs: string[];
     timedOut?: boolean;
+    cancelled?: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -58,19 +61,76 @@ const BASE_ARGS = [
 ];
 
 let _active = 0;
-const _waiters: Array<() => void> = [];
+interface Waiter {
+    resolve: () => void;
+    reject: (error: Error) => void;
+    signal?: AbortSignal;
+    onAbort?: () => void;
+    args: string[];
+}
+const _waiters: Waiter[] = [];
 
-async function _acquire(): Promise<void> {
-    if (_active >= MAX_CONCURRENT) {
-        await new Promise<void>(resolve => _waiters.push(resolve));
+export class GitCommandCancelledError extends Error {
+    readonly cancelled = true;
+
+    constructor(args: string[]) {
+        super(`git ${args[0]} was cancelled`);
+        this.name = 'GitCommandCancelledError';
     }
-    _active++;
+}
+
+export function isGitCommandCancelled(error: unknown): boolean {
+    return error instanceof GitCommandCancelledError
+        || (!!error && typeof error === 'object' && 'cancelled' in error && error.cancelled === true);
+}
+
+export function isCancellableGitQuery(args: readonly string[]): boolean {
+    const command = args[0];
+    if (['log', 'rev-list', 'diff-tree', 'show', 'for-each-ref', 'symbolic-ref',
+        'merge-base', 'cat-file', 'ls-files', 'diff', 'rev-parse', 'status'].includes(command)) {
+        return true;
+    }
+    if (command === 'remote') {return args[1] === '-v';}
+    if (command === 'worktree') {return args[1] === 'list';}
+    if (command === 'config') {return args[1] === '--get' || args[1] === '--get-all';}
+    if (command === 'branch') {return args.includes('--contains') || args.includes('--list');}
+    return false;
+}
+
+async function _acquire(signal: AbortSignal | undefined, args: string[]): Promise<void> {
+    if (signal?.aborted) {throw new GitCommandCancelledError(args);}
+    if (_active < MAX_CONCURRENT) {
+        _active++;
+        return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+        const waiter: Waiter = { resolve, reject, signal, args };
+        if (signal) {
+            waiter.onAbort = () => {
+                const index = _waiters.indexOf(waiter);
+                if (index >= 0) {_waiters.splice(index, 1);}
+                reject(new GitCommandCancelledError(args));
+            };
+            signal.addEventListener('abort', waiter.onAbort, { once: true });
+        }
+        _waiters.push(waiter);
+    });
 }
 
 function _release(): void {
+    while (_waiters.length > 0) {
+        const next = _waiters.shift()!;
+        if (next.signal?.aborted) {
+            if (next.signal && next.onAbort) {next.signal.removeEventListener('abort', next.onAbort);}
+            next.reject(new GitCommandCancelledError(next.args));
+            continue;
+        }
+        if (next.signal && next.onAbort) {next.signal.removeEventListener('abort', next.onAbort);}
+        next.resolve();
+        return;
+    }
     _active--;
-    const next = _waiters.shift();
-    if (next) {next();}
 }
 
 /**
@@ -123,7 +183,7 @@ export function buildSpawnSpec(args: string[], opts: GitRunOptions): {
  * Rejects with a GitError carrying stderr/stdout/exit code on failure.
  */
 export async function runGit(args: string[], opts: GitRunOptions): Promise<string> {
-    await _acquire();
+    await _acquire(opts.signal, args);
     try {
         return await _spawnGit(args, opts);
     } finally {
@@ -136,6 +196,8 @@ function _spawnGit(args: string[], opts: GitRunOptions): Promise<string> {
         const spec = buildSpawnSpec(args, opts);
         const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
         const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
+        const signal = opts.signal;
+        if (signal?.aborted) {reject(new GitCommandCancelledError(args)); return;}
 
         const child = spawn(spec.command, spec.args, {
             cwd: opts.cwd,
@@ -147,9 +209,21 @@ function _spawnGit(args: string[], opts: GitRunOptions): Promise<string> {
         const stderrChunks: Buffer[] = [];
         let stdoutBytes = 0;
         let killed = false;
-        let killReason: 'timeout' | 'maxBuffer' | null = null;
+        let killReason: 'timeout' | 'maxBuffer' | 'cancelled' | null = null;
+        let timer: NodeJS.Timeout | null = null;
+        const onAbort = signal ? () => {
+            if (killReason) {return;}
+            killed = true;
+            killReason = 'cancelled';
+            child.kill();
+        } : undefined;
+        const cleanup = () => {
+            if (timer) {clearTimeout(timer);}
+            if (signal && onAbort) {signal.removeEventListener('abort', onAbort);}
+        };
+        if (signal && onAbort) {signal.addEventListener('abort', onAbort, { once: true });}
 
-        const timer = timeoutMs > 0
+        timer = timeoutMs > 0
             ? setTimeout(() => {
                 killed = true;
                 killReason = 'timeout';
@@ -178,7 +252,7 @@ function _spawnGit(args: string[], opts: GitRunOptions): Promise<string> {
         child.stdin.end();
 
         child.on('close', (code) => {
-            if (timer) {clearTimeout(timer);}
+            cleanup();
             const stdout = Buffer.concat(stdoutChunks).toString('utf8');
             const stderr = Buffer.concat(stderrChunks).toString('utf8');
             if (code === 0 && !killed) {
@@ -188,7 +262,9 @@ function _spawnGit(args: string[], opts: GitRunOptions): Promise<string> {
             const message = killed
                 ? (killReason === 'timeout'
                     ? `git ${args[0]} timed out after ${timeoutMs}ms`
-                    : `git ${args[0]} exceeded max output buffer (${maxBuffer} bytes)`)
+                    : killReason === 'cancelled'
+                        ? `git ${args[0]} was cancelled`
+                        : `git ${args[0]} exceeded max output buffer (${maxBuffer} bytes)`)
                 : (stderr.trim() || `git ${args[0]} exited with code ${code}`);
             const err = new Error(message) as GitError;
             err.code = code;
@@ -196,11 +272,13 @@ function _spawnGit(args: string[], opts: GitRunOptions): Promise<string> {
             err.stdout = stdout;
             err.gitArgs = args;
             err.timedOut = killReason === 'timeout';
+            err.cancelled = killReason === 'cancelled';
+            if (err.cancelled) {err.name = 'GitCommandCancelledError';}
             reject(err);
         });
 
         child.on('error', (e) => {
-            if (timer) {clearTimeout(timer);}
+            cleanup();
             reject(e);
         });
     });

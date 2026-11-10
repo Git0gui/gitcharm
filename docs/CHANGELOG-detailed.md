@@ -2,6 +2,49 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.2.3] - 2026-11-10
+
+本版两件事：**用户发起的只读查询终于有一条真正的取消通道**（此前所有进度提示一律 `cancellable: false`，因为 git 子进程根本没有停止入口），以及**右键菜单按使用频率重排、并按仓库真实能力裁剪**。取消这件事的难点不在 UI，而在"哪些命令允许被杀"与"杀掉之后每一层都要认得出来这是取消，不是失败"。
+
+### 新增
+
+- **只读查询的取消通道**（`src/services/gitRunner.ts`）：`GitRunOptions.signal?: AbortSignal`，`GitCommandCancelledError`（`readonly cancelled = true`）+ `isGitCommandCancelled()`（instanceof 或 duck-typing，跨编译单元也能认）。三个位置都要认取消：① **排队中**——`_acquire(signal, args)` 先拒已 aborted 的信号，再把 waiter 连同 `onAbort` 一起入队，abort 时把自己从 `_waiters` 里 splice 掉并 reject；② **spawn 前**——`_spawnGit` 开头再查一次 `signal.aborted`（拿到并发槽与真正 spawn 之间有时间差）；③ **运行中**——`onAbort → child.kill()`，`killReason: 'cancelled'`，close 时把 `err.cancelled = true`、`err.name = 'GitCommandCancelledError'`。`cleanup()` 在 close 与 error 两条出口都清 timer + 摘监听，所以取消不会留下悬挂的 timer 或 listener。
+- **并发槽的交接语义**（`_release()`）：原来是 `_active--` 然后唤醒队首，现在改成**先找活着的 waiter，找到就直接 return（不减 `_active`）**——槽位是"交给下一个"，不是"先还再抢"；跳过的 aborted waiter 逐个摘监听并 reject；只有队列为空才真的 `_active--`。少了这一条，取消一个排队中的查询会永久漏掉一个并发槽，跑到第 7 次就整条流水线卡死。
+- **只读命令白名单**（`isCancellableGitQuery`）：`log / rev-list / diff-tree / show / for-each-ref / symbolic-ref / merge-base / cat-file / ls-files / diff / rev-parse / status` 整条放行；带子命令的按形式判——`remote -v`、`worktree list`、`config --get|--get-all`、`branch --contains|--list`。**写操作与网络操作一律不在名单里**（`fetch`/`checkout`/`reset --hard`/`branch -D` 都有用例钉住），所以"取消"永远不会把一次改历史的操作停在半路。
+- **隐式信号传递**（`GitService._queryCancellation`，`AsyncLocalStorage<AbortSignal>` + `withQueryCancellation(signal, task)`）：一次用户操作会展开成十几个 git 调用（详情 + 文件 + 排序 + refs），逐个往下传 `opts.signal` 既漏又脏。`executeGitArgs` 只对白名单命令取 `opts.signal ?? getStore()`，非白名单一律传 undefined。task 正常返回后再查一次 `signal.aborted` —— 缓存命中的路径没有子进程可杀，那次查询同样必须被判成取消。
+- **只在真的慢的时候才给取消按钮**（`GraphViewProvider._withCancellableGitQuery`）：`Promise.race([operation, 400ms])`，快路径（缓存命中、小仓库）直接返回，不闪任何提示；超过 400ms 才起 `withProgress({ location: Notification, cancellable: true })`，`token.onCancellationRequested → controller.abort()`，订阅在 `operation.finally` 里释放。返回值是 `T | undefined`，undefined 就是"用户取消了"，调用方各自决定怎么收尾。接入的入口：selectBranch（两条 reload）、refresh、筛选、loadMore / loadMoreUp（`onCancelled` 回 `loadMoreFailed` / `loadMoreUpFailed`，否则 webview 的 `loadingMore` 永远不清、再也不会请求下一页）、leaveReveal、selectCommit、selectCommits、tagSyncCommit、filePreview、refreshBranches、refreshFiles。
+- **取消要能把界面收回去**（`src/views/messages.ts` 新增 `queryCancelled`）：`kind: 'detail' | 'preview'`，detail 带 `hashes`、preview 带 `hash/stash/path`。webview 侧**先校验是不是当前选中**才清（detail 比集合、preview 比 `loading && path && key`），否则一次取消会把用户随后点开的另一条提交的详情抹掉——与 `setDetail` / `multiCommitsResponse` 同一道纪律。
+
+### 变更
+
+- **每一层吞错误的 catch 都要放取消过去**：`getCommitFilesWithStats` / `getCommitFilesWithStatsBatch` 的 `.catch(() => '')`、refs 快照的 catch、`getDivergenceInfo` 的 catch、`_applyUntrackedDivergence` 的 catch，全部改成"是取消就 rethrow，否则维持原来的降级"。这几处原来是善意的容错（拿不到文件列表就当空），但取消如果在这里被吞掉，上层会以为查询成功、把空列表当成真相画出来，取消按钮就变成"清空第三栏"。宿主侧所有对应的 catch 同样先 `isGitCommandCancelled` 早退，不弹错误通知。
+- **右键菜单按频率排序**（`media/webview.js`）：本地分支 检出 → 拉取 → 推送 → 与当前对比 → 合并 → 变基 → 从此新建 → 新建 worktree → 在远端打开 → 重命名 → 删除，**收藏固定最后**；单条提交 看差异 → 复制 → 远端打开 → 挑拣 → 还原 → 新建分支 → 新建标签 →（HEAD 才有的改消息/amend/重置）→ 删除提交最后；多选 挑拣 → 还原 → 压缩 → 复制 → 在远端打开 → 删除提交；第三栏文件 跳源码 → 打开该版本 → 与本地对比 → 按此路径筛选 → 挑拣此文件；reflog 看差异 → 挑拣 → 新建分支 → 重置 → 复制；标签菜单 推送标签 → 标签管理 → 删除标签。原则是**查看类在前、改历史在中、破坏性在最后**。
+- **分支菜单按仓库能力裁剪**（`GitService.getBranchMenuState()`）：没有远端就不列拉取／推送／在远端打开／抓取（点了必然失败）；分支没有 upstream 时推送那一项直接写「首次推送」。数据搭 `_refreshDivergence` 的现成便车——`Promise.all([getDivergenceInfo(), getBranchMenuState()])`，两者都读同一份 3s TTL 的 refs 快照，**新增 0 次子进程**；`hasRemote` 走 `getRemoteNames()`（纯 fs 读 `commondir/config`）。`setDivergence` 因此多带 `hasRemote` / `branchesWithoutUpstream`，webview 用 `branchMenuStateLoaded` 表示"这份状态到没到"，切仓库时三个字段一起重置。
+- **提交行的右键不再改选中**：原来右键任意一行都会把 `state.selectedHashes` 重写成那一行，用户在多选之后想对整组开个菜单，选择先被吃掉。现在 `contextHashes = 选中里包含这一行 ? 整个选中.slice() : [这一行]`，`state.selectedHashes` 一个字节都不写。
+- `_refreshBranchesOnly` 里两条 `void this._postStashes()` / `void this._postWorktrees()` 改成 `await Promise.all([...])`：它们现在跑在取消上下文里，游离的 promise 会在上下文结束之后再发 git 查询，那次查询拿不到信号、取消不掉。
+
+### 修复
+
+- `setDivergence` 处理器里重复的一次 `renderTree()`（本次发布审读时发现的手误）：分支树在每条箭头消息上被整棵重画两遍。
+- **多选菜单的"删除提交"不再是最后一项**：`copy` / `openRemoteCommit` 原本在整个 `if/else` 之后补推（`if (isMultiSelect) { items.push(...) }`），于是多选那套排成 挑拣 → 还原 → 压缩 → **删除** → 复制 → 在远端打开——破坏性操作被两条只读项踩在下面，和本版"删除最后"的原则正好相反（单条那套是对的，因为它在数组里一次写死）。现在两项并进多选数组、排在 `dropCommit` 前，删掉了那个尾随的 `if` 块。
+
+### 测试
+
+- 新增 `src/test/menuOrder.test.ts`（7 例，源码断言）：用 `between(start, end)` 切出每个菜单的构造段、`ordered(...)` 断言动作出现次序，钉住分支／单条提交／**多选那一整块**（不是只比 squash 与 drop 谁前谁后，六项全序）／文件／stash-worktree／标签／reflog 七套顺序、收藏最后、当前分支不给"检出"、`hasRemote` 的门与 `branchMenuStateLoaded`，以及**行右键不得出现 `state.selectedHashes =`**。
+- `src/test/gitRunner.test.ts` 新增一组：白名单正例（`log`/`status`/`remote -v`/`worktree list`）与反例（`fetch`/`checkout`/`reset --hard`/`branch -D`），外加一次"信号已 aborted 时 `runGit(['status'])` 必须以取消原因 reject"的真实调用。
+- `src/test/multiCommitLoad.test.ts` 的正则跟到新的 `_withCancellableGitQuery(() => Promise.all([...]))` 形状，并补一条 `const [ordered, detailEntries, filesByHash] = result;`——0.2.2 那条"并行不许把合并顺序一起并行掉"的不变量在包了一层之后仍然成立。
+
+### 验证
+
+- compile 0 error；lint 0 error / 66 warning（基线）；test **459 例 107 组全绿**（0.2.2 是 450/105，+9 例 +2 组对上上面新增的两套与一处扩展）。
+- `docs/perf/coldstart.mjs` 全部 PASS：冷画 125.7ms / **2 spawn**（`git log` 67.7ms + `for-each-ref` 46.1ms）、记住的页 **6.69ms / 0 spawn**、箭头 0.4ms / 0 spawn、worktree 23.2ms（在页之后）。`getBranchMenuState` 没有把首屏的子进程数抬上去。
+- **尚未做实机复核的部分**：400ms 阈值、通知条上的取消按钮、以及取消之后第三栏／预览的收回，都只经过源码级与 runner 级验证，没有在 Extension Development Host 里手点过。
+
+### 两处已知边界（留档，不在本版改）
+
+- `status` 在可取消白名单里，而 `git status` 会顺手刷新并写回索引（`index.lock`）。今天所有取消上下文里都到不了它——`getWorkingTreeSummary()` 只在 emptyRepo 引导页与命令层调用，都不在 `withQueryCancellation` 内。将来若把 status 放进可取消的读流程，要先确认被 kill 在写索引的中途不会留下锁文件（§3 的死锁恢复会问用户，但那是事后补救）。
+- `branchMenuStateLoaded` 只由带 `hasRemote` 的 `setDivergence` 置真。若 `getDivergenceInfo()` 整条失败（catch 只记 debug），这条消息就不会发，菜单会一直停在"没有远端"的精简形态。方向是安全的一侧（少列几个会失败的项，不会多出危险项），但"我明明配了 origin 却没有推送"这种反馈应该先查这里。
+
 ## [0.2.2] - 2026-11-10
 
 来自 0.2.1 的实机反馈："关闭插件重新进插件时有些慢"。先用探针把时间拆开再动手，结论是**提交列表那一侧已经不慢**（重开后面板 5–17ms 就画出 20 行，0–1 次子进程），慢的是右侧第三栏，外加启动期的一次重复查询。两处都不是缓存失效写错，而是**多问了一次不需要问的问题**——所以本版没有动任何 TTL、没有动 `releaseHeavyCaches()`、没有动 refs 快照。
