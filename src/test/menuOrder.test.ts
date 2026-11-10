@@ -71,7 +71,16 @@ describe('context menu frequency order', () => {
             "['reset'",
             "['dropCommit'"
         );
-        ordered(commit, "['squashCommits'", "['dropCommit'");
+        const multiCommit = commit.slice(commit.indexOf('if (isMultiSelect) {'), commit.indexOf('} else {'));
+        ordered(
+            multiCommit,
+            "['cherryPick'",
+            "['revert'",
+            "['squashCommits'",
+            "['copy'",
+            "['openRemoteCommit'",
+            "['dropCommit'"
+        );
     });
 
     it('puts common file navigation and comparison before filtering and cherry-picking', () => {

@@ -2745,6 +2745,8 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
             ['cherryPick', T('menu.cherryPick') + ' (' + contextHashes.length + ')'],
             ['revert', T('menu.revert') + ' (' + contextHashes.length + ')'],
             ['squashCommits', T('menu.squashCommits') + ' (' + contextHashes.length + ')'],
+            ['copy', T('menu.copyHash')],
+            ['openRemoteCommit', T('menu.openOnRemote')],
             ['dropCommit', T('menu.dropCommit') + ' (' + contextHashes.length + ')']
         ];
     } else {
@@ -2772,10 +2774,6 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
             items.push(['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')']);
         }
         if (isHead) {items.push(['dropCommit', T('menu.dropCommit')]);}
-    }
-    if (isMultiSelect) {
-        items.push(['copy', T('menu.copyHash')]);
-        items.push(['openRemoteCommit', T('menu.openOnRemote')]);
     }
 
     showMenu(e.clientX, e.clientY, items, function (action) {
@@ -3913,7 +3911,6 @@ window.addEventListener('message', function (ev) {
         }
         state.branchesWithoutUpstream = m.branchesWithoutUpstream || [];
         console.log('[GitCharm Webview] State divergence updated:', state.divergence);
-        renderTree();
         renderTree();
     } else if (m.command === 'setBranches') {
         // Update only branch lists without affecting commits
