@@ -153,6 +153,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _webviewReady = false;
     /** When the current webview was (re)resolved; its own load covers that show. */
     private _resolvedAt = 0;
+    /** Initial history load is also the payload for a visibility event during startup. */
+    private _initialCommitLoadInProgress = false;
     /** Screen messages held until the webview script reports 'ready'. */
     private _pendingScreen = new Map<ExtToWebviewMessage['command'], ExtToWebviewMessage>();
     // Last known in-progress operation; also the value replayed on the 'ready'
@@ -1685,6 +1687,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             // resolveWebviewView starts its own load when the view is (re)created;
             // a visibility event this soon is the same show, not a second one.
             if (Date.now() - this._resolvedAt > GraphViewProvider.SHOW_RELOAD_GRACE_MS) {
+                // The initial resolve already started a history load. Its payload
+                // is buffered until the new webview is ready, so starting a second
+                // forced query here would only duplicate the same git log.
+                if (this._initialCommitLoadInProgress) {
+                    this._startBranchCheck();
+                    return;
+                }
                 // Hiding disposes the webview, so the payload must be re-sent.
                 // Only a moved tip forces a git log; otherwise the cached graph is
                 // replayed as-is. The tip is a filesystem read, so the check itself
@@ -2792,6 +2801,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private async _loadAndDisplayCommits(): Promise<void> {
         if (!this._view || this._repoState !== 'ready') {return;}
         
+        this._initialCommitLoadInProgress = true;
         const startTime = Date.now();
         logger.debug('[GitCharm] Starting commit load...');
         
@@ -2819,6 +2829,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             });
             this._postFilterMirror();
             const postTime = Date.now() - postStart;
+            // Keep the visibility-refresh baseline in sync with this first load.
+            // Otherwise it sees `undefined` as a moved tip and immediately forces
+            // the same git log a second time after the startup grace period.
+            this._lastKnownTip = await this._tipOfDisplayedRev();
             
             const totalTime = Date.now() - startTime;
             logger.debug(`[GitCharm] Total commit load: ${totalTime}ms (fetch: ${fetchTime}ms, postMessage: ${postTime}ms)`);
@@ -2826,6 +2840,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             if (await this._recoverMissingGit()) {return;}
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
+            this._initialCommitLoadInProgress = false;
             this._postLoading('rows', false);
         }
     }
