@@ -171,13 +171,26 @@ export type ExtToWebviewMessage =
         currentRepository?: string;
     }
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
+    | {
+        command: 'queryCancelled';
+        kind: 'detail' | 'preview';
+        hashes?: string[];
+        hash?: string;
+        stash?: number;
+        path?: string;
+    }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'prependCommits'; commits: GraphCommit[]; hasMoreAbove: boolean }
     | { command: 'loadMoreFailed' }
     | { command: 'loadMoreUpFailed' }
     | { command: 'setHeadHash'; headHash: string }
     | { command: 'setInProgress'; inProgress: OperationKind | null }
-    | { command: 'setDivergence'; divergence: Record<string, DivergenceEntry> }
+    | {
+        command: 'setDivergence';
+        divergence: Record<string, DivergenceEntry>;
+        hasRemote?: boolean;
+        branchesWithoutUpstream?: string[];
+    }
     | { command: 'setCurrentBranch'; branch: string }
     | {
         command: 'setDetail';

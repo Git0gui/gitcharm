@@ -12,6 +12,7 @@ import { openEditorDiff } from '../commands/helpers';
 import { GitBlobFileSystemProvider } from '../services/blobFs';
 import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { parseFirstPage, serializeFirstPage } from '../services/firstPageStore';
+import { isGitCommandCancelled } from '../services/gitRunner';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -1274,6 +1275,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 empty: diff.empty
             });
         } catch (error) {
+            if (isGitCommandCancelled(error)) {
+                this._post({ command: 'queryCancelled', kind: 'preview', hash, stash, path });
+                return;
+            }
             logger.error('[GitCharm] Inline diff preview failed:', error);
             this._post({
                 command: 'filePreviewResponse',
@@ -1353,18 +1358,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         logger.info(`[GitCharm] Ignoring vanished branch "${branch}"`);
                         this._branch = undefined;
                         vscode.window.setStatusBarMessage(t('view.branchGone', { name: branch }), 5000);
-                        await this._reload(true);
+                        await this._withCancellableGitQuery(() => this._reload(true));
                         break;
                     }
 
                     this._branch = branch;
                     // Clear cherry-pick resume state when switching branches
                     await this._gitService.clearCherryPickResume(this._memento);
-                    await this._reload();
+                    await this._withCancellableGitQuery(() => this._reload());
                     break;
                 }
                 case 'refresh':
-                    await this._reload(true);
+                    await this._withCancellableGitQuery(() => this._reload(true));
                     break;
                 case 'showNotification':
                     // Forward notification request from webview
@@ -1393,7 +1398,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             to: message.to || undefined,
                             path: (message.path || '').trim() || undefined
                         };
-                        await this._reload();
+                        await this._withCancellableGitQuery(() => this._reload());
                         // _reload will send setData with searchContext
                         // Frontend will handle showing the result count
                     } finally {
@@ -1401,24 +1406,35 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     }
                     break;
                 case 'loadMore':
-                    await this._loadMore();
+                    await this._withCancellableGitQuery(
+                        () => this._loadMore(),
+                        () => this._post({ command: 'loadMoreFailed' })
+                    );
                     break;
                 case 'loadMoreUp':
-                    await this._loadMoreUp();
+                    await this._withCancellableGitQuery(
+                        () => this._loadMoreUp(),
+                        () => this._post({ command: 'loadMoreUpFailed' })
+                    );
                     break;
                 case 'leaveReveal':
                     // The banner's way out. `_reload` drops the rooting itself;
                     // keepSelected means the commit the user was reading stays
                     // selected when it is still on the first page of the branch.
-                    await this._reload(false, true);
+                    await this._withCancellableGitQuery(() => this._reload(false, true));
                     break;
                 case 'selectCommit':
                     this._postLoading('detail', true);
                     try {
-                        const [commit, files] = await Promise.all([
+                        const result = await this._withCancellableGitQuery(() => Promise.all([
                             this._gitService.getCommitDetail(message.hash, !!message.force),
                             this._gitService.getCommitFilesWithStats(message.hash, !!message.force)
-                        ]);
+                        ]));
+                        if (!result) {
+                            this._post({ command: 'queryCancelled', kind: 'detail', hashes: [message.hash] });
+                            break;
+                        }
+                        const [commit, files] = result;
                         this._post({
                             command: 'setDetail',
                             commit,
@@ -1426,7 +1442,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             existingPaths: await this._existingWorkingPaths(files)
                         });
                     } catch (error) {
-                        vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: formatGitError(error) }));
+                        if (!isGitCommandCancelled(error)) {
+                            vscode.window.showErrorMessage(t('view.loadDetailFailed', { error: formatGitError(error) }));
+                        }
                     } finally {
                         this._postLoading('detail', false);
                     }
@@ -1437,10 +1455,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // the payload without a matching selected hash.
                     this._postLoading('detail', true);
                     try {
-                        const [commit, files] = await Promise.all([
+                        const result = await this._withCancellableGitQuery(() => Promise.all([
                             this._gitService.getCommitDetail(message.hash),
                             this._gitService.getCommitFilesWithStats(message.hash)
-                        ]);
+                        ]));
+                        if (!result) {break;}
+                        const [commit, files] = result;
                         this._post({
                             command: 'setDetail',
                             origin: 'tagSync',
@@ -1449,6 +1469,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             existingPaths: await this._existingWorkingPaths(files)
                         });
                     } catch (error) {
+                        if (isGitCommandCancelled(error)) {break;}
                         // A remote-only tag can point at a commit that was never
                         // fetched; "bad object" is the expected answer there, not
                         // a broken repository, so it gets its own next step.
@@ -1480,7 +1501,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         // One process for all file lists; details come from the
                         // log rows already in the commit index, not one `show`
                         // per hash. This used to be three spawns per commit.
-                        const [ordered, detailEntries, filesByHash] = await Promise.all([
+                        const result = await this._withCancellableGitQuery(() => Promise.all([
                             this._gitService.orderCommitsByHistory(hashes)
                                 .then(newestFirst => newestFirst.reverse()),
                             Promise.all(hashes.map(async hash => [
@@ -1488,7 +1509,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                                 await this._gitService.getCommitDetail(hash)
                             ] as const)),
                             this._gitService.getCommitFilesWithStatsBatch(hashes)
-                        ]);
+                        ]));
+                        if (!result) {
+                            this._post({ command: 'queryCancelled', kind: 'detail', hashes });
+                            break;
+                        }
+                        const [ordered, detailEntries, filesByHash] = result;
                         const detailsByHash = new Map(detailEntries);
                         const commits = ordered.map(hash => detailsByHash.get(hash)!);
                         const files = mergeCommitFileStats(ordered.map(hash => filesByHash.get(hash) ?? []));
@@ -1500,7 +1526,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             existingPaths: await this._existingWorkingPaths(files)
                         });
                     } catch (error) {
-                        vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
+                        if (!isGitCommandCancelled(error)) {
+                            vscode.window.showErrorMessage(t('view.loadDataFailed', { error: formatGitError(error) }));
+                        }
                     } finally {
                         this._postLoading('multiCommits', false);
                     }
@@ -1522,10 +1550,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     }
                     break;
                 case 'filePreview':
-                    await this._postFilePreview(message);
+                    await this._withCancellableGitQuery(() => this._postFilePreview(message));
                     break;
                 case 'refreshBranches':
-                    await this._refreshBranchesOnly();
+                    await this._withCancellableGitQuery(() => this._refreshBranchesOnly());
                     break;
                 case 'initRepository':
                     await vscode.commands.executeCommand('idea-git.initRepository');
@@ -1595,10 +1623,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     if (!hash) {break;}
                     this._postLoading('detail', true);
                     try {
-                        const [commit, files] = await Promise.all([
+                        const result = await this._withCancellableGitQuery(() => Promise.all([
                             this._gitService.getCommitDetail(hash, true),
                             this._gitService.getCommitFilesWithStats(hash, true)
-                        ]);
+                        ]));
+                        if (!result) {break;}
+                        const [commit, files] = result;
                         this._post({
                             command: 'setDetail',
                             commit,
@@ -1606,7 +1636,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                             existingPaths: await this._existingWorkingPaths(files)
                         });
                     } catch (error) {
-                        vscode.window.showErrorMessage(t('view.refreshFilesFailed', { error: formatGitError(error) }));
+                        if (!isGitCommandCancelled(error)) {
+                            vscode.window.showErrorMessage(t('view.refreshFilesFailed', { error: formatGitError(error) }));
+                        }
                     } finally {
                         this._postLoading('detail', false);
                     }
@@ -2606,6 +2638,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._hasMore = !this._streamExhausted || this._pendingCommits.length > 0;
             this._post({ command: 'appendCommits', commits: page, hasMore: this._hasMore });
         } catch (error) {
+            if (isGitCommandCancelled(error)) {return;}
             // The spinner is driven by the webview; without this it stays on and
             // its scroll handler never asks again (state.loadingMore stays true).
             // hasMore stays as-is so the next scroll retries.
@@ -2656,6 +2689,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._hasMoreAbove = data.commits.length > 0 && root.above < root.after;
             this._post({ command: 'prependCommits', commits: data.commits, hasMoreAbove: this._hasMoreAbove });
         } catch (error) {
+            if (isGitCommandCancelled(error)) {
+                return;
+            }
             // The webview keeps hasMoreAbove, so the next scroll to the top retries.
             this._post({ command: 'loadMoreUpFailed' });
             vscode.window.showErrorMessage(t('view.loadMoreFailed', { error: formatGitError(error) }));
@@ -2709,6 +2745,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             });
             this._refreshDivergence();
         } catch (error) {
+            if (isGitCommandCancelled(error)) {return;}
             if (await this._recoverMissingGit()) {return;}
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
@@ -2859,11 +2896,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         try {
             const details = await this._gitService.getBranchesWithDetails(true);
             this._postBranchList(details);
-            void this._postStashes();
-            void this._postWorktrees();
+            await Promise.all([this._postStashes(), this._postWorktrees()]);
             // Also refresh divergence info (ahead/behind arrows)
             await this._refreshDivergence();
         } catch (error) {
+            if (isGitCommandCancelled(error)) {return;}
             vscode.window.showErrorMessage(t('view.refreshBranchesFailed', { error: formatGitError(error) }));
         }
     }
@@ -2877,6 +2914,49 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Show a cancellable notification only when a user-started read takes long
+     * enough to need one. Quick cache hits do not flash a toast; cancellation is
+     * wired to the active read-only git subprocesses.
+     */
+    private async _withCancellableGitQuery<T>(
+        task: () => Promise<T>,
+        onCancelled?: () => void
+    ): Promise<T | undefined> {
+        const controller = new AbortController();
+        const operation = this._gitService.withQueryCancellation(controller.signal, task).then(
+            value => ({ ok: true as const, value }),
+            error => ({ ok: false as const, error })
+        );
+        let timer: NodeJS.Timeout | undefined;
+        const quick = await Promise.race([
+            operation,
+            new Promise<undefined>(resolve => {
+                timer = setTimeout(() => resolve(undefined), 400);
+            })
+        ]);
+        if (timer) {clearTimeout(timer);}
+
+        let outcome = quick;
+        if (!outcome) {
+            outcome = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: t('ui.gitQueryProgress'),
+                cancellable: true
+            }, (_progress, token) => {
+                const subscription = token.onCancellationRequested(() => controller.abort());
+                return operation.finally(() => subscription.dispose());
+            });
+        }
+
+        if (controller.signal.aborted || (!outcome.ok && isGitCommandCancelled(outcome.error))) {
+            onCancelled?.();
+            return undefined;
+        }
+        if (!outcome.ok) {throw outcome.error;}
+        return outcome.value;
+    }
+
+    /**
      * Background-compute each local branch's ahead/behind versus its upstream so
      * the tree can show push/pull arrows without blocking the main data load.
      */
@@ -2884,7 +2964,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (!this._view || this._repoState !== 'ready') {return;}
         try {
             // Use lightweight method that only queries divergence info (much faster than full branch details)
-            const divergenceMap = await this._gitService.getDivergenceInfo();
+            const [divergenceMap, branchMenuState] = await Promise.all([
+                this._gitService.getDivergenceInfo(),
+                this._gitService.getBranchMenuState()
+            ]);
             
             logger.debug('[GitCharm] Divergence info:', JSON.stringify(divergenceMap));
             
@@ -2897,8 +2980,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             }
             
             logger.debug('[GitCharm] Sending divergence to webview:', JSON.stringify(divergence));
-            this._post({ command: 'setDivergence', divergence });
+            this._post({
+                command: 'setDivergence',
+                divergence,
+                hasRemote: branchMenuState.hasRemote,
+                branchesWithoutUpstream: branchMenuState.branchesWithoutUpstream
+            });
         } catch (error) {
+            if (isGitCommandCancelled(error)) {return;}
             logger.debug('[GitCharm] Failed to refresh divergence:', error);
         }
     }
