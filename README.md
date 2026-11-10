@@ -22,10 +22,10 @@
 
 ## What's New
 
-### The details pane keeps up with your click
+### A long query can be cancelled, and menus put the common action first
 
-- **Selecting a commit is quicker.** With one commit selected, the file list and details on the right no longer wait behind a history-ordering walk that a single commit doesn't need. Selecting several is quicker too: the ordering, detail and file queries now run side by side instead of one after another, and the merged file list and diffs come out exactly as before.
-- **Opening the panel no longer queries the same history twice.** A visibility event arriving just after startup used to read as "the branch moved" and re-run the identical log query behind the scenes. The first load now records the tip it painted, so that second look is a cache replay rather than another subprocess.
+- **Stop waiting on a slow read.** When a history query takes long enough to notice, a notification with a Cancel button appears; pressing it stops the git subprocess that was actually running. Quick lookups show nothing at all, write and network operations are never cancellable, and cancelling closes the spinner cleanly instead of raising an error.
+- **Context menus follow how often you use them.** Viewing, switching and pushing come first, history-changing actions next, deletion last. A repository with no remote no longer offers Pull / Push / Open on remote, a branch with no upstream labels its push action "First push", and right-clicking a commit row no longer collapses the selection you already made.
 
 ## Overview
 
@@ -114,6 +114,9 @@ GitCharm provides a three-panel Git log view:
 - **Unified conflict handling**: merge / rebase / cherry-pick conflicts are detected in one place, a persistent top status bar offers Continue / Abort, and the conflicted files are opened directly in the editor (up to 10 tabs) so the built-in merge-conflict code lenses can be used — the panel never switches you into another view
 - **The panel follows real git state**: resolve the conflicts and commit in your own terminal and the operation bar retracts on its own once git's state files are gone, while the commit list reloads as soon as the displayed branch tip moves — keeping your selection, detail panel, folds and scroll position instead of jumping back to the top
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
+- **Long reads can be stopped**: a query that takes noticeable time shows a cancellable notification, and cancelling kills the git subprocess that was actually running — quick lookups show no notification, write and network operations are never cancellable, and a cancelled read leaves no error toast and no stuck spinner
+- **Menus ordered by use**: context menus run from the actions you reach for most to the destructive ones, and a branch menu only offers what the repository can actually do — no remote means no Pull / Push / Open on remote, and a branch without an upstream says "First push"
+- **A row's context menu keeps your selection**: right-clicking one of several selected commits operates on the whole group instead of collapsing the selection down to that row
 - **Stale lock files, handled with a question**: if a write hits a `.lock` file left behind by a killed git process, GitCharm asks once, then deletes it and retries the same command — no hand-cleaning inside the git directory
 - **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
 - **Full error detail on demand**: the error notification stays short, while the complete git output (credentials redacted) goes to the GitCharm output channel, reachable from a Show Log button on the notification
@@ -214,10 +217,10 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 第三栏跟得上你的点击
+### 查得久的可以取消，右键菜单把常用的放前面
 
-- **点开提交更快了**：只选一条提交时，右侧的文件列表与详情不再排在一次它根本不需要的历史排序遍历后面；多选几条时同样更快——排序、详情、文件三个查询改成并排跑而不是一个接一个，合并出来的文件清单与差异内容与以前完全一致。
-- **打开面板不再把同一份历史查两遍**：启动刚结束那一下可见性事件，过去会被读成"分支动了"，在背后重跑一次一模一样的日志查询。现在首次加载会记下自己画的是哪个 tip，第二次看只是重放缓存，不再多起一个子进程。
+- **慢查询不再干等**：一次历史查询久到你能察觉时，会出现一条带「取消」按钮的提示，按下去就真的把正在跑的 git 子进程停掉。快的查询完全不闪提示；改历史与走网络的操作永远不给取消按钮；取消之后加载状态正常收起，不会跟一句错误提示。
+- **菜单按使用频率排**：查看、切换、推送在前，改历史的操作在中，删除类在最后。没配远端的仓库不再列出拉取／推送／在远端打开；还没有上游的分支，那一项直接写成「首次推送」；在提交行上右键不再吃掉你已经选中的那几条提交。
 
 ## 概览
 
@@ -306,6 +309,9 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **冲突统一处理**：合并 / 变基 / 精选冲突统一检测，顶部常驻状态栏提供"继续 / 终止"，冲突文件直接在编辑器打开（上限 10 个 tab）用内置 merge-conflict 代码透镜解决，面板不会把用户切去其他视图
 - **面板跟着真实 git 状态走**：在自己终端里解决冲突并提交，操作状态栏会在 git 状态文件清掉后自动收起；提交列表也在所选分支 tip 移动时自动重载，并保留当前选中项、第三栏详情、折叠状态与滚动位置，不再跳回顶部
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
+- **查得久的可以停下**：久到你能察觉的历史查询会给出一条带取消按钮的提示，按下去就真的把正在跑的 git 子进程杀掉；快的查询不打扰，改历史与走网络的操作不提供取消，取消后不弹错误提示、也不会留下转个不停的加载态
+- **菜单按使用频率排**：右键菜单从最常点的操作一路排到破坏性操作；分支菜单只给这个仓库真能做的——没配远端就不出现拉取／推送／在远端打开，还没上游的分支直接写成「首次推送」
+- **行右键不改选中**：在多选出来的几条提交里右键其中一行，菜单作用于整组选择，不会把选择缩成这一行
 - **残留锁文件先问再删**：写操作撞上被杀掉的 git 进程留下的 `.lock` 文件时先问一句，同意后删除它并重试同一条命令，不必自己去 git 目录里手动清理
 - **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
 - **完整错误随时可查**：错误通知保持简短，完整的 git 输出（凭据已脱敏）写入 GitCharm 输出通道，通知条上的"显示日志"按钮可直接打开
