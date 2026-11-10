@@ -22,13 +22,10 @@
 
 ## What's New
 
-### The panel picks up where you left it
+### The details pane keeps up with your click
 
-- **Opening it no longer waits for git.** The page of history you were last looking at paints immediately, then the real load replaces it — and that first page is only trusted when the branch tip it came from hasn't moved, so it is the same page rather than a similar one. Branch names appear straight away; the ahead/behind arrows follow a moment later.
-- **A blame jump says where you are.** The panel used to root the log at the commit and say nothing else. Now the branch tree on the left switches to the branch that actually carries that commit, a banner names the commit and explains that filtering is paused while you're here, and **Back to branch** sits right next to it. In a multi-folder workspace a commit from another repository switches the panel over first, instead of answering "commit not found".
-- **The lines you blamed open where they are.** Jumping in from a few lines of blame selects that file in the third column and expands those lines, rather than leaving you to find the row again.
-- **Filters can't hide the commit you jumped to.** The rooted view used to be searched with the panel's filter still applied, so when the filter didn't match that commit nothing visibly happened when you clicked. Your text is kept — it just pauses until you leave the rooted view.
-- **Closing and re-opening the panel returns you to the file you were reading** — the highlighted row and how far that list was scrolled, not just the commit it belongs to.
+- **Selecting a commit is quicker.** With one commit selected, the file list and details on the right no longer wait behind a history-ordering walk that a single commit doesn't need. Selecting several is quicker too: the ordering, detail and file queries now run side by side instead of one after another, and the merged file list and diffs come out exactly as before.
+- **Opening the panel no longer queries the same history twice.** A visibility event arriving just after startup used to read as "the branch moved" and re-run the identical log query behind the scenes. The first load now records the tip it painted, so that second look is a cache replay rather than another subprocess.
 
 ## Overview
 
@@ -89,10 +86,11 @@ GitCharm provides a three-panel Git log view:
 ### Performance
 
 - **Instant open**: the page of history you last saw is painted from disk before any git command runs, and only when the branch tip it was taken from hasn't moved — the live load then replaces it. Branch names come straight off the filesystem and the ahead/behind arrows arrive a moment later
+- **Details keep up**: selecting one commit skips the history-ordering walk a single commit doesn't need; selecting several runs ordering, details and files side by side. The merged file list still comes out in history order, oldest first
 - **Filesystem refs**: resolves the git directory (plain clones, linked worktrees, shared `commondir`) and parses its refs (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
 - **No built-in git extension needed**: GitCharm never activates or reads `vscode.git`; branch lists, the current branch and ahead/behind counts all come from our own refs reader and a single `for-each-ref`, so the panel works even with the built-in Git extension disabled
 - **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; a filesystem watch on the git directory drops stale caches when you commit, fetch or switch branches elsewhere
-- **No idle subprocesses**: git availability is remembered across sessions, in-progress operations are detected by reading `.git` state files, and a re-shown panel replays its cached graph unless the displayed tip actually moved
+- **No idle subprocesses**: git availability is remembered across sessions, in-progress operations are detected by reading `.git` state files, and a re-shown panel replays its cached graph unless the displayed tip actually moved — the first load records that tip itself, so a visibility event right after startup no longer re-runs the same query
 - **Canvas graph**: pixel-precise commit graph rendered on Canvas with high-DPI support, several times faster than SVG/DOM
 
 ### Experience & Reliability
@@ -216,13 +214,10 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 面板回到你离开时的样子
+### 第三栏跟得上你的点击
 
-- **打开面板不再等 git**：上一次看到的那一页提交历史会立刻上屏，真正的加载随后覆盖它——而这一页只在它所属分支的 tip 没有移动时才被信任，所以它是"同一页"而不只是"相似的一页"。分支名先行出现，ahead/behind 箭头晚一点点跟上。
-- **从 blame 跳过来之后，面板说得出自己在看什么**：以前它只是把列表改根到那条提交，其余全靠用户猜。现在左边的分支树会切到真正承载这条提交的分支，列表上方有一条横幅写明"正在查看哪条提交、筛选已暂停"，旁边就是「返回分支」。多文件夹工作区里，提交属于另一个仓库时面板先切过去，不再只回一句"找不到提交"。
-- **blame 的那几行直接翻开**：从编辑器里某几行的 blame 跳过来，第三栏会选中那个文件并展开这几行的改动，不用自己再点一遍。
-- **筛选挡不住你跳过来的那条提交**：定位列表以前还带着面板的搜索词一起查，搜索词命中不到这条提交时，点下去界面毫无反应。你输入的文字不会被擦掉，只是在这段视图里暂停，返回分支后照旧生效。
-- **关掉再打开面板，会回到你正在读的那个文件**：高亮的那一行、文件列表滚动到哪里，都跟着一起回来，而不只是它所属的那条提交。
+- **点开提交更快了**：只选一条提交时，右侧的文件列表与详情不再排在一次它根本不需要的历史排序遍历后面；多选几条时同样更快——排序、详情、文件三个查询改成并排跑而不是一个接一个，合并出来的文件清单与差异内容与以前完全一致。
+- **打开面板不再把同一份历史查两遍**：启动刚结束那一下可见性事件，过去会被读成"分支动了"，在背后重跑一次一模一样的日志查询。现在首次加载会记下自己画的是哪个 tip，第二次看只是重放缓存，不再多起一个子进程。
 
 ## 概览
 
@@ -283,10 +278,11 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 ### 性能
 
 - **秒开**：上一次看的那一页提交历史在任何 git 命令之前就从磁盘画出来，而且只在它所属分支的 tip 没动时才用（真正的加载随后覆盖它）；分支名直接读文件系统，ahead/behind 箭头晚一步补上
+- **第三栏跟得上**：只选一条提交时跳过它不需要的历史排序遍历；多选时排序、详情、文件三路并行。合并出的文件清单仍按历史顺序旧→新排列
 - **直读 refs**：先定位 git 目录（普通克隆、linked worktree、共享 `commondir` 都能解析），再直接读 refs（loose + packed-refs），数百分支也不卡死，避免大量 `git rev-parse` 子进程
 - **不依赖内置 git 扩展**：全程不激活、不读取 `vscode.git`；分支列表、当前分支、超前/落后全部来自自研 refs 读取器 + 单条 `for-each-ref`，禁用内置 Git 扩展也能正常用
 - **智能缓存**：分支信息持久化到工作区状态（Memento），重启后立即可用；对 git 目录做文件监听，在别处提交 / 拉取 / 切分支时自动失效
-- **空闲时不启子进程**：git 可用性跨会话记忆，进行中操作靠读 `.git` 状态文件判断，面板重新显示时只要展示的 tip 没动就直接复用缓存
+- **空闲时不启子进程**：git 可用性跨会话记忆，进行中操作靠读 `.git` 状态文件判断，面板重新显示时只要展示的 tip 没动就直接复用缓存——首次加载自己就会记下这个 tip，所以启动刚结束那一下可见性事件不再重跑同一条查询
 - **Canvas 图谱**：提交图用 Canvas 像素级绘制，高 DPI 自适应，比 SVG/DOM 高效数倍
 
 ### 体验与可靠性

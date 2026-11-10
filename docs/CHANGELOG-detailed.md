@@ -2,6 +2,51 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.2.2] - 2026-11-10
+
+来自 0.2.1 的实机反馈："关闭插件重新进插件时有些慢"。先用探针把时间拆开再动手，结论是**提交列表那一侧已经不慢**（重开后面板 5–17ms 就画出 20 行，0–1 次子进程），慢的是右侧第三栏，外加启动期的一次重复查询。两处都不是缓存失效写错，而是**多问了一次不需要问的问题**——所以本版没有动任何 TTL、没有动 `releaseHeavyCaches()`、没有动 refs 快照。
+
+### 变更
+
+- **单条选中不再走历史排序遍历**（`src/services/squash.ts` 的 `orderHistoryOldestFirst`，新增 `unique.length === 1` 快路径）：一个提交 trivially 有序，但原来仍要跑一次 `rev-list --topo-order -n200 <hash>`，本仓库实测 33–42ms。这笔钱是**每一次点提交**都在付，不只是重开面板。`assertHash` 仍在快路径之前跑，所以校验没被绕开；多选的遍历一个字节都没改（`ORDER_WINDOWS` 200→2000→不限、按 `wanted` 过滤、走不到的 rev 留在尾部）。
+- **`selectCommits` 的三个查询并行发起**（`src/views/graphView.ts`）：原来是 `const ordered = (await orderCommitsByHistory(hashes)).reverse()` 之后才 `Promise.all([详情, 批量文件])`，排序严格挡在文件查询前面。现在排序、`getCommitDetail`、`getCommitFilesWithStatsBatch` 同一个 `Promise.all` 起跑，结果按 hash 重新索引，再用 `ordered` 组装。三条不变量都保住了：① `mergeCommitFileStats` 拿到的仍是**旧→新**（`ordered` 就是旧→新——`GitService.orderCommitsByHistory` 内部已经把 `oldestFirst` 反转过一次，宿主再反一次，与改动前一致）；② `getCommitFilesWithStatsBatch` 返回的是按 hash 索引的 Map，所以传点击顺序的 `hashes` 与传 `ordered` 等价；③ `ordered ⊆ hashes`（遍历流按 `wanted` 过滤），`detailsByHash.get(hash)!` 不可能落空。入口顺手 `new Set` 去重，与两个服务函数内部的去重口径一致。
+- **首次加载同步 tip 基线，启动期可见性事件不再重复查询**（`_loadAndDisplayCommits` / `_onPanelShown` / 新字段 `_initialCommitLoadInProgress`）：`_onPanelShown` 过了 `SHOW_RELOAD_GRACE_MS`（1s）就比 tip，但 `_lastKnownTip` 过去只由 `_collect` 与 2s 轮询写，`resolveWebviewView` 自己那次首屏加载结束后它仍是 `undefined`——于是"tip 变了"成立，`_reload(true)` 把**同一条 `git log` 又跑一遍**。实测基线在 resolve 后 1200ms（ grace 之后、首次轮询之前）触发可见性事件：多 1 次子进程、多 1 次 `git log`（53ms）。修法两处：首屏加载末尾用**与 `_collect` 相同的表达式**写 `_lastKnownTip`；加载仍在飞时（大仓库一次 `git log` 可能超过 1s）`_initialCommitLoadInProgress` 让可见性事件只重挂 watcher 就返回，因为那份 payload 本来就缓冲着等新 webview 的 `ready`。
+
+### 实测
+
+同一会话、同一仓库（`D:\gitProject\GitCharm`）。基线是把 `c14bc0e` 的 `graphView.ts` 与 `squash.ts` 用 `transpileModule` 覆盖进当前 `out/` 的副本（`git diff c14bc0e..HEAD -- src/ ':!src/test'` 确认只有这两个源文件变了），两侧跑同一批探针：
+
+| 场景 | 0.2.1 | 0.2.2 |
+| --- | --- | --- |
+| 启动期可见性事件多付的子进程 | 1 次（`git log` 53ms） | **0 次** |
+| 重开面板后第三栏往返（隐藏 200ms / 3.5s） | 59ms / 62ms，2 次串行 | **26ms / 23ms，1 次** |
+| 多选 1 条 | 80ms，2 次 | **38ms，1 次** |
+| 多选 3 条 | 61ms，2 次 | **42ms，2 次（并行）** |
+| 多选 6 条 | 84ms，2 次 | **54ms，2 次（并行）** |
+| 提交行上屏（隐藏 200ms / 3.5s） | +6ms / 0 spawn；+18ms / 1 spawn | +5ms / 0 spawn；+17ms / 1 spawn |
+
+- 第三栏剩下的那一次子进程是 `diff-tree --stdin --root -r -M --raw --numstat -z`（23–26ms）；消失的是 `rev-list --topo-order -n200`。
+- 多选的文件数（1/3/6 条分别是 4/5/26）与返回的提交顺序两侧**完全一致**，6 条那组还跨过 `c14bc0e` 这个 `--no-ff` 合并提交，所以不是只在线性历史上成立。点击顺序故意倒着喂。
+- 行上屏那一侧没有回归：隐藏 3.5s 后多的那 1 次子进程仍是 `for-each-ref`（32ms，箭头走 `setDivergence`），refs 快照 3s TTL 到期是设计如此。
+- `docs/perf/coldstart.mjs` 阈值全部通过：冷画 93.6ms / 2 spawn（`git log` 46.2ms + `for-each-ref` 36.8ms）、记住的页 6.89ms / 0 spawn、箭头 0.4ms / 0 spawn、worktree 20.2ms（在页之后）。
+
+### 测试
+
+- 新增 `src/test/startupReload.test.ts`（2 例，源码断言）：钉住 `_initialCommitLoadInProgress` 在首屏加载前后置真/置假、`_lastKnownTip` 由 `_tipOfDisplayedRev()` 赋值，以及那道 guard 必须排在 `void this._reload(` **之前**且以 `_startBranchCheck(); return;` 结束。
+- 新增 `src/test/multiCommitLoad.test.ts`（2 例，源码断言）：钉住三个查询在同一个 `Promise.all` 里，且 `ordered` 只用于组装结果（`ordered.map(hash => detailsByHash.get(hash)!)` 与 `mergeCommitFileStats(ordered.map(...))`）——并行不许把合并文件列表的历史顺序一起并行掉。
+- `src/test/squashAcceptance.test.ts` 新增 1 例：单条（含重复传入同一 hash）返回时 runner 调用次数为 0。原有 golden 用例与"旧算法错误行为留档"用例全部照跑。
+
+### 文档
+
+- AGENTS.md §8 新增「`selectCommits` 三路并行但合并仍吃 `ordered`」一条（含 Map 按 hash 索引、`ordered ⊆ hashes`、双重 reverse 的口径、单条快路径与 `assertHash` 仍在前面）；「面板重新显示时不做无条件强制刷新」那条补上首屏必须自己写 `_lastKnownTip` 与 `_initialCommitLoadInProgress` 的兜底窗口。
+- README 中英 `What's New` / `新增功能` 换成本版两条，性能段各加「第三栏跟得上」并扩写「空闲时不启子进程」；CSDN 说明 §五 性能新增「点提交不空等」「启动不重复查询」两条，秒开那条的实测数字刷新为本次测量（记住的页 6.9ms、冷启动约 94ms，仍是 2 次子进程）。
+
+### 验证
+
+- compile 0 error；lint 0 error / 66 warning（基线）；test **450 例 105 组全绿**（0.2.1 是 445/102，+5 例 +3 组正好对上上面三项）。
+- **尚未做实机（Extension Development Host）复核的部分**：探针驱动的是编译后的 provider + stub webview，所以"用户实际感知的那一下"里还包含 webview 帧重建（骨架 HTML + 248KB JS + 88KB CSS + 图标字体），这部分不在上表任何数字里；工作区里的真实体感需要重启宿主后人工确认。
+- **有意没做的一项**：`releaseHeavyCaches()` 仍在隐藏时清 `_filesCache` / `_detailCache`，所以重开面板恢复选中提交时那一次 `diff-tree` 还是要跑。只保留当前选中那一条（两者都是按 hash 索引、带 repoPath 前缀、LRU 上限 100 的不可变缓存）能再省约 25ms，但它改的是 AGENTS.md §4「隐藏即清」那条规矩，等明确决定后再动。
+
 ## [0.2.1] - 2026-11-06
 
 本版三件事：把"打开面板到看见历史"之间最贵的那一次子进程挪到屏幕之后（首屏先画记住的那一页）、blame 跳转之后面板要能说清自己在看什么（五个用户自己去猜的地方换成答案）、面板重新显示时连"读到哪个文件"一起还回来。三者共同点是**竞态与口径**，不是逻辑写错——数据一直是对的，晚到、画错范围、或者根本没人记过。
