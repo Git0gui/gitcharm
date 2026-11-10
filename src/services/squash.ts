@@ -164,6 +164,9 @@ export async function orderHistoryOldestFirst(
     if (unique.length === 0) {
         return [];
     }
+    if (unique.length === 1) {
+        return unique;
+    }
     const wanted = new Set(unique);
 
     for (const limit of ORDER_WINDOWS) {

@@ -36,6 +36,19 @@ import {
 
 const GIT_PRESENT = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
 
+describe('commit history ordering fast path', () => {
+    it('returns a single unique commit without spawning the history walk', async () => {
+        const calls: string[][] = [];
+        const ordered = await orderHistoryOldestFirst(async args => {
+            calls.push(args);
+            return '';
+        }, ['abcdef1', 'abcdef1']);
+
+        assert.deepEqual(ordered, ['abcdef1']);
+        assert.equal(calls.length, 0);
+    });
+});
+
 /**
  * Every commit writes its own file, so replaying commits in the wrong order still
  * applies cleanly. That is deliberate: a defect suite that fails with a conflict
