@@ -1466,7 +1466,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // Handle multi-select commits
                     this._postLoading('multiCommits', true);
                     try {
-                        const hashes: string[] = message.hashes || [];
+                        const hashes = [...new Set(message.hashes || [])];
                         if (hashes.length === 0) {
                             this._post({ command: 'multiCommitsResponse', commits: [], files: [] });
                             break;
@@ -1477,14 +1477,20 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         // webview lists the commits the same way. See
                         // GitService.orderCommitsByHistory for the case where the two
                         // disagree. The order the user clicked rows in decides neither.
-                        const ordered = (await this._gitService.orderCommitsByHistory(hashes)).reverse();
                         // One process for all file lists; details come from the
                         // log rows already in the commit index, not one `show`
                         // per hash. This used to be three spawns per commit.
-                        const [commits, filesByHash] = await Promise.all([
-                            Promise.all(ordered.map(hash => this._gitService.getCommitDetail(hash))),
-                            this._gitService.getCommitFilesWithStatsBatch(ordered)
+                        const [ordered, detailEntries, filesByHash] = await Promise.all([
+                            this._gitService.orderCommitsByHistory(hashes)
+                                .then(newestFirst => newestFirst.reverse()),
+                            Promise.all(hashes.map(async hash => [
+                                hash,
+                                await this._gitService.getCommitDetail(hash)
+                            ] as const)),
+                            this._gitService.getCommitFilesWithStatsBatch(hashes)
                         ]);
+                        const detailsByHash = new Map(detailEntries);
+                        const commits = ordered.map(hash => detailsByHash.get(hash)!);
                         const files = mergeCommitFileStats(ordered.map(hash => filesByHash.get(hash) ?? []));
 
                         this._post({
