@@ -3813,6 +3813,15 @@ window.addEventListener('message', function (ev) {
             state.multiFiles = null;
             state.multiExistingPaths = [];
             renderDetail();
+        } else if (m.kind === 'reflog') {
+            // The tab never moved, so the rows on screen are still the truth —
+            // only the dimming has to come off. Match the pending scope so a
+            // cancelled read cannot undim the one that replaced it.
+            if (reflogState.pending === m.scope) {
+                reflogState.pending = '';
+                var reflogScroll = document.querySelector('#reflog-dialog #reflog-scroll');
+                if (reflogScroll) { reflogScroll.classList.remove('reflog-busy'); }
+            }
         } else {
             var preview = state.preview;
             var previewKey = m.stash !== undefined && m.stash !== null
@@ -4953,37 +4962,79 @@ function showFileHistoryDialog(filePath, history) {
 }
 
 /* ---------- reflog dialog (recover lost commits) ---------- */
-var reflogState = { entries: [], visibleCount: 20 };
+var reflogState = { scope: '', entries: [], visibleCount: 20, pending: '' };
+
+/** The branch the toolbar asks for — same expression as btn-reflog's click. */
+function reflogBranchScope() {
+    return state.selectedBranch || state.current || '';
+}
+
+function reflogRow(entry) {
+    var tip = entry.shortHash + '\n' +
+        entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
+        fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
+    return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
+        '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
+        '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
+        '<span class="push-commit-author">' + esc(entry.action) + '</span>' +
+        '<span class="push-commit-date" data-title="' + esc(fmtDateTime(entry.date)) + '">' + esc(fmtRelativeTime(entry.date)) + '</span>' +
+        '</div>';
+}
+
+function reflogMoreHtml(total, shown) {
+    return total > shown
+        ? '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: total - shown }) + '</button></div>'
+        : '';
+}
+
+/**
+ * Repaint the rows of an already-built dialog. The shell survives a scope switch
+ * on purpose: attachDialogResize wrote an inline width onto it, and rebuilding
+ * would throw away the width the user dragged out. Rebuilding the rows is also
+ * what clears the picked row — the two scopes are different sets of commits.
+ */
+function fillReflogDialog(overlay, scope, entries) {
+    reflogState = { scope: scope, entries: entries, visibleCount: 20, pending: '' };
+    var branch = reflogBranchScope();
+    overlay.querySelectorAll('.reflog-tab').forEach(function (tab) {
+        var target = tab.getAttribute('data-scope') === 'HEAD' ? 'HEAD' : branch;
+        tab.classList.toggle('on', !!target && target === scope);
+        tab.disabled = !target;
+    });
+    var sub = overlay.querySelector('#reflog-scope');
+    if (sub) { sub.textContent = scope; }
+    var scroll = overlay.querySelector('#reflog-scroll');
+    scroll.classList.remove('reflog-busy');
+    // An empty scope is an answer, not a reason to close: the dialog stays and
+    // says so, otherwise the toggle would look like it dismissed the window.
+    if (entries.length === 0) {
+        scroll.innerHTML = '<div class="reflog-empty">' + T('reflog.emptyScope') + '</div>';
+        return;
+    }
+    var visible = entries.slice(0, reflogState.visibleCount);
+    scroll.innerHTML = visible.map(reflogRow).join('') + reflogMoreHtml(entries.length, visible.length);
+}
 
 function showReflogDialog(scope, entries) {
-    reflogState = { entries: entries, visibleCount: 20 };
-
-    function row(entry) {
-        var tip = entry.shortHash + '\n' +
-            entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
-            fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
-        return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
-            '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
-            '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
-            '<span class="push-commit-author">' + esc(entry.action) + '</span>' +
-            '<span class="push-commit-date" data-title="' + esc(fmtDateTime(entry.date)) + '">' + esc(fmtRelativeTime(entry.date)) + '</span>' +
-            '</div>';
+    var existing = document.getElementById('reflog-dialog');
+    if (existing) {
+        fillReflogDialog(existing, scope, entries);
+        return;
     }
 
     var overlay = document.createElement('div');
     overlay.className = 'push-dialog-overlay';
     overlay.id = 'reflog-dialog';
-    var visible = entries.slice(0, reflogState.visibleCount);
-    var moreHtml = entries.length > visible.length
-        ? '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: entries.length - visible.length }) + '</button></div>'
-        : '';
-
     overlay.innerHTML = '<div class="push-dialog-box">' +
-        '<div class="push-dialog-header">' + T('reflog.title') + ' <span class="push-compare-sub">' + esc(scope) + '</span></div>' +
+        '<div class="push-dialog-header">' + T('reflog.title') +
+        '<span class="reflog-tabs">' +
+        '<button class="reflog-tab" type="button" data-scope="branch" data-title="' + esc(T('reflog.tabBranchHint')) + '">' + T('reflog.tabBranch') + '</button>' +
+        '<button class="reflog-tab" type="button" data-scope="HEAD" data-title="' + esc(T('reflog.scopeHead')) + '">' + T('reflog.tabHead') + '</button>' +
+        '</span>' +
+        '<span class="push-compare-sub" id="reflog-scope"></span>' +
+        '</div>' +
         '<div class="push-dialog-body">' +
-        '<div class="push-commits-list full"><div class="push-commits-scroll" id="reflog-scroll">' +
-        visible.map(row).join('') + moreHtml +
-        '</div></div>' +
+        '<div class="push-commits-list full"><div class="push-commits-scroll" id="reflog-scroll"></div></div>' +
         '</div>' +
         '<div class="push-dialog-actions">' +
         '<span class="file-history-hint">' + T('reflog.hint') + '</span>' +
@@ -4993,20 +5044,33 @@ function showReflogDialog(scope, entries) {
     document.body.appendChild(overlay);
     attachDialogResize(overlay, 'reflog');
 
+    overlay.querySelector('.reflog-tabs').addEventListener('click', function (e) {
+        var tab = e.target.closest('.reflog-tab');
+        if (!tab || tab.disabled || tab.classList.contains('on')) { return; }
+        var target = tab.getAttribute('data-scope') === 'HEAD' ? 'HEAD' : reflogBranchScope();
+        if (!target) { return; }
+        // Dim the rows while the host re-reads; the tab itself only moves once
+        // the answer is back, so a failed read cannot leave it lying.
+        overlay.querySelector('#reflog-scroll').classList.add('reflog-busy');
+        reflogState.pending = target;
+        vscode.postMessage({ command: 'reflogScope', scope: target });
+    });
+
     var scroll = overlay.querySelector('#reflog-scroll');
     // Delegation: appended batches need handlers too, and the picked row must be
     // usable after the list grows.
     scroll.addEventListener('click', function (e) {
         var more = e.target.closest('.push-load-more-btn');
         if (more) {
-            var next = Math.min(reflogState.visibleCount + 20, entries.length);
+            var list = reflogState.entries;
+            var next = Math.min(reflogState.visibleCount + 20, list.length);
             var container = more.parentElement;
             var frag = document.createElement('div');
-            frag.innerHTML = entries.slice(reflogState.visibleCount, next).map(row).join('');
+            frag.innerHTML = list.slice(reflogState.visibleCount, next).map(reflogRow).join('');
             while (frag.firstChild) { container.parentNode.insertBefore(frag.firstChild, container); }
             reflogState.visibleCount = next;
-            if (next < entries.length) {
-                more.textContent = T('common.loadMoreCommits', { n: entries.length - next });
+            if (next < list.length) {
+                more.textContent = T('common.loadMoreCommits', { n: list.length - next });
             } else {
                 container.remove();
             }
@@ -5053,6 +5117,8 @@ function showReflogDialog(scope, entries) {
             overlay.remove();
         });
     });
+
+    fillReflogDialog(overlay, scope, entries);
 }
 
 /* ---- tag differences dialog ---- */

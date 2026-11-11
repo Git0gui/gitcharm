@@ -2158,6 +2158,55 @@ body.dialog-resizing * {
     font-size: 10.5px;
     opacity: .8;
 }
+/* Scope toggle in the reflog header: this branch's own movements vs HEAD's,
+   which is where checkouts land. Same palette rules as the search switches. */
+.reflog-tabs {
+    flex: none;
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 6px;
+    background: var(--vscode-input-background, rgba(128, 128, 128, .12));
+}
+.reflog-tab {
+    flex: none;
+    height: 20px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground, #888);
+    font-family: var(--vscode-font-family, sans-serif);
+    font-size: 11.5px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.reflog-tab:hover:not(:disabled):not(.on) {
+    color: var(--vscode-foreground, #cccccc);
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, .25));
+}
+.reflog-tab.on {
+    background: var(--vscode-list-activeSelectionBackground, rgba(0, 127, 212, .22));
+    color: var(--vscode-textLink-foreground, #4ea3ff);
+    box-shadow: inset 0 0 0 1px var(--gc-sel-accent);
+    font-weight: 600;
+}
+.reflog-tab:disabled {
+    opacity: .45;
+    cursor: default;
+}
+/* Waiting on the host's re-read: the rows stay put so the box does not jump. */
+.reflog-busy {
+    opacity: .55;
+    transition: opacity 0.15s ease;
+}
+.reflog-empty {
+    padding: 28px 16px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground, #888);
+}
 .push-commit-msg {
     flex: 1;
     min-width: 0;

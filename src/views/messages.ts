@@ -173,11 +173,13 @@ export type ExtToWebviewMessage =
     | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
     | {
         command: 'queryCancelled';
-        kind: 'detail' | 'preview';
+        kind: 'detail' | 'preview' | 'reflog';
         hashes?: string[];
         hash?: string;
         stash?: number;
         path?: string;
+        /** Scope the cancelled reflog read was for (`kind: 'reflog'`). */
+        scope?: string;
     }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'prependCommits'; commits: GraphCommit[]; hasMoreAbove: boolean }
@@ -352,6 +354,8 @@ export type WebviewToExtMessage =
         worktreePath?: string;
     }
     | { command: 'dialogAction'; action: string }
+    /** The reflog dialog's scope toggle: 'HEAD' or a branch name. */
+    | { command: 'reflogScope'; scope: string }
     | { command: 'squashMessageResponse'; message?: string }
     | { command: 'saveViewState'; state: PersistedViewState }
     | { command: 'pushDialogAction'; action: string; force?: boolean }

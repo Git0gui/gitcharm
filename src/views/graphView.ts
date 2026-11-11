@@ -1423,6 +1423,22 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // selected when it is still on the first page of the branch.
                     await this._withCancellableGitQuery(() => this._reload(false, true));
                     break;
+                case 'reflogScope': {
+                    // The dialog's toggle. Unlike the initial open, an empty scope
+                    // still has to reach the webview: the dialog is already on
+                    // screen and must say "nothing here" in place instead of
+                    // vanishing, which would look like the toggle closed it.
+                    const scope = message.scope;
+                    if (!scope) { break; }
+                    await this._withCancellableGitQuery(
+                        async () => {
+                            const entries = await this._gitService.getReflog(scope);
+                            this.showReflog(scope, entries);
+                        },
+                        () => this._post({ command: 'queryCancelled', kind: 'reflog', scope })
+                    );
+                    break;
+                }
                 case 'selectCommit':
                     this._postLoading('detail', true);
                     try {
@@ -2209,10 +2225,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await vscode.commands.executeCommand('idea-git.stashSave');
                     return;
                 case 'reflog': {
-                    // Read-only view. The toolbar follows the branch the commit
+                    // Read-only view. The toolbar opens on the branch the commit
                     // list is scoped to; with no branch selected it falls back
-                    // to the checked-out branch, so the dialog never shows
-                    // HEAD's checkout history.
+                    // to the checked-out branch. HEAD's checkout history is one
+                    // toggle away inside the dialog (`reflogScope`).
                     const scope = message.branch || await this._gitService.getCurrentBranch().catch(() => '');
                     await vscode.commands.executeCommand('idea-git.showReflog', scope ? { name: scope } : undefined);
                     return;

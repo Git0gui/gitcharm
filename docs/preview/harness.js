@@ -60,6 +60,14 @@
                     // stub hands over the same shape rather than a raw patch.
                     var pv = P.previews[msg.path] || P.previews.default;
                     send(Object.assign({ command: 'filePreviewResponse', hash: msg.hash, stash: msg.stash, path: msg.path }, pv));
+                } else if (msg.command === 'reflogScope') {
+                    // The dialog's toggle re-reads git; the stub answers with the
+                    // other scope's records so the tab actually moves.
+                    send({
+                        command: 'showReflog',
+                        scope: msg.scope,
+                        entries: P.reflog[msg.scope === 'HEAD' ? 'HEAD' : 'branch'] || []
+                    });
                 } else if (msg.command === 'getPushAllFiles') {
                     send({ command: 'pushFilesResponse', hash: '__all__', files: P.pushFiles['__all__'] });
                 } else if (msg.command === 'getCommitFilesForPush') {

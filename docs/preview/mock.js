@@ -190,6 +190,22 @@
         select: 'bd864ce52328c724b8506009414e9b70bf436ff4'
     };
 
+    // Two scopes of the same dialog: a branch only records what moved it, HEAD
+    // also records every checkout, so the lists are genuinely different sets.
+    var reflogEntries = {
+        branch: [
+            { ref: 'main@{0}', hash: '153fcf858610d56a4daf93ef269427a52809913e', shortHash: '153fcf8', action: 'commit', message: '合入 0.2.3：只读查询按得停，右键菜单按频率与仓库能力裁剪', date: '2026-11-08T16:42:10+08:00' },
+            { ref: 'main@{1}', hash: '2a4a5c4b91d0e7f6a3c8d5e2b1f0a9c8d7e6b5a4', shortHash: '2a4a5c4', action: 'merge', message: 'v0.2.3/reflog-head-search: Merge', date: '2026-11-08T16:40:02+08:00' },
+            { ref: 'main@{2}', hash: '0becc52d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b', shortHash: '0becc52', action: 'reset', message: 'moving to 0becc52', date: '2026-11-07T21:15:44+08:00' }
+        ],
+        HEAD: [
+            { ref: 'HEAD@{0}', hash: '153fcf858610d56a4daf93ef269427a52809913e', shortHash: '153fcf8', action: 'checkout', message: 'moving from v0.2.3/menu-order to main', date: '2026-11-08T16:45:31+08:00' },
+            { ref: 'HEAD@{1}', hash: '34d4802a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e', shortHash: '34d4802', action: 'commit', message: '优化查询取消与右键菜单排序', date: '2026-11-08T15:02:09+08:00' },
+            { ref: 'HEAD@{2}', hash: '736c4bbf1e2d3c4b5a69788796a5b4c3d2e1f0a9', shortHash: '736c4bb', action: 'checkout', message: 'moving from main to v0.2.3/menu-order', date: '2026-11-07T09:11:20+08:00' },
+            { ref: 'HEAD@{3}', hash: 'cb9aed5a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e', shortHash: 'cb9aed5', action: 'rebase', message: 'rebase finished: returning to refs/heads/main', date: '2026-11-06T18:30:55+08:00' }
+        ]
+    };
+
     var scenes = {
         main: base,
         /** Operation status bar above the branch tree (rebase in progress). */
@@ -247,6 +263,21 @@
                 { do: 'style', sel: '#left', prop: 'width', value: '430px' },
                 { do: 'style', sel: '#right', prop: 'width', value: '600px' }
             ]
+        }),
+        /** Reflog dialog as the toolbar opens it: scoped to the selected branch. */
+        reflogBranch: Object.assign({}, base, {
+            steps: [{ msg: { command: 'showReflog', scope: 'main', entries: reflogEntries.branch } }]
+        }),
+        /** The same dialog after the HEAD tab: checkout records the branch never had. */
+        reflogHead: Object.assign({}, base, {
+            steps: [
+                { msg: { command: 'showReflog', scope: 'main', entries: reflogEntries.branch } },
+                { do: 'click', sel: '#reflog-dialog .reflog-tab[data-scope="HEAD"]' }
+            ]
+        }),
+        /** A scope with no records answers in place instead of closing the dialog. */
+        reflogEmpty: Object.assign({}, base, {
+            steps: [{ msg: { command: 'showReflog', scope: 'main', entries: [] } }]
         }),
         /** Commit row context menu, single selection. */
         commitMenu: Object.assign({}, base, {
@@ -514,12 +545,12 @@
                 }
             ]
         }),
-        /** Reflog dialog — the mist操作 rescue view. */
+        /** Reflog dialog — the 误操作 rescue view, opened on HEAD. */
         reflog: Object.assign({}, base, {
             steps: [{
                 msg: {
                     command: 'showReflog',
-                    scope: 'HEAD（含切换分支的记录）',
+                    scope: 'HEAD',
                     entries: [
                         { ref: 'HEAD@{0}', hash: '153fcf858610d56a4daf93ef269427a52809913e', shortHash: '153fcf8', action: 'commit', message: '发布准备：版本号升到 0.0.7，系统代理那条从 0.0.6 拆出来单独成段', date: '2026-10-15T22:55:45+08:00' },
                         { ref: 'HEAD@{1}', hash: 'bd864ce52328c724b8506009414e9b70bf436ff4', shortHash: 'bd864ce', action: 'checkout', message: 'moving from main to feat/system-proxy-hint', date: '2026-10-15T22:10:02+08:00' },
@@ -598,6 +629,7 @@
         stashFiles: stashFiles,
         details: details,
         pushFiles: pushFiles,
+        reflog: reflogEntries,
         previews: previews
     };
 })();
