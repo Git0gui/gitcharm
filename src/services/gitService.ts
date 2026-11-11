@@ -1428,22 +1428,31 @@ export class GitService {
      * authoritative and updated synchronously by checkout / `branch -m` (even from
      * another terminal), so no subprocess and no cached view is involved. Detached
      * HEAD has no branch name and returns an empty string.
+     *
+     * Synchronous because the panel's default scope must be settled before the
+     * first history query starts — an await there would let the prefetch and the
+     * first open warm two different scopes. `getCurrentBranch` adds the plumbing
+     * fallback for a git layout this cannot read.
      */
+    readCurrentBranch(): string {
+        const repo = this._resolveRoot();
+        const gitDir = repo ? resolveGitDir(repo) : undefined;
+        if (!gitDir) {return '';}
+
+        // During an interactive rebase HEAD is detached; the branch we started
+        // from is parked in rebase-merge/head-name as a full ref path.
+        const headName = this._readGitFile(path.join(gitDir, 'rebase-merge', 'head-name'));
+        const rebasing = headName ? parseRefPath(headName) : undefined;
+        if (rebasing) {return rebasing;}
+
+        return parseSymbolicRef(this._readGitFile(path.join(gitDir, 'HEAD')) ?? '') ?? '';
+    }
+
+    /** `readCurrentBranch`, with one plumbing call when the layout is unreadable. */
     async getCurrentBranch(): Promise<string> {
         const repo = this._resolveRoot();
         if (!repo) {return '';}
-
-        const gitDir = resolveGitDir(repo);
-        if (gitDir) {
-            // During an interactive rebase HEAD is detached; the branch we started
-            // from is parked in rebase-merge/head-name as a full ref path.
-            const headName = this._readGitFile(path.join(gitDir, 'rebase-merge', 'head-name'));
-            const rebasing = headName ? parseRefPath(headName) : undefined;
-            if (rebasing) {return rebasing;}
-
-            const branch = parseSymbolicRef(this._readGitFile(path.join(gitDir, 'HEAD')) ?? '');
-            return branch ?? '';
-        }
+        if (resolveGitDir(repo)) {return this.readCurrentBranch();}
 
         // Layout we cannot read (worktree pointer that no longer resolves): one
         // plumbing call, still without activating any other extension.

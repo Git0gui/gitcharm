@@ -510,9 +510,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // The remembered branch is what the view restores, so the warmed graph
         // must be the same one — `_firstPageRows` reads `_branch`, not a parameter.
         // A branch deleted since then leaves the scope at all refs.
-        const remembered = this._restorableState()?.branch;
+        const saved = this._restorableState();
+        const remembered = saved?.branch;
         if (remembered && this._gitService.getBranchTipHash(remembered)) {
             this._branch = remembered;
+        } else if (!saved) {
+            this._branch = this._defaultBranchScope();
         }
 
         // Kicked off before the guard below exists: `_firstPageRows` waits for
@@ -608,6 +611,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             local: details.local.map(b => b.name),
             remote: details.remote.map(b => b.name),
             currentBranch: details.current,
+            // The first open posts this instead of setData, so the tree learns the
+            // scope here — otherwise it would highlight "all branches" over a list
+            // that only holds the checked-out branch's commits.
+            selectedBranch: this._branch || '',
             ...this._branchMarks(details.current)
         });
     }
@@ -675,16 +682,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Everything that belonged to the previous root is dropped: branch, selection,
      * in-progress operation and the pending view-state snapshot. Git lets those
      * names repeat across projects, so a borrowed one would read as real data in
-     * the wrong repository. The text filters stay put — they are what the user
-     * typed, not repository state, and clearing them host-side would leave the
-     * input boxes disagreeing with the list they filter.
+     * the wrong repository. The new root opens on its own checked-out branch, the
+     * same default a first open uses. The text filters stay put — they are what
+     * the user typed, not repository state, and clearing them host-side would
+     * leave the input boxes disagreeing with the list they filter.
      */
     async switchRepository(rootPath: string): Promise<void> {
         const current = this._gitService.repositoryPath;
         if (!rootPath || (current && repositoryKey(current) === repositoryKey(rootPath))) {return;}
 
         this._gitService.selectRepository(rootPath);
-        this._branch = undefined;
+        this._branch = this._defaultBranchScope();
         this._lastKnownBranch = undefined;
         this._lastKnownTip = undefined;
         this._lastInProgress = null;
@@ -1688,6 +1696,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         const savedView = this._restorableState();
         if (savedView?.branch) {
             this._branch = savedView.branch;
+        } else if (!savedView) {
+            this._branch = this._defaultBranchScope();
         }
 
         // Step 2.5: paint the remembered first page before any git command runs.
@@ -2363,6 +2373,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         } catch (error) {
             vscode.window.showErrorMessage(t('view.actionFailed', { error: formatGitError(error) }));
         }
+    }
+
+    /**
+     * The scope a panel with no remembered choice opens on: the checked-out
+     * branch, not every ref. "All branches" is a click the user makes, and the
+     * view snapshot records it as an empty branch name — so only a missing
+     * snapshot lands here. Detached HEAD has no branch to name and keeps all refs.
+     */
+    private _defaultBranchScope(): string | undefined {
+        return this._gitService.readCurrentBranch() || undefined;
     }
 
     /**

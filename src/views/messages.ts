@@ -148,6 +148,8 @@ export type ExtToWebviewMessage =
         local: string[];
         remote: string[];
         currentBranch?: string;
+        /** Scope the commit list is on; '' means every branch. The tree mirrors it. */
+        selectedBranch?: string;
         /** Branches the user starred; empty when this root has none. */
         favorites?: string[];
         /** Branches HEAD recently moved through, newest first — git's own record. */

@@ -3927,6 +3927,11 @@ window.addEventListener('message', function (ev) {
         if (m.currentBranch) {
             state.current = m.currentBranch;
         }
+        // The host owns the scope: a first open sends it here rather than through
+        // setData, and '' is a real answer (every branch), not a missing field.
+        if (m.selectedBranch !== undefined) {
+            state.selectedBranch = m.selectedBranch;
+        }
         // The selected row may have been deleted outside the panel; keep the
         // highlight only while the branch is still in one of the lists.
         if (state.selectedBranch && state.local.indexOf(state.selectedBranch) < 0 &&
