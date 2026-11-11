@@ -297,6 +297,14 @@
         reflogEmpty: Object.assign({}, base, {
             steps: [{ msg: { command: 'showReflog', scope: 'main', entries: [] } }]
         }),
+        /**
+         * The list is on another branch than the checkout: the dialog follows the
+         * list, so the tab reads "selected branch" and the subtitle names it.
+         */
+        reflogSelected: Object.assign({}, base, {
+            selectedBranch: 'feat/system-proxy-hint',
+            steps: [{ msg: { command: 'showReflog', scope: 'feat/system-proxy-hint', entries: reflogEntries.branch } }]
+        }),
         /** Commit row context menu, single selection. */
         commitMenu: Object.assign({}, base, {
             select: '091e77ed2a299884c744ed094c735b7e71702521',

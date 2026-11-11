@@ -1,7 +1,8 @@
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
+import { setLocale, t } from '../i18n';
 
 /**
  * The reflog dialog answers two questions — "what moved this branch" and "what
@@ -82,5 +83,30 @@ describe('reflog scope toggle', () => {
             /reflogState\.pending === m\.scope/.test(cancelled[0]),
             'rapid tab clicks queue two reads; the first cancellation must not undim the second'
         );
+    });
+});
+
+describe('the branch tab is the selection, not the checkout', () => {
+    afterEach(() => setLocale('zh-cn'));
+
+    it('both entry points ask for the branch the commit list is scoped to', () => {
+        const scope = webview.match(/function reflogBranchScope\(\) \{[\s\S]*?\n\}/);
+        assert.ok(scope, 'reflogBranchScope must exist');
+        assert.match(
+            scope[0],
+            /state\.selectedBranch \|\| state\.current/,
+            'the checked-out branch is only the fallback for the all-branches view'
+        );
+        const toolbar = webview.match(/getElementById\('btn-reflog'\)\.addEventListener\('click'[\s\S]*?\n\}\);/);
+        assert.ok(toolbar, 'the toolbar button must have a click handler');
+        assert.match(toolbar[0], /action: 'reflog', branch: state\.selectedBranch \|\| ''/);
+    });
+
+    it('the label says which branch it means, in both languages', () => {
+        assert.equal(t('reflog.tabBranch'), '选中分支');
+        assert.match(t('reflog.tabBranchHint'), /提交列表所选分支/);
+        setLocale('en');
+        assert.equal(t('reflog.tabBranch'), 'Selected branch');
+        assert.match(t('reflog.tabBranchHint'), /selected in the list/);
     });
 });
