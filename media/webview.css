@@ -825,8 +825,8 @@ body.tag-sync-open #resizer-right { z-index: 2100; }
 .bitem.cur > svg { color: var(--vscode-textLink-foreground, #4da3ff); }
 .bitem.sel.cur .bname { color: inherit; }
 .bitem.hl { background: var(--vscode-list-hoverBackground, #2a2d2e); }
-/* The "all branches" row is a scope switch, not a ref: it sits right under the
-   HEAD section, is picked with a single click, and never triggers a checkout. */
+/* The "all branches" row is a scope switch, not a ref: it leads the column above
+   the HEAD section, is picked with a single click, and never triggers a checkout. */
 .allitem {
     display: flex;
     align-items: center;
@@ -1163,6 +1163,15 @@ canvas.graph-canvas {
     text-overflow: ellipsis;
     font-size: 12.5px;
     transition: color 0.15s ease;
+}
+/* The search term inside a subject. A browser's default <mark> is a fixed yellow
+   with black text and fights every theme; the editor's own find-match colour is
+   what the user already reads as "this is the thing I searched for". No padding:
+   the subject ellipsizes, and extra width would move the cut point. */
+.msg mark.hit {
+    background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 169, 68, 0.35));
+    color: inherit;
+    border-radius: 2px;
 }
 .avatar {
     width: 20px;

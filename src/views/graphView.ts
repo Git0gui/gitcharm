@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, FileStat, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
-import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, RevealOptions, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
+import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, RevealOptions, SubjectHighlight, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
@@ -31,6 +31,8 @@ interface GraphPayload {
     recent: string[];
     /** Set when the rows are rooted at a revealed commit rather than a branch tip. */
     rooted?: { hash: string; filtersPaused: boolean };
+    /** The text filter these rows answered to, so the panel can mark its hits. */
+    highlight?: SubjectHighlight;
 }
 
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
@@ -2414,6 +2416,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         return this._isRootedList() ? {} : this._filters;
     }
 
+    /**
+     * The term to mark inside each subject, read off the filters the rows were
+     * actually listed with: a rooted page pauses them, and an author or path
+     * filter narrows by something a subject does not contain. Trimmed the same
+     * way `git log --grep` receives it, so the mark and the hit agree.
+     */
+    private _subjectHighlight(): SubjectHighlight | undefined {
+        const f = this._pageFilters();
+        const text = f.text?.trim();
+        return text ? { text, regex: !!f.regex, caseSensitive: !!f.caseSensitive } : undefined;
+    }
+
     /** Whether anything is narrowing the list — enough to be worth mentioning. */
     private _hasActiveFilters(): boolean {
         const f = this._filters;
@@ -2630,7 +2644,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             // screen message, so a re-shown panel restores it with the rows.
             rooted: this._isRootedList() && this._revRoot
                 ? { hash: this._revRoot.rev, filtersPaused: this._hasActiveFilters() }
-                : undefined
+                : undefined,
+            highlight: this._subjectHighlight()
         };
     }
 
@@ -2831,7 +2846,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 searchContext: hasSearchFilter ? {
                     query: this._filters.text ?? this._filters.path,
                     resultCount: first.commits.length
-                } : undefined
+                } : undefined,
+                highlight: this._subjectHighlight()
             });
         } catch (error) {
             if (isGitCommandCancelled(error)) {return;}
@@ -2957,7 +2973,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._post({
                 command: 'setCommits',
                 commits: first.commits,
-                hasMore: this._hasMore
+                hasMore: this._hasMore,
+                highlight: this._subjectHighlight()
             });
             this._postFilterMirror();
             const postTime = Date.now() - postStart;

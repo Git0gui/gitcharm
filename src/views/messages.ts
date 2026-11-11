@@ -106,6 +106,21 @@ export interface RevealOptions {
     endLine?: number;
 }
 
+/**
+ * The text filter that produced a batch of rows, so the panel can mark the hits
+ * inside each subject. It travels with the rows instead of being read off the
+ * search box: a typed draft is not an applied filter, and a re-show paints rows
+ * before the filter mirror lands. Absent when nothing narrows the list — a
+ * rooted page pauses the filters, so it must not highlight either.
+ */
+export interface SubjectHighlight {
+    text: string;
+    /** git was handed -E instead of -F. */
+    regex: boolean;
+    /** git was handed no -i. */
+    caseSensitive: boolean;
+}
+
 /** Messages sent from the extension host to the webview. */
 export type ExtToWebviewMessage =
     | {
@@ -126,6 +141,7 @@ export type ExtToWebviewMessage =
         /** External history change: re-render rows without clearing what is selected. */
         preserveSelection?: boolean;
         searchContext?: { query?: string; resultCount?: number };
+        highlight?: SubjectHighlight;
         /**
          * The rows are rooted at a revealed commit instead of a branch tip, so the
          * panel can say so and offer the way back. `filtersPaused` is why the typed
@@ -184,6 +200,7 @@ export type ExtToWebviewMessage =
         hasMoreAbove?: boolean;
         rooted?: { hash: string; filtersPaused: boolean };
         searchContext?: { query?: string; resultCount?: number };
+        highlight?: SubjectHighlight;
     }
     | {
         command: 'queryCancelled';

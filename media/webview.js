@@ -206,6 +206,13 @@ var state = {
      * banner that says so carries { hash, filtersPaused }.
      */
     rooted: null,
+    /**
+     * The text filter that produced the rows on screen ({ text, regex,
+     * caseSensitive }), or null. It arrives with the rows rather than being read
+     * off the search box: a typed draft is not an applied filter, and a re-show
+     * paints rows before the filter mirror lands.
+     */
+    subjectMark: null,
     /** Paths of the merged file list that exist in the working tree. */
     multiExistingPaths: [],
     // Which row the arrow keys are on in the tree and file list. Kept as an
@@ -799,14 +806,15 @@ function renderTree() {
         }
         head += resumeHtml;
     }
-    var tree = '<div id="btree-inner">' + head +
-        // "All branches" is a scope, not a ref: one history holding every branch,
-        // which is the only way to search for a commit you cannot place. It sits
-        // right under HEAD so switching scopes is one click, and it carries its
-        // own class because .bitem would hand it to the double-click handler
-        // that expects a ref to check out.
-        '<div class="allitem' + (state.selectedBranch ? '' : ' sel') + '" data-all-branches="1" data-title="' + esc(T('w.allBranchesHint')) + '">' +
-        I_ALL_BRANCHES + '<span class="bname">' + esc(T('w.allBranches')) + '</span></div>' +
+    // "All branches" is a scope, not a ref: one history holding every branch,
+    // which is the only way to search for a commit you cannot place. It leads the
+    // column, above HEAD: it is the widest scope the list can show and the row a
+    // search usually starts from, so it should not be below a section that can be
+    // collapsed out of sight. It carries its own class because .bitem would hand
+    // it to the double-click handler that expects a ref to check out.
+    var allItem = '<div class="allitem' + (state.selectedBranch ? '' : ' sel') + '" data-all-branches="1" data-title="' + esc(T('w.allBranchesHint')) + '">' +
+        I_ALL_BRANCHES + '<span class="bname">' + esc(T('w.allBranches')) + '</span></div>';
+    var tree = '<div id="btree-inner">' + allItem + head +
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
         stashSection() + worktreeSection() + '</div>';
@@ -869,6 +877,48 @@ function refChipHtml(name, extra, tags) {
     return '<span class="' + cls + '"' + (isTag ? ' data-tag="' + esc(name) + '"' : '') + '>' +
         '<span class="chip-name">' + esc(name) + '</span>' +
         (extra > 0 ? '<span class="chip-more">+' + extra + '</span>' : '') + '</span>';
+}
+
+/** Where the search term sits inside one subject, as ranges in the raw text.
+ *  Literal mode escapes the term so it stays a substring; ".*" reads it as a
+ *  regex, which is what git was handed with -E. The two engines are not identical
+ *  (POSIX classes, backreferences), so a pattern JS cannot compile marks nothing
+ *  — the rows are still git's answer, only the marking is best-effort. */
+function subjectMarkRanges(line, mark) {
+    var source = mark.regex ? mark.text : mark.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var re;
+    try { re = new RegExp(source, mark.caseSensitive ? 'g' : 'gi'); }
+    catch (err) { return []; }
+    var ranges = [];
+    var m;
+    // A subject is one line, so the cap is only insurance against a pathological
+    // pattern turning one row into thousands of elements.
+    while (ranges.length < 100 && (m = re.exec(line)) !== null) {
+        if (m[0]) { ranges.push([m.index, m.index + m[0].length]); }
+        // A zero-width match ("a*", "^") would otherwise spin on the same index.
+        if (re.lastIndex === m.index) { re.lastIndex++; }
+    }
+    return ranges;
+}
+
+/** The subject as HTML: escaped text with the hits wrapped in <mark>. Matches are
+ *  found in the raw string and every segment is escaped on its own — escaping
+ *  first would hide a term containing & < > " ' from the match, and wrapping
+ *  inside escaped text could cut an entity in half. */
+function subjectHtml(message) {
+    var line = String(message == null ? '' : message).split('\n')[0];
+    var mark = state.subjectMark;
+    if (!mark || !mark.text) { return esc(line); }
+    var ranges = subjectMarkRanges(line, mark);
+    if (ranges.length === 0) { return esc(line); }
+    var out = '';
+    var at = 0;
+    for (var i = 0; i < ranges.length; i++) {
+        out += esc(line.slice(at, ranges[i][0])) +
+            '<mark class="hit">' + esc(line.slice(ranges[i][0], ranges[i][1])) + '</mark>';
+        at = ranges[i][1];
+    }
+    return out + esc(line.slice(at));
 }
 
 function renderRows(appendOnly) {
@@ -987,8 +1037,8 @@ function renderRows(appendOnly) {
         // Branches and tags deliberately stay out of this tooltip: they belong to
         // the badge cell, whose hover list shows every ref with its own icon.
 
-        // Display only first line of commit message in list
-        var displayMessage = esc(c.message).split('\n')[0];
+        // Display only first line of commit message in list, with the search hits marked
+        var displayMessage = subjectHtml(c.message);
         html += '<div class="row' + (c.hash === state.selectedHash ? ' sel' : '') + '" data-hash="' + esc(c.hash) + '">';
         html += '<div class="garea" style="width:' + graphW + 'px"></div>';
         // Subject first, badges after it — the order IDEA's log uses, so the
@@ -3704,6 +3754,7 @@ window.addEventListener('message', function (ev) {
         state.loadingMoreAbove = false;
         state.revealFile = '';
         state.rooted = m.rooted || null;
+        state.subjectMark = m.highlight || null;
         renderRootedBar();
         setTopLoader(false);
         state.headHash = m.headHash || '';
@@ -4047,6 +4098,7 @@ window.addEventListener('message', function (ev) {
         state.loadingMoreAbove = false;
         setTopLoader(false);
         state.rooted = m.rooted || null;
+        state.subjectMark = m.highlight || null;
         renderRootedBar();
         // A selection the new list still holds keeps its detail; one it no
         // longer holds must not keep pointing at a row that is gone.

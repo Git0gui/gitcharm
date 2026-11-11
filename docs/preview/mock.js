@@ -223,7 +223,7 @@
         favFilter: Object.assign({}, base, {
             steps: [{ do: 'click', sel: '#fav-filter' }]
         }),
-        /** Every branch in one history: the scope row under HEAD carries the selection. */
+        /** Every branch in one history: the scope row leads the column, above HEAD. */
         allBranches: Object.assign({}, base, {
             selectedBranch: ''
         }),
@@ -258,6 +258,29 @@
         searchResult: Object.assign({}, base, {
             steps: [
                 { do: 'value', sel: '#f-search', value: '修复' },
+                { do: 'key', sel: '#f-search', key: 'Enter' }
+            ]
+        }),
+        /**
+         * The term marked inside each subject. The mark comes from the filter that
+         * produced these rows — it rides with setCommits, not with the box — so a
+         * hit in the middle of a subject is wrapped while the rest of the line
+         * stays escaped text.
+         */
+        searchHighlight: Object.assign({}, base, {
+            steps: [
+                { do: 'value', sel: '#f-search', value: '提交' },
+                { do: 'key', sel: '#f-search', key: 'Enter' }
+            ]
+        }),
+        /**
+         * The same marking with both switches lit: an extended regex, matched
+         * case-sensitively. The mirror lights them, so this is the frame a re-shown
+         * panel produces before Enter re-runs the query with those modes.
+         */
+        searchHighlightRegex: Object.assign({}, base, {
+            steps: [
+                { msg: { command: 'syncFilters', filters: { text: 'Reflog|新增', regex: true, caseSensitive: true, author: '', path: '', from: '', to: '' } } },
                 { do: 'key', sel: '#f-search', key: 'Enter' }
             ]
         }),

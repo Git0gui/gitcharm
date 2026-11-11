@@ -73,16 +73,30 @@
                     // runs, then setCommits — the branch tree is never re-sent.
                     send({ command: 'loading', area: 'search', on: true });
                     setTimeout(function () {
-                        var term = (msg.text || '').toLowerCase();
+                        var term = (msg.text || '').trim();
+                        // The same three modes the host hands git: -F substring, -E
+                        // regex, and -i unless "Cc" is lit. The rows and the marks
+                        // inside them must come from one answer, or the frame lies.
                         var rows = s.commits.filter(function (c) {
-                            return !term || (c.message || '').toLowerCase().indexOf(term) >= 0;
+                            var subject = c.message || '';
+                            if (!term) { return true; }
+                            if (msg.regex) {
+                                try { return new RegExp(term, msg.caseSensitive ? '' : 'i').test(subject); }
+                                catch (err) { return false; }
+                            }
+                            return msg.caseSensitive
+                                ? subject.indexOf(term) >= 0
+                                : subject.toLowerCase().indexOf(term.toLowerCase()) >= 0;
                         });
                         send({
                             command: 'setCommits',
                             commits: rows,
                             hasMore: false,
                             hasMoreAbove: false,
-                            searchContext: { query: msg.text, resultCount: rows.length }
+                            searchContext: { query: msg.text, resultCount: rows.length },
+                            highlight: term
+                                ? { text: term, regex: !!msg.regex, caseSensitive: !!msg.caseSensitive }
+                                : undefined
                         });
                         send({ command: 'loading', area: 'search', on: false });
                     }, s.searchDelay || 700);
