@@ -170,7 +170,19 @@ export type ExtToWebviewMessage =
         /** Repository the panel is showing right now, out of `repositories`. */
         currentRepository?: string;
     }
-    | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
+    | {
+        command: 'setCommits';
+        commits: GraphCommit[];
+        hasMore: boolean;
+        /**
+         * Rows-only repaint (a search): the branch tree on screen is still true,
+         * so it is not rebuilt — but everything that belonged to the old list
+         * (upward window, rooted banner, result count) rides along with the rows.
+         */
+        hasMoreAbove?: boolean;
+        rooted?: { hash: string; filtersPaused: boolean };
+        searchContext?: { query?: string; resultCount?: number };
+    }
     | {
         command: 'queryCancelled';
         kind: 'detail' | 'preview' | 'reflog';

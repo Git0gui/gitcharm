@@ -244,6 +244,24 @@
             ]
         }),
         /**
+         * A search in flight: the old list stays readable under a hairline, not
+         * under the full-cover blur. The stub's answer lands after the capture.
+         */
+        searching: Object.assign({}, base, {
+            searchDelay: 5000,
+            steps: [
+                { do: 'value', sel: '#f-search', value: '修复' },
+                { do: 'key', sel: '#f-search', key: 'Enter' }
+            ]
+        }),
+        /** The same search answered: rows replaced, tree untouched, count announced. */
+        searchResult: Object.assign({}, base, {
+            steps: [
+                { do: 'value', sel: '#f-search', value: '修复' },
+                { do: 'key', sel: '#f-search', key: 'Enter' }
+            ]
+        }),
+        /**
          * IDEA's two switches lit inside the search field: the term is handed to git
          * as an extended regex, case-sensitively. The echo from the host is what
          * lights them, so the frame is the one a user actually sees after Enter.

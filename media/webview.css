@@ -1006,6 +1006,28 @@ body.tag-sync-open #resizer-right { z-index: 2100; }
     backdrop-filter: blur(4px);
 }
 .busy.on { display: flex; }
+/* A search keeps the old list readable and clickable: only a hairline above it
+   moves, instead of the full-cover blur the other loads use. */
+.search-busy {
+    display: none;
+    flex: none;
+    height: 2px;
+    overflow: hidden;
+    position: relative;
+}
+.search-busy.on { display: block; }
+.search-busy.on::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    background: var(--vscode-progressBar-background, #0e70c0);
+    animation: search-slide 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes search-slide {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(350%); }
+}
 .row {
     display: flex;
     align-items: center;

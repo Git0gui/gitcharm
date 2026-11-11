@@ -1386,24 +1386,19 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     vscode.window.setStatusBarMessage(message.message, message.timeout || 3000);
                     break;
                 case 'setFilters':
-                    // Show loading indicator during search
-                    this._postLoading('search', true);
-                    try {
-                        this._filters = {
-                            text: (message.text || '').trim() || undefined,
-                            regex: !!message.regex,
-                            caseSensitive: !!message.caseSensitive,
-                            author: (message.author || '').trim() || undefined,
-                            from: message.from || undefined,
-                            to: message.to || undefined,
-                            path: (message.path || '').trim() || undefined
-                        };
-                        await this._withCancellableGitQuery(() => this._reload());
-                        // _reload will send setData with searchContext
-                        // Frontend will handle showing the result count
-                    } finally {
-                        this._postLoading('search', false);
-                    }
+                    this._filters = {
+                        text: (message.text || '').trim() || undefined,
+                        regex: !!message.regex,
+                        caseSensitive: !!message.caseSensitive,
+                        author: (message.author || '').trim() || undefined,
+                        from: message.from || undefined,
+                        to: message.to || undefined,
+                        path: (message.path || '').trim() || undefined
+                    };
+                    // Rows only: a filter changes which commits answer, not what
+                    // the repository is, so the tree and its arrows stay as they
+                    // are instead of being re-read on every Enter.
+                    await this._withCancellableGitQuery(() => this._reloadRows());
                     break;
                 case 'loadMore':
                     await this._withCancellableGitQuery(
@@ -2770,6 +2765,64 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * The search path: repaint rows without re-reading the repository. The branch
+     * tree, HEAD and operation state on screen are still true while a filter
+     * narrows the list, and `_collect`'s extra reads plus the tree rebuild cost
+     * more than the search itself on a warm cache. Only the bookkeeping a
+     * rows-only paint owns is committed here; what it does not deliver (operation
+     * state, branch names) it must not baseline either, or the watcher's change
+     * re-check would compare against a state the panel never received.
+     */
+    private async _reloadRows(force: boolean = false): Promise<void> {
+        if (!this._view) {return;}
+        const ticket = ++this._dataTicket;
+        // Same rule as _reload: a search answers from the branch tip, never from
+        // a rooted window, or new commits could not enter the result set.
+        this._revRoot = undefined;
+        this._hasMoreAbove = false;
+        if (this._repoState !== 'ready') {
+            await this.refreshRepoState();
+            return;
+        }
+        // A vanished selection is structural, not a filter: it needs the tree.
+        if (this._dropVanishedBranch()) {
+            await this._reload(force);
+            return;
+        }
+        this._postLoading('search', true);
+        try {
+            const first = await this._firstPageRows(force);
+            const tip = await this._tipOfDisplayedRev();
+            if (ticket !== this._dataTicket) {return;}
+            this._lastKnownTip = tip;
+            this._loaded = first.pageRows;
+            this._hasMore = first.pageRows >= first.pageLimit;
+            this._pendingCommits = [];
+            this._streamExhausted = false;
+            this._loadedHashes = new Set(first.commits.map(c => c.hash));
+            this._postFilterMirror();
+            const hasSearchFilter = !!this._filters?.text || !!this._filters?.path;
+            this._post({
+                command: 'setCommits',
+                commits: first.commits,
+                hasMore: this._hasMore,
+                hasMoreAbove: false,
+                rooted: undefined,
+                searchContext: hasSearchFilter ? {
+                    query: this._filters.text ?? this._filters.path,
+                    resultCount: first.commits.length
+                } : undefined
+            });
+        } catch (error) {
+            if (isGitCommandCancelled(error)) {return;}
+            if (await this._recoverMissingGit()) {return;}
+            vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
+        } finally {
+            this._postLoading('search', false);
+        }
+    }
+
+    /**
      * Reload only branches without affecting commits.
      */
     private async _reloadBranchesOnly(): Promise<void> {
@@ -3115,6 +3168,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 <span id="rev-text"></span>
                 <button id="rev-leave" type="button"></button>
             </div>
+            <div id="search-busy" class="search-busy"></div>
             <div id="scroll"><div id="top-loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows"></div><div id="loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows-busy" class="busy"><span class="spin"></span>${t('ui.loadingCommits')}</div></div>
         </div>
         <div class="resizer" id="resizer-right"></div>

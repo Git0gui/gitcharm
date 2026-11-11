@@ -2388,13 +2388,25 @@ function setBusy(area, on) {
     // multiCommits uses its own inline loading state in detail panel, don't show rows-busy
     if (area === 'multiCommits') return;
     
-    var el = document.getElementById(area === 'detail' ? 'd-busy' : 'rows-busy');
+    var el = document.getElementById(area === 'detail' ? 'd-busy' : area === 'search' ? 'search-busy' : 'rows-busy');
     if (!el) return;
+    // The hairline keeps its own base class: it is not a .busy overlay.
+    var base = area === 'search' ? 'search-busy' : 'busy';
     if (busyTimers[area]) { clearTimeout(busyTimers[area]); busyTimers[area] = null; }
     if (on) {
-        busyTimers[area] = setTimeout(function () { el.className = 'busy on'; }, 300);
+        busyTimers[area] = setTimeout(function () { el.className = base + ' on'; }, 300);
     } else {
-        el.className = 'busy';
+        el.className = base;
+    }
+}
+/** The result count is a system message, not panel chrome: both the full setData
+ *  and the rows-only search repaint announce it the same way. */
+function announceSearch(ctx) {
+    var count = ctx.resultCount;
+    if (count === 0) {
+        vscode.postMessage({ command: 'showNotification', type: 'info', message: T('w.noCommitFound') });
+    } else {
+        vscode.postMessage({ command: 'showStatusBarMessage', message: T('w.foundMatches', { n: count }), timeout: 3000 });
     }
 }
 document.getElementById('scroll').addEventListener('scroll', function () {
@@ -3737,22 +3749,7 @@ window.addEventListener('message', function (ev) {
         renderOperationStatus();
         
         // Show search result notification if filters are active
-        if (m.searchContext) {
-            var count = m.searchContext.resultCount;
-            if (count === 0) {
-                vscode.postMessage({
-                    command: 'showNotification',
-                    type: 'info',
-                    message: T('w.noCommitFound')
-                });
-            } else {
-                vscode.postMessage({
-                    command: 'showStatusBarMessage',
-                    message: T('w.foundMatches', { n: count }),
-                    timeout: 3000
-                });
-            }
-        }
+        if (m.searchContext) { announceSearch(m.searchContext); }
         
         // Update author dropdown with unique authors from commits
         updateAuthorDropdown(m.commits || []);
@@ -4036,14 +4033,32 @@ window.addEventListener('message', function (ev) {
         // the boxes say the same thing, otherwise an empty box hides an active one.
         applyFilterMirror(m);
     } else if (m.command === 'setCommits') {
-        // Update commits after initial branch display
+        // Rows-only repaint: the initial load, or a search. The branch tree on
+        // screen is still true, so it is not rebuilt — but everything that
+        // belonged to the old list goes with it.
         state.commits = m.commits || [];
         state.hasMore = !!m.hasMore;
-        // Clear multi-select when commit list is refreshed
+        state.hasMoreAbove = !!m.hasMoreAbove;
+        state.loadingMoreAbove = false;
+        setTopLoader(false);
+        state.rooted = m.rooted || null;
+        renderRootedBar();
+        // A selection the new list still holds keeps its detail; one it no
+        // longer holds must not keep pointing at a row that is gone.
+        var keep = !!state.selectedHash && state.commits.some(function (c) { return c.hash === state.selectedHash; });
         state.selectedHashes = [];
         state.lastClickedIndex = -1;
         state.multiCommits = null;
         state.multiFiles = null;
+        state.multiExistingPaths = [];
+        if (!keep) {
+            state.selectedHash = null;
+            state.detail = null;
+            state.stashDetail = null;
+            clearPreview();
+            renderDetail();
+        }
+        if (m.searchContext) { announceSearch(m.searchContext); }
         setLoader(false);
         renderRows();
         applyPendingScroll();

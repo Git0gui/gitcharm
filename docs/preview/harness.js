@@ -68,6 +68,24 @@
                         scope: msg.scope,
                         entries: P.reflog[msg.scope === 'HEAD' ? 'HEAD' : 'branch'] || []
                     });
+                } else if (msg.command === 'setFilters') {
+                    // The host's rows-only search path: a hairline while the query
+                    // runs, then setCommits — the branch tree is never re-sent.
+                    send({ command: 'loading', area: 'search', on: true });
+                    setTimeout(function () {
+                        var term = (msg.text || '').toLowerCase();
+                        var rows = s.commits.filter(function (c) {
+                            return !term || (c.message || '').toLowerCase().indexOf(term) >= 0;
+                        });
+                        send({
+                            command: 'setCommits',
+                            commits: rows,
+                            hasMore: false,
+                            hasMoreAbove: false,
+                            searchContext: { query: msg.text, resultCount: rows.length }
+                        });
+                        send({ command: 'loading', area: 'search', on: false });
+                    }, s.searchDelay || 700);
                 } else if (msg.command === 'getPushAllFiles') {
                     send({ command: 'pushFilesResponse', hash: '__all__', files: P.pushFiles['__all__'] });
                 } else if (msg.command === 'getCommitFilesForPush') {
@@ -102,6 +120,14 @@
                 if (step.do === 'event') {
                     var node = document.querySelector(step.sel);
                     if (node) {node.dispatchEvent(new Event(step.type, { bubbles: true }));}
+                }
+                if (step.do === 'value') {
+                    var input = document.querySelector(step.sel);
+                    if (input) {input.value = step.value;}
+                }
+                if (step.do === 'key') {
+                    var target = document.querySelector(step.sel);
+                    if (target) {target.dispatchEvent(new KeyboardEvent(step.type || 'keydown', { bubbles: true, key: step.key }));}
                 }
                 // Reproduces an inline style a drag would have left behind,
                 // without handing scene data a code-execution hook.
