@@ -60,6 +60,46 @@
                     // stub hands over the same shape rather than a raw patch.
                     var pv = P.previews[msg.path] || P.previews.default;
                     send(Object.assign({ command: 'filePreviewResponse', hash: msg.hash, stash: msg.stash, path: msg.path }, pv));
+                } else if (msg.command === 'reflogScope') {
+                    // The dialog's toggle re-reads git; the stub answers with the
+                    // other scope's records so the tab actually moves.
+                    send({
+                        command: 'showReflog',
+                        scope: msg.scope,
+                        entries: P.reflog[msg.scope === 'HEAD' ? 'HEAD' : 'branch'] || []
+                    });
+                } else if (msg.command === 'setFilters') {
+                    // The host's rows-only search path: a hairline while the query
+                    // runs, then setCommits — the branch tree is never re-sent.
+                    send({ command: 'loading', area: 'search', on: true });
+                    setTimeout(function () {
+                        var term = (msg.text || '').trim();
+                        // The same three modes the host hands git: -F substring, -E
+                        // regex, and -i unless "Cc" is lit. The rows and the marks
+                        // inside them must come from one answer, or the frame lies.
+                        var rows = s.commits.filter(function (c) {
+                            var subject = c.message || '';
+                            if (!term) { return true; }
+                            if (msg.regex) {
+                                try { return new RegExp(term, msg.caseSensitive ? '' : 'i').test(subject); }
+                                catch (err) { return false; }
+                            }
+                            return msg.caseSensitive
+                                ? subject.indexOf(term) >= 0
+                                : subject.toLowerCase().indexOf(term.toLowerCase()) >= 0;
+                        });
+                        send({
+                            command: 'setCommits',
+                            commits: rows,
+                            hasMore: false,
+                            hasMoreAbove: false,
+                            searchContext: { query: msg.text, resultCount: rows.length },
+                            highlight: term
+                                ? { text: term, regex: !!msg.regex, caseSensitive: !!msg.caseSensitive }
+                                : undefined
+                        });
+                        send({ command: 'loading', area: 'search', on: false });
+                    }, s.searchDelay || 700);
                 } else if (msg.command === 'getPushAllFiles') {
                     send({ command: 'pushFilesResponse', hash: '__all__', files: P.pushFiles['__all__'] });
                 } else if (msg.command === 'getCommitFilesForPush') {
@@ -94,6 +134,14 @@
                 if (step.do === 'event') {
                     var node = document.querySelector(step.sel);
                     if (node) {node.dispatchEvent(new Event(step.type, { bubbles: true }));}
+                }
+                if (step.do === 'value') {
+                    var input = document.querySelector(step.sel);
+                    if (input) {input.value = step.value;}
+                }
+                if (step.do === 'key') {
+                    var target = document.querySelector(step.sel);
+                    if (target) {target.dispatchEvent(new KeyboardEvent(step.type || 'keydown', { bubbles: true, key: step.key }));}
                 }
                 // Reproduces an inline style a drag would have left behind,
                 // without handing scene data a code-execution hook.

@@ -166,10 +166,13 @@ console.log(`\nRepository: ${repoPath}`);
 // first paint starts without `git --version`; that is the case the threshold is
 // written for.
 const service = freshService({ 'idea-git.gitAvailable': true });
-// Which scope the panel restores comes from the view snapshot; the probe takes it
-// from the environment so the same run can be repeated against a branch.
-const rememberedBranch = process.env.IDEA_GIT_PROBE_BRANCH || '';
-const scope = rememberedBranch && service.getBranchTipHash(rememberedBranch) ? rememberedBranch : undefined;
+// The panel opens on the checked-out branch when no snapshot remembers another
+// one, so that is the scope measured here. IDEA_GIT_PROBE_BRANCH forces a
+// specific branch to repeat the run against it.
+const forcedBranch = process.env.IDEA_GIT_PROBE_BRANCH || '';
+const scope = forcedBranch && service.getBranchTipHash(forcedBranch)
+    ? forcedBranch
+    : (service.readCurrentBranch() || undefined);
 
 recording = true;
 const paintStart = process.hrtime.bigint();

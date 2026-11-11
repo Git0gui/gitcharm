@@ -22,10 +22,10 @@
 
 ## What's New
 
-### A long query can be cancelled, and menus put the common action first
+### Search is faster, clearer, and starts in the branch you are using
 
-- **Stop waiting on a slow read.** When a history query takes long enough to notice, a notification with a Cancel button appears; pressing it stops the git subprocess that was actually running. Quick lookups show nothing at all, write and network operations are never cancellable, and cancelling closes the spinner cleanly instead of raising an error.
-- **Context menus follow how often you use them.** Viewing, switching and pushing come first, history-changing actions next, deletion last. A repository with no remote no longer offers Pull / Push / Open on remote, a branch with no upstream labels its push action "First push", and right-clicking a commit row no longer collapses the selection you already made.
+- **Search without losing your place.** Results highlight the matching text in commit subjects. Filtering keeps the existing list visible while it updates, avoids re-reading branches and other repository state, and repeated identical searches reuse the cached result.
+- **Open the history you expect.** A first-time panel opens on the checked-out branch. “All Branches” is the first row in the branch tree, and the Reflog dialog can switch between the selected branch’s record and `HEAD`.
 
 ## Overview
 
@@ -75,7 +75,7 @@ GitCharm provides a three-panel Git log view:
 - **Remotes**: add a remote, edit its URL, rename or delete it right from the push dialog; switching the target remote recomputes the commit preview, and pushes / pulls use the branch's actual tracking remote instead of a hard-coded `origin`
 - **Protected branches**: force-pushing or deleting a branch that matches `idea-git.protectedBranches` (default `main` / `master`, `*` wildcards supported) asks for one more confirmation
 - **Commits**: show diff (every file the commit touched, listed in one multi-diff page), cherry-pick (multi-select batch + conflict-resumable), squash (the selection splits into runs of neighbouring commits and each run folds in place — commits you did not select keep their own message and position, so squashing two old commits no longer rewrites the newest one), drop commit, amend message, revert commit (single or several, newest first), reset to commit — also runnable straight from the command palette, which offers the last 50 commits to pick from — open the commit or a branch on the remote web page
-- **Reflog**: one click for the operation log of whatever branch the commit list is currently showing (`HEAD` when none is selected — it is the only place `checkout` and `reset` are recorded, the two operations that hide work) — a dialog where any row can be diffed, branched from or reset to, so work a `reset --hard` hid is recoverable
+- **Reflog**: open the operation log for the selected branch or `HEAD` in one dialog — switch between the two scopes without closing it; any row can be diffed, branched from or reset to, so work a `reset --hard` hid is recoverable
 - **Tags**: create lightweight or annotated tags on a commit, and a **Manage Tags** dialog that lists local and remote tags in one table (remote only / local only / pointing elsewhere / in sync, "Differences only" on by default) with per-row fetch, push, overwrite local, delete local and delete remote — in-sync rows included. Pushing reads the remote first: a tag it already has at the same commit is skipped, one it has at a different commit is never overwritten by a batch, and a tag whose commit is not on that remote's branches is not sent at all. Deleting asks whether the remote goes too (the remote half runs first, so a network failure leaves your local tags untouched). Annotated tags are compared through their peeled commit, so they stay correct after `git gc` and their badges sit on the right commit
 - **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes (optionally including untracked files), and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically; click a stash to list its files (untracked included) in the right pane and preview any file's diff before applying
 - **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes
@@ -99,10 +99,11 @@ GitCharm provides a three-panel Git log view:
 - **Session restore**: reopening the panel within a couple of hours brings back the last selected branch, commit and its file list — down to the file row you were reading and how far that list was scrolled, even if you closed the panel in the same second you clicked it
 - **Keyboard navigation**: Tab moves between the branch tree, commit list and file pane; arrows walk rows, Home / End / PageUp / PageDown jump, Enter opens the diff, and Shift+arrows extend a commit range
 - **Favorites**: mark branches from the branch row's context menu, then use the toolbar button to narrow the tree to just those — the button stays highlighted while the filter is on, and tells you how to mark a branch when nothing is favorited yet
-- **IDEA-style search box**: `.*` treats the keyword as an extended regular expression and `Cc` makes it case-sensitive, both living inside the box so the rule you are searching under is visible while you type. The default is a literal substring match — `( . *` are characters, not syntax — and both switches are part of the filter, so they survive re-showing the panel, a branch switch and a cached page
+- **IDEA-style search box**: `.*` treats the keyword as an extended regular expression and `Cc` makes it case-sensitive, both living inside the box so the rule you are searching under is visible while you type. The default is a literal substring match — `( . *` are characters, not syntax — matching text is highlighted in commit subjects, and both switches are part of the filter, so they survive re-showing the panel, a branch switch and a cached page
+- **Search keeps its context**: filtering leaves the old commit list readable while results load, does not refresh the branch tree or divergence arrows, and avoids the full topology sort used by the unfiltered graph; an identical search reuses its cached page
 - **The filter bar never wraps**: when the commit column narrows, author / path / date move into a `>` popover instead of stacking into two rows and eating a screenful of the list. The chevron lights up when a filter you cannot currently see is still in effect, and the commit column has a minimum width the splitter will not let you squeeze past
 - **An exit for an empty result**: nothing matched means the empty state hands you a "clear all filters" button, and every filter that is actually applied puts an accent edge on its own toolbar control — a short list always has a reason
-- **All branches in one list**: an "All branches" entry under HEAD in the branch tree puts every branch's commits into the same list, so a search spans all of them; when a single-branch filter finds nothing, the empty state offers "Search all branches" instead of sending you to find that option in the tree
+- **All branches in one list**: the first row in the branch tree puts every branch's commits into the same list, so a search spans all of them; when a single-branch filter finds nothing, the empty state offers "Search all branches" instead of sending you to find that option in the tree. Without a saved view, the panel opens on the checked-out branch
 - **Ahead/behind arrows**: shown for branches that differ from their remote twin, including those without a configured upstream
 - **Two file list views**: changed files as a directory tree or as a flat full-path list, switchable in the detail panel and in the push / compare dialogs; the header (count + switch) stays pinned while scrolling in any direction
 - **Collapsible details**: in the push and compare dialogs the info pane below the files folds into a single bar with one click, handing its height to the file list; the fold is remembered per dialog for the current session
@@ -294,10 +295,11 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **会话恢复**：短时间内重新打开面板自动恢复上次所选分支、提交及其文件列表（2 小时窗口），连你正在读哪一个文件、文件列表滚到哪里一起回来——哪怕你是在点开那一行的同一秒里关掉了面板
 - **三栏键盘导航**：Tab 在分支树、提交列表与文件列表之间切换；方向键选行，Home / End / PageUp / PageDown 跳转，Enter 打开差异，Shift+方向键扩展提交范围
 - **收藏分支**：分支行右键打星，工具栏"只看收藏的分支"按钮把树收窄到这些项，筛选生效时按钮高亮；一个都还没收藏时直接告诉你怎么收藏
-- **IDEA 式搜索框**：`.*` 把关键词当正则表达式匹配、`Cc` 区分大小写，两个开关长在框里——正在按什么规则搜，输入的时候就看得到。默认是字面子串匹配，`( . *` 是字符不是语法，不再因为一个左括号报正则错误；开关与关键词同属筛选条件，重新显示面板、换分支、复用缓存页都不会拿到错的那份答案
+- **IDEA 式搜索框**：`.*` 把关键词当正则表达式匹配、`Cc` 区分大小写，两个开关长在框里——正在按什么规则搜，输入的时候就看得到。默认是字面子串匹配，`( . *` 是字符不是语法，不再因为一个左括号报正则错误；命中词会在提交信息首行高亮；开关与关键词同属筛选条件，重新显示面板、换分支、复用缓存页都不会拿到错的那份答案
 - **筛选栏不再叠排**：提交列变窄时提交人 / 路径 / 日期收进 `>` 浮层，而不是换成两排把列表挤掉一屏；看不见的筛选还在生效时 `>` 会亮。分隔条也不允许把提交列压到没有内容可看
 - **筛空了要给出口**：一条都不剩时，空态直接提供"清除全部筛选"按钮；真正在生效的筛选会在自己的控件上亮一条强调边——列表为什么这么短总有答案
-- **全部分支一起看**：分支树 HEAD 段下的「全部分支」把所有分支的提交放进同一个列表，搜索随之跨分支；单分支下筛不到结果时，空态直接给"在所有分支中搜索"，不用先去树里找那个选项
+- **全部分支一起看**：分支树第一行的「全部分支」把所有分支的提交放进同一个列表，搜索随之跨分支；没有可恢复的选择时面板默认查看当前检出的分支，单分支下筛不到结果时空态直接给"在所有分支中搜索"
+- **Reflog 范围切换**：操作记录对话框内可切换「选中分支」与 `HEAD`；前者跟随提交列表范围，后者记录检出与重置等 HEAD 操作
 - **超前/落后箭头**：与远程同名分支有差异即显示，未配置 upstream 的分支同样计算
 - **文件列表两种视图**：变更文件可按目录结构折叠浏览，也可平铺显示完整路径，第三栏与推送/对比对话框表头均可切换；表头（数量 + 切换按钮）在任意方向滚动时保持吸附
 - **详情可收起**：推送与对比对话框下方的详情区点一下折成一条，腾出的高度交给文件列表；收起状态在本次会话内按对话框记住

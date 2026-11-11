@@ -106,6 +106,21 @@ export interface RevealOptions {
     endLine?: number;
 }
 
+/**
+ * The text filter that produced a batch of rows, so the panel can mark the hits
+ * inside each subject. It travels with the rows instead of being read off the
+ * search box: a typed draft is not an applied filter, and a re-show paints rows
+ * before the filter mirror lands. Absent when nothing narrows the list — a
+ * rooted page pauses the filters, so it must not highlight either.
+ */
+export interface SubjectHighlight {
+    text: string;
+    /** git was handed -E instead of -F. */
+    regex: boolean;
+    /** git was handed no -i. */
+    caseSensitive: boolean;
+}
+
 /** Messages sent from the extension host to the webview. */
 export type ExtToWebviewMessage =
     | {
@@ -126,6 +141,7 @@ export type ExtToWebviewMessage =
         /** External history change: re-render rows without clearing what is selected. */
         preserveSelection?: boolean;
         searchContext?: { query?: string; resultCount?: number };
+        highlight?: SubjectHighlight;
         /**
          * The rows are rooted at a revealed commit instead of a branch tip, so the
          * panel can say so and offer the way back. `filtersPaused` is why the typed
@@ -148,6 +164,8 @@ export type ExtToWebviewMessage =
         local: string[];
         remote: string[];
         currentBranch?: string;
+        /** Scope the commit list is on; '' means every branch. The tree mirrors it. */
+        selectedBranch?: string;
         /** Branches the user starred; empty when this root has none. */
         favorites?: string[];
         /** Branches HEAD recently moved through, newest first — git's own record. */
@@ -170,14 +188,29 @@ export type ExtToWebviewMessage =
         /** Repository the panel is showing right now, out of `repositories`. */
         currentRepository?: string;
     }
-    | { command: 'setCommits'; commits: GraphCommit[]; hasMore: boolean }
+    | {
+        command: 'setCommits';
+        commits: GraphCommit[];
+        hasMore: boolean;
+        /**
+         * Rows-only repaint (a search): the branch tree on screen is still true,
+         * so it is not rebuilt — but everything that belonged to the old list
+         * (upward window, rooted banner, result count) rides along with the rows.
+         */
+        hasMoreAbove?: boolean;
+        rooted?: { hash: string; filtersPaused: boolean };
+        searchContext?: { query?: string; resultCount?: number };
+        highlight?: SubjectHighlight;
+    }
     | {
         command: 'queryCancelled';
-        kind: 'detail' | 'preview';
+        kind: 'detail' | 'preview' | 'reflog';
         hashes?: string[];
         hash?: string;
         stash?: number;
         path?: string;
+        /** Scope the cancelled reflog read was for (`kind: 'reflog'`). */
+        scope?: string;
     }
     | { command: 'appendCommits'; commits: GraphCommit[]; hasMore: boolean }
     | { command: 'prependCommits'; commits: GraphCommit[]; hasMoreAbove: boolean }
@@ -352,6 +385,8 @@ export type WebviewToExtMessage =
         worktreePath?: string;
     }
     | { command: 'dialogAction'; action: string }
+    /** The reflog dialog's scope toggle: 'HEAD' or a branch name. */
+    | { command: 'reflogScope'; scope: string }
     | { command: 'squashMessageResponse'; message?: string }
     | { command: 'saveViewState'; state: PersistedViewState }
     | { command: 'pushDialogAction'; action: string; force?: boolean }

@@ -206,6 +206,13 @@ var state = {
      * banner that says so carries { hash, filtersPaused }.
      */
     rooted: null,
+    /**
+     * The text filter that produced the rows on screen ({ text, regex,
+     * caseSensitive }), or null. It arrives with the rows rather than being read
+     * off the search box: a typed draft is not an applied filter, and a re-show
+     * paints rows before the filter mirror lands.
+     */
+    subjectMark: null,
     /** Paths of the merged file list that exist in the working tree. */
     multiExistingPaths: [],
     // Which row the arrow keys are on in the tree and file list. Kept as an
@@ -799,14 +806,15 @@ function renderTree() {
         }
         head += resumeHtml;
     }
-    var tree = '<div id="btree-inner">' + head +
-        // "All branches" is a scope, not a ref: one history holding every branch,
-        // which is the only way to search for a commit you cannot place. It sits
-        // right under HEAD so switching scopes is one click, and it carries its
-        // own class because .bitem would hand it to the double-click handler
-        // that expects a ref to check out.
-        '<div class="allitem' + (state.selectedBranch ? '' : ' sel') + '" data-all-branches="1" data-title="' + esc(T('w.allBranchesHint')) + '">' +
-        I_ALL_BRANCHES + '<span class="bname">' + esc(T('w.allBranches')) + '</span></div>' +
+    // "All branches" is a scope, not a ref: one history holding every branch,
+    // which is the only way to search for a commit you cannot place. It leads the
+    // column, above HEAD: it is the widest scope the list can show and the row a
+    // search usually starts from, so it should not be below a section that can be
+    // collapsed out of sight. It carries its own class because .bitem would hand
+    // it to the double-click handler that expects a ref to check out.
+    var allItem = '<div class="allitem' + (state.selectedBranch ? '' : ' sel') + '" data-all-branches="1" data-title="' + esc(T('w.allBranchesHint')) + '">' +
+        I_ALL_BRANCHES + '<span class="bname">' + esc(T('w.allBranches')) + '</span></div>';
+    var tree = '<div id="btree-inner">' + allItem + head +
         section('local', T('common.local'), state.local, I_BRANCH) +
         section('remote', T('common.remote'), state.remote, I_CLOUD) +
         stashSection() + worktreeSection() + '</div>';
@@ -869,6 +877,48 @@ function refChipHtml(name, extra, tags) {
     return '<span class="' + cls + '"' + (isTag ? ' data-tag="' + esc(name) + '"' : '') + '>' +
         '<span class="chip-name">' + esc(name) + '</span>' +
         (extra > 0 ? '<span class="chip-more">+' + extra + '</span>' : '') + '</span>';
+}
+
+/** Where the search term sits inside one subject, as ranges in the raw text.
+ *  Literal mode escapes the term so it stays a substring; ".*" reads it as a
+ *  regex, which is what git was handed with -E. The two engines are not identical
+ *  (POSIX classes, backreferences), so a pattern JS cannot compile marks nothing
+ *  — the rows are still git's answer, only the marking is best-effort. */
+function subjectMarkRanges(line, mark) {
+    var source = mark.regex ? mark.text : mark.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var re;
+    try { re = new RegExp(source, mark.caseSensitive ? 'g' : 'gi'); }
+    catch (err) { return []; }
+    var ranges = [];
+    var m;
+    // A subject is one line, so the cap is only insurance against a pathological
+    // pattern turning one row into thousands of elements.
+    while (ranges.length < 100 && (m = re.exec(line)) !== null) {
+        if (m[0]) { ranges.push([m.index, m.index + m[0].length]); }
+        // A zero-width match ("a*", "^") would otherwise spin on the same index.
+        if (re.lastIndex === m.index) { re.lastIndex++; }
+    }
+    return ranges;
+}
+
+/** The subject as HTML: escaped text with the hits wrapped in <mark>. Matches are
+ *  found in the raw string and every segment is escaped on its own — escaping
+ *  first would hide a term containing & < > " ' from the match, and wrapping
+ *  inside escaped text could cut an entity in half. */
+function subjectHtml(message) {
+    var line = String(message == null ? '' : message).split('\n')[0];
+    var mark = state.subjectMark;
+    if (!mark || !mark.text) { return esc(line); }
+    var ranges = subjectMarkRanges(line, mark);
+    if (ranges.length === 0) { return esc(line); }
+    var out = '';
+    var at = 0;
+    for (var i = 0; i < ranges.length; i++) {
+        out += esc(line.slice(at, ranges[i][0])) +
+            '<mark class="hit">' + esc(line.slice(ranges[i][0], ranges[i][1])) + '</mark>';
+        at = ranges[i][1];
+    }
+    return out + esc(line.slice(at));
 }
 
 function renderRows(appendOnly) {
@@ -987,8 +1037,8 @@ function renderRows(appendOnly) {
         // Branches and tags deliberately stay out of this tooltip: they belong to
         // the badge cell, whose hover list shows every ref with its own icon.
 
-        // Display only first line of commit message in list
-        var displayMessage = esc(c.message).split('\n')[0];
+        // Display only first line of commit message in list, with the search hits marked
+        var displayMessage = subjectHtml(c.message);
         html += '<div class="row' + (c.hash === state.selectedHash ? ' sel' : '') + '" data-hash="' + esc(c.hash) + '">';
         html += '<div class="garea" style="width:' + graphW + 'px"></div>';
         // Subject first, badges after it — the order IDEA's log uses, so the
@@ -2388,13 +2438,25 @@ function setBusy(area, on) {
     // multiCommits uses its own inline loading state in detail panel, don't show rows-busy
     if (area === 'multiCommits') return;
     
-    var el = document.getElementById(area === 'detail' ? 'd-busy' : 'rows-busy');
+    var el = document.getElementById(area === 'detail' ? 'd-busy' : area === 'search' ? 'search-busy' : 'rows-busy');
     if (!el) return;
+    // The hairline keeps its own base class: it is not a .busy overlay.
+    var base = area === 'search' ? 'search-busy' : 'busy';
     if (busyTimers[area]) { clearTimeout(busyTimers[area]); busyTimers[area] = null; }
     if (on) {
-        busyTimers[area] = setTimeout(function () { el.className = 'busy on'; }, 300);
+        busyTimers[area] = setTimeout(function () { el.className = base + ' on'; }, 300);
     } else {
-        el.className = 'busy';
+        el.className = base;
+    }
+}
+/** The result count is a system message, not panel chrome: both the full setData
+ *  and the rows-only search repaint announce it the same way. */
+function announceSearch(ctx) {
+    var count = ctx.resultCount;
+    if (count === 0) {
+        vscode.postMessage({ command: 'showNotification', type: 'info', message: T('w.noCommitFound') });
+    } else {
+        vscode.postMessage({ command: 'showStatusBarMessage', message: T('w.foundMatches', { n: count }), timeout: 3000 });
     }
 }
 document.getElementById('scroll').addEventListener('scroll', function () {
@@ -3692,6 +3754,7 @@ window.addEventListener('message', function (ev) {
         state.loadingMoreAbove = false;
         state.revealFile = '';
         state.rooted = m.rooted || null;
+        state.subjectMark = m.highlight || null;
         renderRootedBar();
         setTopLoader(false);
         state.headHash = m.headHash || '';
@@ -3737,22 +3800,7 @@ window.addEventListener('message', function (ev) {
         renderOperationStatus();
         
         // Show search result notification if filters are active
-        if (m.searchContext) {
-            var count = m.searchContext.resultCount;
-            if (count === 0) {
-                vscode.postMessage({
-                    command: 'showNotification',
-                    type: 'info',
-                    message: T('w.noCommitFound')
-                });
-            } else {
-                vscode.postMessage({
-                    command: 'showStatusBarMessage',
-                    message: T('w.foundMatches', { n: count }),
-                    timeout: 3000
-                });
-            }
-        }
+        if (m.searchContext) { announceSearch(m.searchContext); }
         
         // Update author dropdown with unique authors from commits
         updateAuthorDropdown(m.commits || []);
@@ -3813,6 +3861,15 @@ window.addEventListener('message', function (ev) {
             state.multiFiles = null;
             state.multiExistingPaths = [];
             renderDetail();
+        } else if (m.kind === 'reflog') {
+            // The tab never moved, so the rows on screen are still the truth —
+            // only the dimming has to come off. Match the pending scope so a
+            // cancelled read cannot undim the one that replaced it.
+            if (reflogState.pending === m.scope) {
+                reflogState.pending = '';
+                var reflogScroll = document.querySelector('#reflog-dialog #reflog-scroll');
+                if (reflogScroll) { reflogScroll.classList.remove('reflog-busy'); }
+            }
         } else {
             var preview = state.preview;
             var previewKey = m.stash !== undefined && m.stash !== null
@@ -3921,6 +3978,11 @@ window.addEventListener('message', function (ev) {
         if (m.currentBranch) {
             state.current = m.currentBranch;
         }
+        // The host owns the scope: a first open sends it here rather than through
+        // setData, and '' is a real answer (every branch), not a missing field.
+        if (m.selectedBranch !== undefined) {
+            state.selectedBranch = m.selectedBranch;
+        }
         // The selected row may have been deleted outside the panel; keep the
         // highlight only while the branch is still in one of the lists.
         if (state.selectedBranch && state.local.indexOf(state.selectedBranch) < 0 &&
@@ -4027,14 +4089,33 @@ window.addEventListener('message', function (ev) {
         // the boxes say the same thing, otherwise an empty box hides an active one.
         applyFilterMirror(m);
     } else if (m.command === 'setCommits') {
-        // Update commits after initial branch display
+        // Rows-only repaint: the initial load, or a search. The branch tree on
+        // screen is still true, so it is not rebuilt — but everything that
+        // belonged to the old list goes with it.
         state.commits = m.commits || [];
         state.hasMore = !!m.hasMore;
-        // Clear multi-select when commit list is refreshed
+        state.hasMoreAbove = !!m.hasMoreAbove;
+        state.loadingMoreAbove = false;
+        setTopLoader(false);
+        state.rooted = m.rooted || null;
+        state.subjectMark = m.highlight || null;
+        renderRootedBar();
+        // A selection the new list still holds keeps its detail; one it no
+        // longer holds must not keep pointing at a row that is gone.
+        var keep = !!state.selectedHash && state.commits.some(function (c) { return c.hash === state.selectedHash; });
         state.selectedHashes = [];
         state.lastClickedIndex = -1;
         state.multiCommits = null;
         state.multiFiles = null;
+        state.multiExistingPaths = [];
+        if (!keep) {
+            state.selectedHash = null;
+            state.detail = null;
+            state.stashDetail = null;
+            clearPreview();
+            renderDetail();
+        }
+        if (m.searchContext) { announceSearch(m.searchContext); }
         setLoader(false);
         renderRows();
         applyPendingScroll();
@@ -4953,37 +5034,79 @@ function showFileHistoryDialog(filePath, history) {
 }
 
 /* ---------- reflog dialog (recover lost commits) ---------- */
-var reflogState = { entries: [], visibleCount: 20 };
+var reflogState = { scope: '', entries: [], visibleCount: 20, pending: '' };
+
+/** The branch the toolbar asks for — same expression as btn-reflog's click. */
+function reflogBranchScope() {
+    return state.selectedBranch || state.current || '';
+}
+
+function reflogRow(entry) {
+    var tip = entry.shortHash + '\n' +
+        entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
+        fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
+    return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
+        '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
+        '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
+        '<span class="push-commit-author">' + esc(entry.action) + '</span>' +
+        '<span class="push-commit-date" data-title="' + esc(fmtDateTime(entry.date)) + '">' + esc(fmtRelativeTime(entry.date)) + '</span>' +
+        '</div>';
+}
+
+function reflogMoreHtml(total, shown) {
+    return total > shown
+        ? '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: total - shown }) + '</button></div>'
+        : '';
+}
+
+/**
+ * Repaint the rows of an already-built dialog. The shell survives a scope switch
+ * on purpose: attachDialogResize wrote an inline width onto it, and rebuilding
+ * would throw away the width the user dragged out. Rebuilding the rows is also
+ * what clears the picked row — the two scopes are different sets of commits.
+ */
+function fillReflogDialog(overlay, scope, entries) {
+    reflogState = { scope: scope, entries: entries, visibleCount: 20, pending: '' };
+    var branch = reflogBranchScope();
+    overlay.querySelectorAll('.reflog-tab').forEach(function (tab) {
+        var target = tab.getAttribute('data-scope') === 'HEAD' ? 'HEAD' : branch;
+        tab.classList.toggle('on', !!target && target === scope);
+        tab.disabled = !target;
+    });
+    var sub = overlay.querySelector('#reflog-scope');
+    if (sub) { sub.textContent = scope; }
+    var scroll = overlay.querySelector('#reflog-scroll');
+    scroll.classList.remove('reflog-busy');
+    // An empty scope is an answer, not a reason to close: the dialog stays and
+    // says so, otherwise the toggle would look like it dismissed the window.
+    if (entries.length === 0) {
+        scroll.innerHTML = '<div class="reflog-empty">' + T('reflog.emptyScope') + '</div>';
+        return;
+    }
+    var visible = entries.slice(0, reflogState.visibleCount);
+    scroll.innerHTML = visible.map(reflogRow).join('') + reflogMoreHtml(entries.length, visible.length);
+}
 
 function showReflogDialog(scope, entries) {
-    reflogState = { entries: entries, visibleCount: 20 };
-
-    function row(entry) {
-        var tip = entry.shortHash + '\n' +
-            entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
-            fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
-        return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
-            '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
-            '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
-            '<span class="push-commit-author">' + esc(entry.action) + '</span>' +
-            '<span class="push-commit-date" data-title="' + esc(fmtDateTime(entry.date)) + '">' + esc(fmtRelativeTime(entry.date)) + '</span>' +
-            '</div>';
+    var existing = document.getElementById('reflog-dialog');
+    if (existing) {
+        fillReflogDialog(existing, scope, entries);
+        return;
     }
 
     var overlay = document.createElement('div');
     overlay.className = 'push-dialog-overlay';
     overlay.id = 'reflog-dialog';
-    var visible = entries.slice(0, reflogState.visibleCount);
-    var moreHtml = entries.length > visible.length
-        ? '<div class="push-load-more-container"><button class="push-load-more-btn">' + T('common.loadMoreCommits', { n: entries.length - visible.length }) + '</button></div>'
-        : '';
-
     overlay.innerHTML = '<div class="push-dialog-box">' +
-        '<div class="push-dialog-header">' + T('reflog.title') + ' <span class="push-compare-sub">' + esc(scope) + '</span></div>' +
+        '<div class="push-dialog-header">' + T('reflog.title') +
+        '<span class="reflog-tabs">' +
+        '<button class="reflog-tab" type="button" data-scope="branch" data-title="' + esc(T('reflog.tabBranchHint')) + '">' + T('reflog.tabBranch') + '</button>' +
+        '<button class="reflog-tab" type="button" data-scope="HEAD" data-title="' + esc(T('reflog.scopeHead')) + '">' + T('reflog.tabHead') + '</button>' +
+        '</span>' +
+        '<span class="push-compare-sub" id="reflog-scope"></span>' +
+        '</div>' +
         '<div class="push-dialog-body">' +
-        '<div class="push-commits-list full"><div class="push-commits-scroll" id="reflog-scroll">' +
-        visible.map(row).join('') + moreHtml +
-        '</div></div>' +
+        '<div class="push-commits-list full"><div class="push-commits-scroll" id="reflog-scroll"></div></div>' +
         '</div>' +
         '<div class="push-dialog-actions">' +
         '<span class="file-history-hint">' + T('reflog.hint') + '</span>' +
@@ -4993,20 +5116,33 @@ function showReflogDialog(scope, entries) {
     document.body.appendChild(overlay);
     attachDialogResize(overlay, 'reflog');
 
+    overlay.querySelector('.reflog-tabs').addEventListener('click', function (e) {
+        var tab = e.target.closest('.reflog-tab');
+        if (!tab || tab.disabled || tab.classList.contains('on')) { return; }
+        var target = tab.getAttribute('data-scope') === 'HEAD' ? 'HEAD' : reflogBranchScope();
+        if (!target) { return; }
+        // Dim the rows while the host re-reads; the tab itself only moves once
+        // the answer is back, so a failed read cannot leave it lying.
+        overlay.querySelector('#reflog-scroll').classList.add('reflog-busy');
+        reflogState.pending = target;
+        vscode.postMessage({ command: 'reflogScope', scope: target });
+    });
+
     var scroll = overlay.querySelector('#reflog-scroll');
     // Delegation: appended batches need handlers too, and the picked row must be
     // usable after the list grows.
     scroll.addEventListener('click', function (e) {
         var more = e.target.closest('.push-load-more-btn');
         if (more) {
-            var next = Math.min(reflogState.visibleCount + 20, entries.length);
+            var list = reflogState.entries;
+            var next = Math.min(reflogState.visibleCount + 20, list.length);
             var container = more.parentElement;
             var frag = document.createElement('div');
-            frag.innerHTML = entries.slice(reflogState.visibleCount, next).map(row).join('');
+            frag.innerHTML = list.slice(reflogState.visibleCount, next).map(reflogRow).join('');
             while (frag.firstChild) { container.parentNode.insertBefore(frag.firstChild, container); }
             reflogState.visibleCount = next;
-            if (next < entries.length) {
-                more.textContent = T('common.loadMoreCommits', { n: entries.length - next });
+            if (next < list.length) {
+                more.textContent = T('common.loadMoreCommits', { n: list.length - next });
             } else {
                 container.remove();
             }
@@ -5053,6 +5189,8 @@ function showReflogDialog(scope, entries) {
             overlay.remove();
         });
     });
+
+    fillReflogDialog(overlay, scope, entries);
 }
 
 /* ---- tag differences dialog ---- */

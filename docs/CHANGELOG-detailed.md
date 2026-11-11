@@ -2,6 +2,25 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.2.4] - 2026-11-11
+
+本版围绕提交历史浏览补齐三处：Reflog 支持切换读取范围，筛选搜索不再重建仓库侧数据，并将默认视图收敛到检出分支。
+
+### 新增与变更
+
+- **Reflog 范围页签**（`src/views/graphView.ts`、`src/views/messages.ts`、`media/webview.js`）：在对话框内切换「选中分支 / HEAD」。选中分支指提交列表范围（不是检出分支）；「全部分支」范围退回检出分支。空的已打开范围在对话框中提示，不关闭窗口；初次打开时仍使用原有空记录提示。请求使用可取消查询通道，快速切换时只由对应请求解除自己的 pending 状态。回归测试：`src/test/reflogScope.test.ts`。
+- **筛选搜索轻路径**（`src/views/graphView.ts`、`src/services/gitService.ts`）：`setFilters` 改走 `_reloadRows`，仅加载提交行并更新分页、hash 集合与 tip 基线，不重新读取分支树、stash、worktree 或 divergence。搜索期间旧列表保持可读，使用独立细进度条。带筛选的 `git log` 不加 `--topo-order`，避免为第一批搜索结果缓冲整段历史；无筛选的图谱查询保留该选项。`docs/perf/search.mjs` 驱动真实 provider，约束未缓存搜索最多 1 次 spawn、重复搜索 0 次 spawn，且验证两种 argv 口径。
+- **搜索命中高亮**（`src/views/messages.ts`、`src/views/graphView.ts`、`media/webview.js`、`media/webview.css`）：宿主根据已生效的筛选生成 `SubjectHighlight`，webview 在提交信息原始首行定位命中并逐段转义后包裹标记。避免从输入框读取未提交草稿；正则无效时不高亮，筛选暂停的 rooted 列表与持久化无筛选首页不带高亮。回归测试：`src/test/searchHighlight.test.ts`。
+- **默认分支范围与「全部分支」位置**（`src/views/graphView.ts`、`src/services/gitService.ts`、`media/webview.js`）：无可恢复快照时同步读取 HEAD，将面板、启动预取和仓库切换的默认范围统一为当前检出分支；快照中的空字符串仍代表用户明确选择了全部分支。将「全部分支」移到树的第一行，避免被 HEAD 分组折叠隐藏。回归测试：`src/test/defaultScope.test.ts`、`src/test/logScopeAndRow.test.ts`。
+
+### 验证
+
+- `npm.cmd run compile`：通过。
+- `npm.cmd run lint`：0 errors；66 warnings（仓库既有 lint warning 基线）。
+- `npm.cmd test`：501 项通过，0 失败。
+- `node docs/perf/search.mjs`：冷搜索 78.0ms / 1 spawn，重复搜索 0.3ms / 0 spawn；阈值通过。
+- `node docs/perf/coldstart.mjs`：首屏 134.8ms / 2 spawn，快照重画 9.57ms / 0 spawn；阈值通过（首次测量受计时抖动影响为 12.15ms，复测通过）。
+
 ## [0.2.3] - 2026-11-10
 
 本版两件事：**用户发起的只读查询终于有一条真正的取消通道**（此前所有进度提示一律 `cancellable: false`，因为 git 子进程根本没有停止入口），以及**右键菜单按使用频率重排、并按仓库真实能力裁剪**。取消这件事的难点不在 UI，而在"哪些命令允许被杀"与"杀掉之后每一层都要认得出来这是取消，不是失败"。

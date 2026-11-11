@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { GitService, GraphCommit, FileStat, LogFilters, ReflogEntry, PushPreview, BranchDetails } from '../services/gitService';
-import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, RevealOptions, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
+import { ExtToWebviewMessage, OperationKind, PersistedViewState, RepoUiState, RevealOptions, SubjectHighlight, TagSyncDecision, TagSyncRow, WebviewToExtMessage } from './messages';
 import { logger } from '../services/logger';
 import { getFileIconPack, iconThemeResourceRoot, invalidateFileIconCache } from '../services/fileIcons';
 import { resolveGitDir } from '../services/gitPaths';
@@ -31,6 +31,8 @@ interface GraphPayload {
     recent: string[];
     /** Set when the rows are rooted at a revealed commit rather than a branch tip. */
     rooted?: { hash: string; filtersPaused: boolean };
+    /** The text filter these rows answered to, so the panel can mark its hits. */
+    highlight?: SubjectHighlight;
 }
 
 /** Synthetic row hash for the aggregate "全部提交/全部差异" entry in dialogs. */
@@ -510,9 +512,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         // The remembered branch is what the view restores, so the warmed graph
         // must be the same one — `_firstPageRows` reads `_branch`, not a parameter.
         // A branch deleted since then leaves the scope at all refs.
-        const remembered = this._restorableState()?.branch;
+        const saved = this._restorableState();
+        const remembered = saved?.branch;
         if (remembered && this._gitService.getBranchTipHash(remembered)) {
             this._branch = remembered;
+        } else if (!saved) {
+            this._branch = this._defaultBranchScope();
         }
 
         // Kicked off before the guard below exists: `_firstPageRows` waits for
@@ -608,6 +613,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             local: details.local.map(b => b.name),
             remote: details.remote.map(b => b.name),
             currentBranch: details.current,
+            // The first open posts this instead of setData, so the tree learns the
+            // scope here — otherwise it would highlight "all branches" over a list
+            // that only holds the checked-out branch's commits.
+            selectedBranch: this._branch || '',
             ...this._branchMarks(details.current)
         });
     }
@@ -675,16 +684,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Everything that belonged to the previous root is dropped: branch, selection,
      * in-progress operation and the pending view-state snapshot. Git lets those
      * names repeat across projects, so a borrowed one would read as real data in
-     * the wrong repository. The text filters stay put — they are what the user
-     * typed, not repository state, and clearing them host-side would leave the
-     * input boxes disagreeing with the list they filter.
+     * the wrong repository. The new root opens on its own checked-out branch, the
+     * same default a first open uses. The text filters stay put — they are what
+     * the user typed, not repository state, and clearing them host-side would
+     * leave the input boxes disagreeing with the list they filter.
      */
     async switchRepository(rootPath: string): Promise<void> {
         const current = this._gitService.repositoryPath;
         if (!rootPath || (current && repositoryKey(current) === repositoryKey(rootPath))) {return;}
 
         this._gitService.selectRepository(rootPath);
-        this._branch = undefined;
+        this._branch = this._defaultBranchScope();
         this._lastKnownBranch = undefined;
         this._lastKnownTip = undefined;
         this._lastInProgress = null;
@@ -1386,24 +1396,19 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     vscode.window.setStatusBarMessage(message.message, message.timeout || 3000);
                     break;
                 case 'setFilters':
-                    // Show loading indicator during search
-                    this._postLoading('search', true);
-                    try {
-                        this._filters = {
-                            text: (message.text || '').trim() || undefined,
-                            regex: !!message.regex,
-                            caseSensitive: !!message.caseSensitive,
-                            author: (message.author || '').trim() || undefined,
-                            from: message.from || undefined,
-                            to: message.to || undefined,
-                            path: (message.path || '').trim() || undefined
-                        };
-                        await this._withCancellableGitQuery(() => this._reload());
-                        // _reload will send setData with searchContext
-                        // Frontend will handle showing the result count
-                    } finally {
-                        this._postLoading('search', false);
-                    }
+                    this._filters = {
+                        text: (message.text || '').trim() || undefined,
+                        regex: !!message.regex,
+                        caseSensitive: !!message.caseSensitive,
+                        author: (message.author || '').trim() || undefined,
+                        from: message.from || undefined,
+                        to: message.to || undefined,
+                        path: (message.path || '').trim() || undefined
+                    };
+                    // Rows only: a filter changes which commits answer, not what
+                    // the repository is, so the tree and its arrows stay as they
+                    // are instead of being re-read on every Enter.
+                    await this._withCancellableGitQuery(() => this._reloadRows());
                     break;
                 case 'loadMore':
                     await this._withCancellableGitQuery(
@@ -1423,6 +1428,22 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // selected when it is still on the first page of the branch.
                     await this._withCancellableGitQuery(() => this._reload(false, true));
                     break;
+                case 'reflogScope': {
+                    // The dialog's toggle. Unlike the initial open, an empty scope
+                    // still has to reach the webview: the dialog is already on
+                    // screen and must say "nothing here" in place instead of
+                    // vanishing, which would look like the toggle closed it.
+                    const scope = message.scope;
+                    if (!scope) { break; }
+                    await this._withCancellableGitQuery(
+                        async () => {
+                            const entries = await this._gitService.getReflog(scope);
+                            this.showReflog(scope, entries);
+                        },
+                        () => this._post({ command: 'queryCancelled', kind: 'reflog', scope })
+                    );
+                    break;
+                }
                 case 'selectCommit':
                     this._postLoading('detail', true);
                     try {
@@ -1677,6 +1698,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         const savedView = this._restorableState();
         if (savedView?.branch) {
             this._branch = savedView.branch;
+        } else if (!savedView) {
+            this._branch = this._defaultBranchScope();
         }
 
         // Step 2.5: paint the remembered first page before any git command runs.
@@ -2209,10 +2232,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await vscode.commands.executeCommand('idea-git.stashSave');
                     return;
                 case 'reflog': {
-                    // Read-only view. The toolbar follows the branch the commit
+                    // Read-only view. The toolbar opens on the branch the commit
                     // list is scoped to; with no branch selected it falls back
-                    // to the checked-out branch, so the dialog never shows
-                    // HEAD's checkout history.
+                    // to the checked-out branch. HEAD's checkout history is one
+                    // toggle away inside the dialog (`reflogScope`).
                     const scope = message.branch || await this._gitService.getCurrentBranch().catch(() => '');
                     await vscode.commands.executeCommand('idea-git.showReflog', scope ? { name: scope } : undefined);
                     return;
@@ -2355,6 +2378,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * The scope a panel with no remembered choice opens on: the checked-out
+     * branch, not every ref. "All branches" is a click the user makes, and the
+     * view snapshot records it as an empty branch name — so only a missing
+     * snapshot lands here. Detached HEAD has no branch to name and keeps all refs.
+     */
+    private _defaultBranchScope(): string | undefined {
+        return this._gitService.readCurrentBranch() || undefined;
+    }
+
+    /**
      * Rev the history query runs against: the rooted commit while one is being
      * revealed, the selected branch otherwise. Carrying the branch it was rooted
      * under means any change of scope — picking another branch, the ref turning
@@ -2381,6 +2414,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      */
     private _pageFilters(): LogFilters {
         return this._isRootedList() ? {} : this._filters;
+    }
+
+    /**
+     * The term to mark inside each subject, read off the filters the rows were
+     * actually listed with: a rooted page pauses them, and an author or path
+     * filter narrows by something a subject does not contain. Trimmed the same
+     * way `git log --grep` receives it, so the mark and the hit agree.
+     */
+    private _subjectHighlight(): SubjectHighlight | undefined {
+        const f = this._pageFilters();
+        const text = f.text?.trim();
+        return text ? { text, regex: !!f.regex, caseSensitive: !!f.caseSensitive } : undefined;
     }
 
     /** Whether anything is narrowing the list — enough to be worth mentioning. */
@@ -2599,7 +2644,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             // screen message, so a re-shown panel restores it with the rows.
             rooted: this._isRootedList() && this._revRoot
                 ? { hash: this._revRoot.rev, filtersPaused: this._hasActiveFilters() }
-                : undefined
+                : undefined,
+            highlight: this._subjectHighlight()
         };
     }
 
@@ -2754,6 +2800,65 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * The search path: repaint rows without re-reading the repository. The branch
+     * tree, HEAD and operation state on screen are still true while a filter
+     * narrows the list, and `_collect`'s extra reads plus the tree rebuild cost
+     * more than the search itself on a warm cache. Only the bookkeeping a
+     * rows-only paint owns is committed here; what it does not deliver (operation
+     * state, branch names) it must not baseline either, or the watcher's change
+     * re-check would compare against a state the panel never received.
+     */
+    private async _reloadRows(force: boolean = false): Promise<void> {
+        if (!this._view) {return;}
+        const ticket = ++this._dataTicket;
+        // Same rule as _reload: a search answers from the branch tip, never from
+        // a rooted window, or new commits could not enter the result set.
+        this._revRoot = undefined;
+        this._hasMoreAbove = false;
+        if (this._repoState !== 'ready') {
+            await this.refreshRepoState();
+            return;
+        }
+        // A vanished selection is structural, not a filter: it needs the tree.
+        if (this._dropVanishedBranch()) {
+            await this._reload(force);
+            return;
+        }
+        this._postLoading('search', true);
+        try {
+            const first = await this._firstPageRows(force);
+            const tip = await this._tipOfDisplayedRev();
+            if (ticket !== this._dataTicket) {return;}
+            this._lastKnownTip = tip;
+            this._loaded = first.pageRows;
+            this._hasMore = first.pageRows >= first.pageLimit;
+            this._pendingCommits = [];
+            this._streamExhausted = false;
+            this._loadedHashes = new Set(first.commits.map(c => c.hash));
+            this._postFilterMirror();
+            const hasSearchFilter = !!this._filters?.text || !!this._filters?.path;
+            this._post({
+                command: 'setCommits',
+                commits: first.commits,
+                hasMore: this._hasMore,
+                hasMoreAbove: false,
+                rooted: undefined,
+                searchContext: hasSearchFilter ? {
+                    query: this._filters.text ?? this._filters.path,
+                    resultCount: first.commits.length
+                } : undefined,
+                highlight: this._subjectHighlight()
+            });
+        } catch (error) {
+            if (isGitCommandCancelled(error)) {return;}
+            if (await this._recoverMissingGit()) {return;}
+            vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
+        } finally {
+            this._postLoading('search', false);
+        }
+    }
+
+    /**
      * Reload only branches without affecting commits.
      */
     private async _reloadBranchesOnly(): Promise<void> {
@@ -2868,7 +2973,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             this._post({
                 command: 'setCommits',
                 commits: first.commits,
-                hasMore: this._hasMore
+                hasMore: this._hasMore,
+                highlight: this._subjectHighlight()
             });
             this._postFilterMirror();
             const postTime = Date.now() - postStart;
@@ -3099,6 +3205,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 <span id="rev-text"></span>
                 <button id="rev-leave" type="button"></button>
             </div>
+            <div id="search-busy" class="search-busy"></div>
             <div id="scroll"><div id="top-loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows"></div><div id="loader"><span class="spin"></span>${t('ui.loading')}</div><div id="rows-busy" class="busy"><span class="spin"></span>${t('ui.loadingCommits')}</div></div>
         </div>
         <div class="resizer" id="resizer-right"></div>
