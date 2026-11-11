@@ -44,7 +44,7 @@ describe('all-branches scope', () => {
     });
 
     it('is what the commit list walks when no branch is selected', () => {
-        const build = body(service, /const buildArgs = \(forHash[\s\S]*?a\.push\('--topo-order'\)/);
+        const build = body(service, /const buildArgs = \(forHash[\s\S]*?if \(!filtered\) \{ a\.push\('--topo-order'\); \}/);
         assert.ok(/ALL_BRANCHES_SCOPE/.test(build), 'the list query must use the shared scope');
         assert.ok(!/'--all'/.test(build), "`--all` would add commits no branch owns to 「全部分支」");
     });
@@ -53,6 +53,24 @@ describe('all-branches scope', () => {
         const count = body(service, /async countCommitsAfter\([\s\S]*?\n {8}\}/);
         assert.ok(/ALL_BRANCHES_SCOPE/.test(count), 'a count over a wider ref set than the list leaves a hole above the rooted commit');
         assert.ok(!/'--all'/.test(count), "`--all` here and branches-remotes in the list are two different histories");
+    });
+});
+
+describe('filtered search order', () => {
+    it('keeps --topo-order for the graph page and drops it for a result set', () => {
+        const decl = body(service, /const filtered = [^\n]*/);
+        for (const field of ['searchText', 'f.author', 'f.from', 'f.to', 'pathspecs.length']) {
+            assert.ok(decl.includes(field), `${field} narrows the walk, so it must be part of the order switch`);
+        }
+        const build = body(service, /const buildArgs = \(forHash[\s\S]*?return a;\r?\n {8}\}/);
+        assert.ok(
+            /if \(!filtered\) \{ a\.push\('--topo-order'\); \}/.test(build),
+            '--topo-order buffers the whole walk before the first row, defeating -n; a filtered list does not need topology, an unfiltered page does'
+        );
+        assert.ok(
+            !/^ {12}a\.push\('--topo-order'\);/m.test(build),
+            'an unconditional push is the measured 3-4x cost on every message search'
+        );
     });
 });
 

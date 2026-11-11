@@ -2767,6 +2767,15 @@ export class GitService {
         // separators keep a subject containing `|` from shifting the fields.
         const format = '%H%x00%h%x00%s%x00%an%x00%ae%x00%ai%x00%cn%x00%ce%x00%ci%x00%P';
 
+        const pathspecs = parsePathFilter(f.path);
+        // A filtered list is a result set, not a topology. --topo-order buffers the
+        // whole walk before emitting the first row, which defeats -n's early exit
+        // (measured 3-4x on message searches); the default committer-date order is
+        // what `git log` prints in a terminal. The lane graph only draws downward
+        // parent links, so a date-order inversion loses a line, never draws a wrong
+        // one. Unfiltered pages keep --topo-order: there the graph is the point.
+        const filtered = !!searchText || !!f.author || !!f.from || !!f.to || pathspecs.length > 0;
+
         const buildArgs = (forHash: boolean, useBranch: string | undefined): string[] => {
             const a: string[] = ['log'];
             if (forHash) {
@@ -2786,7 +2795,7 @@ export class GitService {
                     a.push('--not', assertHash(excludeAncestorsOf));
                 }
             }
-            a.push('--topo-order');
+            if (!filtered) { a.push('--topo-order'); }
             if (searchText && !forHash) {
                 // The search box's two inline toggles (".*" and "Cc"). -F still matches
                 // a substring, so literal mode keeps the fuzzy behaviour the panel has
@@ -2831,7 +2840,6 @@ export class GitService {
             // pattern as an option. Note this switches git to path-filtered history
             // simplification: merges that did not touch the paths drop out, which is
             // exactly the "commits that changed this file" answer the box promises.
-            const pathspecs = parsePathFilter(f.path);
             if (pathspecs.length > 0) {a.push('--', ...pathspecs);}
             return a;
         };
