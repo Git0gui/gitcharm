@@ -2,6 +2,28 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.2.5] - 2026-11-20
+
+本版收尾 0.2.4 之后的一批分支/提交历史交互修复，并按用户反馈调整强推确认、推送弹框与右键菜单形态。
+
+### 新增与变更
+
+- **历史改写只作用于当前分支**（`src/views/graphView.ts`、`media/webview.js`）：查看与当前分支内容相同的分支时，两端哈希相同，原来「删除 b 的首个提交」改写的是检出的 a，而 b 原封不动。现在前端按 `state.selectedBranch === state.current` 决定回退/改消息/amend/重置/删除/压缩是否出现在菜单里，宿主侧新增 `GraphViewProvider._assertHistoryScope()` 对七个 action case 再校验一次，防 stale webview 状态与命令入口绕过。
+- **删除提交解除额外门槛**（`src/commands/commitCommands.ts`、`src/services/gitService.ts`）：不再要求目标必须是 HEAD、也不再拦首个提交；根提交走 `dropCommitsWithRebase(null, …)` → `_runRebaseWithTodo('--root', …)`。全部提交都被选中时 Git 不允许空分支，改由它报错并给出新文案 `err.dropAllCommits`。临时仓库实测：无冲突的两提交仓库删掉根提交后只剩一条，根哈希变化；同一文件上的冲突场景由 Git 正常拒绝。压缩提交同步去掉 merge commit 预检，交给 `planSquash` / Git 判断。
+- **右键菜单的不可用项直接移除**（`media/webview.js`、`media/webview.css`、`src/test/menuOrder.test.ts`）：`showMenu` 收回 `[action, label]` 二元组，删掉第三位 disabled 与 `.context-menu-item.disabled` 样式；分支、提交（含多选）、文件、worktree 菜单改为按可用性条件 push。之前按用户要求改成「统一置灰不隐藏」，本版用户改回「删掉不要置灰」，以本版为准；菜单顺序与当前分支限制都保留。
+- **脏工作区切分支**（`src/commands/branchCommands.ts`、`src/services/gitService.ts`）：`checkout` / `checkoutTracking` 增加 `carryLocalChanges`，本地有未提交改动时走 `git checkout -m`，不再直接拦下；Git 自己无法合并的情况仍由它报错，不静默丢弃。临时仓库实测改动跟随切换。
+- **双击分支刷新领先/落后数**（`src/views/graphView.ts`、`src/services/gitService.ts`）：`_reload(false, false, true)` 强制绕过 refs 快照 TTL，`_refreshDivergence()` 异步补 divergence，列表渲染不被它挡住。
+- **强推二次确认**（`src/commands/branchCommands.ts`、`src/views/graphView.ts`、`src/views/messages.ts`、`media/webview.js`、`src/i18n/index.ts`）：原来只有命中 `protectedPatterns()` 的保护分支才问一次，普通分支点「强制推送」直接 `--force-with-lease`。现在所有强推都经 `showDialog` 再确认；协议新增 `actionKeys`，webview 用稳定 `data-action`（`force` / `cancel`）回值，不再拿本地化按钮文案做程序化比较；面板隐藏走原生模态框只能回标签，宿主兼容这个回退。新增中英 `push.forceConfirm`，保护分支沿用 `push.protectedConfirm` 的更重文案。
+- **推送弹框空间分配**（`media/webview.css`）：只对 `#push-dialog` 覆写，提交消息列 440px / 56% → 560px / 62%，右侧文件区 55% → 66%、详情区 45% → 34%；compare / reflog / 文件历史共用模板不受影响。
+- **流程规范**（`AGENTS.md`）：main 禁止直接提交与推送、开发分支名必须带下一个版本号（不是 `package.json` 当前版本）、开发过程允许自动寻找并安装技能、不可用右键项直接移除。
+
+### 验证
+
+- `npm run compile` 通过；`npm run lint -- --quiet` 0 error；`npm test` **506 例 119 组全绿**（0.2.4 是 501 例，新增 `pushDialog.test.ts` 与菜单形态/范围断言扩充）。
+- `node --check media/webview.js` 通过。
+- `checkout -m` 携带脏改动与 `rebase -i --root` 删除根提交均在临时仓库实测。
+- 尚未在 Extension Development Host 里手点复核菜单与弹框；`media/` 改动需要完全重启宿主后再看实际效果。
+
 ## [0.2.4] - 2026-11-11
 
 本版围绕提交历史浏览补齐三处：Reflog 支持切换读取范围，筛选搜索不再重建仓库侧数据，并将默认视图收敛到检出分支。

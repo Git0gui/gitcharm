@@ -13,7 +13,7 @@ npm run package   # vsce package --no-yarn --allow-missing-repository
 
 - 每次改动后必须依次通过 compile、lint（0 error）、test（全绿），然后才允许提交。
 - **main 分支禁止直接提交和推送**：任何改动都要先从 main 切出独立的开发分支，在分支上本地提交；不得在 main 上执行 `git commit` / `git push`，也不得把开发分支直接推到 `origin/main`。main 只通过合入流程更新；未经用户明确要求，任何分支都不做 push。
-- **开发分支名必须带下一个版本号**：用 `v<计划发布的下一个版本>/<简短主题>`，不是 `package.json` 当前版本。当前基线是 `0.2.4`，本批改动面向 `0.2.5`，分支名形如 `v0.2.5/branch-history-and-push`；版本号按发布计划递增（无特殊计划时 patch +1）。不带版本号的临时分支在改动落地前先重命名。
+- **开发分支名必须带下一个版本号**：用 `v<计划发布的下一个版本>/<简短主题>`，不是 `package.json` 当前版本。以 `0.2.4` 为基线做的这批改动发布为 `0.2.5`，分支名是 `v0.2.5/branch-history-and-push`；版本号按发布计划递增（无特殊计划时 patch +1）。不带版本号的临时分支在改动落地前先重命名。
 - **开发过程中允许自动寻找并安装所需技能**：遇到现有能力不足以完成当前任务时，可先检索可用的 Skill/插件，找到与任务匹配的技能后自主安装并加载使用，不必先征得确认；安装后按该技能的规范执行。不得因此跳过 compile/lint/test 验证或本文件的其他硬性规定。
 - Windows 本机 PowerShell 为 Constrained Language Mode：在 PowerShell 里必须调用 `npm.cmd`（`npm.ps1` 会报 MethodInvocationNotSupported）；Git Bash 里直接用 `npm` 即可。
 - 改了 `out/` 或 `media/` 后调试宿主（Extension Development Host）跑的是旧代码，必须完全重启宿主再验证，必要时 bump 版本号使缓存失效——避免"改了还是一样"的误判。
