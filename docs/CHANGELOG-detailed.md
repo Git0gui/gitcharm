@@ -2,6 +2,60 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.3.0] - 2026-11-20
+
+按用户要求重新（受控地）接入内置 Git 扩展。历史上项目曾因 `repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定、refs/HEAD 缓存滞后、激活触发多 spawn 冷启动扫描而**彻底移除**该依赖（见 0.0.5 与 §3 旧规则）；本版不是回退到"直接替换"，而是加一层**可选能力网关**：可用时优先用公开 API，任何不可用/异常/结果不可信都降级到原有实现。
+
+### 设计约束
+
+- **只用公开稳定接口**：`GitExtension.getAPI(1)` 是唯一对外承诺的版本；`API` / `Repository` / `RepositoryState` 上明确公开的只读成员。`RefType` / `Status` / `ForcePushMode` 是 `const enum`（运行时不存在，不能引用），一律按结构化数字/鸭子类型处理；不用 `register*` 扩展点、不用 proposed / 实验性 / 内部字段、不用 `getAPI(2)`。
+- **不声明依赖**：`package.json` 保持无 `extensionDependencies`、无 `vscode.git` 字样、无新增 npm 依赖；类型用自建的 `src/services/gitApiTypes.ts` 结构化声明（不 `import 'vscode.git'`，也不 import vscode，满足 §5 可单测）。
+- **不主动激活**：只在 `ext.isActive === true` 时探测（`getExtension('vscode.git')` → `exports.enabled` → `getAPI(1)` → `api.state === 'initialized'`）。内置扩展未激活即视为"当前不可用"，直接走本地实现，避免历史踩坑的冷启动多 spawn 扫描；`onDidChangeEnablement` / `onDidOpenRepository` / `onDidCloseRepository` 只用于刷新可用性，不触发激活。
+- **能力分级 + 全量兜底**：`GitApiBackend.tryXxx()` 一律返回 `T | undefined`；`GitService` 每个方法开头 `const v = await this._api?.tryXxx(...); if (v !== undefined) return v;`，**原实现一行不动**地继续跑。能力缺失、API 抛错、字段类型不符、结果不可信 → `undefined` → 无缝降级。
+
+### 能力划分（为什么不是"全量替换"）
+
+| 类别 | 策略 | 原因 |
+| --- | --- | --- |
+| 当前分支 / HEAD / 本地与远程分支 / remote 列表与名称 / 提交消息与父提交 / 对象是否存在 | api-first | 公开 API 有等价只读能力，返回形状可规范化成与本地实现一致；结果逐项校验，失败即降级 |
+| blob 内容 `readBlob` / 配置项 `http.proxy` | local-only | 对照官方实现后发现二者**语义不等价**（见下节），替换会改变可观察行为 |
+| 提交图 `getCommitGraphData`、详情、文件差异、`getLog`、reflog、stash、worktree、`--topo-order` 泳道、自定义 `--format=` / `-z` 解析 | local-only | gitapi 不提供等价 argv 或自定义格式输出；`repo.log()` 还忽略分支参数（历史坑） |
+| checkout / commit / merge / rebase / reset / revert / cherry-pick / squash / 历史改写 / push / pull / fetch / tag / stash 等写与网络操作 | local-only | 必须保留 `checkout -m`、askpass、`_execNetwork` 无超时、`_execWithLockRecovery`、冲突与空提交处理、`withProgress`、`invalidateVolatile()` 与自有错误文案；替换会破坏行为一致 |
+| 纯 fs 快路径、RefsReader、refs 快照、fs.watch + 2s 轮询、Memento 缓存、取消通道 | local-only | 首屏 ≤2 spawn 预算与缓存一致性的基石，gitapi 的状态缓存滞后不能取代 |
+
+`gitApiBackend.ts` 里的能力表把上述全部能力域逐项登记（policy + 理由），单测断言写/网络/自定义 argv 一律 `local-only`。
+
+### 对照 GitHub 官方实现核对（microsoft/vscode main，经本地代理拉取源码）
+
+不凭记忆猜 API 语义，直接读 `extensions/git/src/api/api1.ts`、`api/extension.ts`、`repository.ts`、`git.ts`、`api/git.constants.ts`，据此收紧了 4 处：
+
+1. **`getAPI(version)` 只认 1**（`extension.ts:86`：`if (version !== 1) throw new Error('No API version … found.')`）→ 我们只调 `getAPI(1)`，守卫禁止其它版本号。
+2. **`getBranches({remote:true})` 不是"只远程"**（`repository.ts:1766`）：
+   ```ts
+   return refs.filter(v => v.type === RefType.Head || (v.type === RefType.RemoteHead && query.remote));
+   ```
+   且 `getRefs(query)`（`git.ts:3049`）**完全不看 `query.remote`**，只是把所有 `for-each-ref` 结果交给上面的 filter。所以 `remote:true` 返回的是**本地 Head + 远程 RemoteHead 混合**。原实现会把本地分支混进 `getRemoteBranches()`。现在按 `Ref.type` 显式过滤：`RefType.Head=0` / `RemoteHead=1` / `Tag=2`（`api/git.constants.ts` 的 `Object.freeze` 值），单测用混合 refs 钉住这个行为；没有数字 `type` 的老版本一律降级。
+3. **`show()` 不是原始字节**（`repository.ts:2694` → `buffer()` 用 `git show --textconv`，再 `workspace.decode(content, {uri})`）。GitCharm 的 `readBlob()` 要求 `git show <ref>:<path>` 的原始 utf8、**不 trim**（trim 会让末尾换行变成幽灵新增行、把伪 ref `index` 交给文本 diff）。两者编码与 textconv 都可能不同 → `readBlob` 改回 `local-only`。
+4. **`getConfig(key)` 强制 `--local`**（`repository.ts:1186` → `config('get', 'local', key)`），而 `_getHttpProxyConfig()` 用 `git config --get http.proxy`（local 优先，但也读 global/system）。全局代理场景下两者答案不同，网络失败提示会跟着变 → `configValue` 改回 `local-only`。
+
+另外确认两项可以继续用：`COMMIT_FORMAT` 用 `%B`（`git.ts:384`），`parseGitCommits` 只去掉尾部一个换行，经 `.trim()` 后与本地 `git log -1 --format=%B` 一致；`parents` 来自 `%P`.split(' ')，是字符串数组，网关的 hex 校验仍然保留作为类型不稳的防线。`ApiRepositoryState.refs` 被标 `@deprecated` 且**恒返回 `[]`**（`api1.ts`：`console.warn('Deprecated. Use ApiRepository.getRefs() instead.'); return []`），因此 `hasUsableState()` 改用 `state.remotes` 判断，绝不依赖 `refs`。
+
+### 历史坑的正面防护
+
+- `Commit.parents` 类型不稳定：网关校验必须是字符串数组且每项为 hex，否则降级到 `rev-list --parents`。
+- refs/HEAD 缓存滞后：`readCurrentBranch` 在 `repo.state.rebaseCommit` 存在时降级（rebase 期间分支名在 `rebase-merge/head-name`）；`getHeadHash` 校验 40/64 位 hex；`readCurrentBranch()` 等纯 fs 同步快路径仍保留为权威。
+- `blobExists` 遇到伪 ref `index` / `index:<stage>`（上游 API 把它写成 `:1`/`:2`/`:3`）直接降级；`getObjectDetails` 返回的 `object` 必须是合法对象 id，否则降级到 `cat-file -e`。
+- 每次 gitapi 调用都用 `try/catch` 包住并写 `logger.debug`，绝不把异常抛给调用方。
+
+### 涉及文件与验证
+
+- 新增 `src/services/gitApiTypes.ts`（公开 API v1 结构化类型）、`gitApiProbe.ts`（纯函数探测/仓库匹配/能力检测）、`gitApiBackend.ts`（能力网关 + 策略表）、`gitApiHost.ts`（唯一 import vscode 的薄层，运行时探测与事件订阅）。
+- `src/services/gitService.ts` 构造函数新增**可选**第三参 `apiBackend?`（不传 = 完整走原实现），并提供 `setApiBackend()` 供热更新；`src/extension.ts` 在激活时注入网关并订阅可用性事件。
+- `src/test/noVscodeGit.test.ts` 从"全面禁止"改为"边界守卫"：仅 `gitApiHost.ts` 允许出现 `vscode.git` / `getExtension(` / `getAPI(`，且强制 `getAPI(1)`、禁 `register*`、禁 `import 'vscode.git'`；`package.json` 仍禁止 `extensionDependencies` 与任何 gitapi 依赖声明。
+- 新增 `src/test/gitApiGateway.test.ts`：覆盖扩展不存在/未激活/未启用/`getAPI` 抛错/`state` 未初始化/仓库路径不匹配/能力缺失/API 抛错/结果校验失败共 9 类降级，混合 refs 的 `RefType` 过滤回归，双路径返回形状一致性与能力表约束（写/网络/自定义 argv 一律 `local-only`，api-first 恰 9 项）。
+- 不确定处不靠记忆：通过本机代理（`127.0.0.1:7890`）拉取 microsoft/vscode 官方源码逐行核对 API 语义，据此把 `readBlob` / `configValue` 从 api-first 收紧为 local-only，并修正远程分支过滤。
+- `AGENTS.md` §3 改写为"可选接入 + 强制降级"的新规则；`npm run compile` 通过、`npm run lint -- --quiet` 0 error、`npm test` **526 例全绿 / 0 失败**。
+
 ## [0.2.5] - 2026-11-20
 
 本版收尾 0.2.4 之后的一批分支/提交历史交互修复，并按用户反馈调整强推确认、推送弹框与右键菜单形态。

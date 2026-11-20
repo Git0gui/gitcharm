@@ -27,6 +27,7 @@ import { resolveCommonDir, resolveGitDir } from './gitPaths';
 import { readWindowsSystemProxy } from './systemProxy';
 import { REFS_SNAPSHOT_ARGS, RefsSnapshot, parseRefsSnapshot } from './refsSnapshot';
 import { logger } from './logger';
+import type { GitApiBackend } from './gitApiBackend';
 import {
     GitCommit,
     assertShellSafe,
@@ -341,8 +342,17 @@ export class GitService {
     private readonly _askpass: GitAskpass | undefined;
     private readonly _queryCancellation = new AsyncLocalStorage<AbortSignal>();
 
-    constructor(memento: vscode.Memento, askpass?: GitAskpass) {
+    /**
+     * OPTIONAL read-only backend backed by the built-in Git extension's public
+     * API v1. Undefined (the default) means every capability uses the local
+     * implementation below. Each method only *offers* a result; `undefined`
+     * falls through to the unchanged local code. See `gitApiBackend.ts`.
+     */
+    private _apiBackend: GitApiBackend | undefined;
+
+    constructor(memento: vscode.Memento, askpass?: GitAskpass, apiBackend?: GitApiBackend) {
         this._askpass = askpass;
+        this._apiBackend = apiBackend;
         this._memento = memento;
         this._persistedCache = new PersistedBranchCache(memento, () => this._repositoryPath);
         // A pin from an earlier session is only honoured while that folder is
@@ -373,6 +383,21 @@ export class GitService {
             this._repositoryPath = this._resolveRoot();
             this._startRepositoryWatch();
         });
+    }
+
+    /**
+     * Hot-swap the optional public-API backend (e.g. when the built-in Git
+     * extension becomes enabled, disabled, or the selected repository changes).
+     * Passing `undefined` is a full, immediate fallback to the local code.
+     */
+    setApiBackend(backend: GitApiBackend | undefined): void {
+        this._apiBackend = backend;
+    }
+
+    /** The optional backend, but only while it still belongs to this repository. */
+    private get _api(): GitApiBackend | undefined {
+        return this._apiBackend && this._apiBackend.matchesRoot(this._repositoryPath)
+            ? this._apiBackend : undefined;
     }
 
     /**
@@ -862,6 +887,8 @@ export class GitService {
     async blobExists(ref: string, filePath: string): Promise<boolean> {
         assertShellSafe(ref, t('label.ref'));
         assertShellSafe(filePath, t('label.filePath'));
+        const viaApi = await this._api?.tryBlobExists(ref, filePath);
+        if (viaApi !== undefined) {return viaApi;}
         try {
             await this.executeGitArgs(['cat-file', '-e', this._objectSpec(ref, filePath)]);
             return true;
@@ -1441,6 +1468,8 @@ export class GitService {
      * fallback for a git layout this cannot read.
      */
     readCurrentBranch(): string {
+        const viaApi = this._api?.tryCurrentBranch();
+        if (viaApi !== undefined) {return viaApi;}
         const repo = this._resolveRoot();
         const gitDir = repo ? resolveGitDir(repo) : undefined;
         if (!gitDir) {return '';}
@@ -1456,6 +1485,8 @@ export class GitService {
 
     /** `readCurrentBranch`, with one plumbing call when the layout is unreadable. */
     async getCurrentBranch(): Promise<string> {
+        const viaApi = this._api?.tryCurrentBranch();
+        if (viaApi !== undefined) {return viaApi;}
         const repo = this._resolveRoot();
         if (!repo) {return '';}
         if (resolveGitDir(repo)) {return this.readCurrentBranch();}
@@ -1498,6 +1529,8 @@ export class GitService {
 
     /** Local branch names, from refs on disk (no subprocess unless the layout is odd). */
     async getLocalBranches(): Promise<string[]> {
+        const viaApi = await this._api?.tryLocalBranches();
+        if (viaApi !== undefined) {return viaApi;}
         const names = this._refsReader.readBranchNames();
         if (names.local.length > 0) {return names.local;}
         return this._readRefNames('refs/heads/');
@@ -1505,6 +1538,8 @@ export class GitService {
 
     /** Remote-tracking branch names (`origin/main` style), from refs on disk. */
     async getRemoteBranches(): Promise<string[]> {
+        const viaApi = await this._api?.tryRemoteBranches();
+        if (viaApi !== undefined) {return viaApi;}
         const names = this._refsReader.readBranchNames();
         if (names.remote.length > 0) {return names.remote;}
         return this._readRefNames('refs/remotes/');
@@ -2188,6 +2223,8 @@ export class GitService {
      * added and not fetched yet, which is exactly when a push target matters.
      */
     getRemoteNames(): string[] {
+        const viaApi = this._api?.tryRemoteNames();
+        if (viaApi !== undefined) {return viaApi;}
         const repoPath = this._repositoryPath;
         const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
         if (!gitDir) {return [];}
@@ -2211,6 +2248,8 @@ export class GitService {
 
     /** Name + URL of every configured remote, for the management UI. */
     async getRemotes(): Promise<RemoteInfo[]> {
+        const viaApi = this._api?.tryRemotes();
+        if (viaApi !== undefined) {return viaApi;}
         return parseRemoteList(await this.executeGitArgs(['remote', '-v'], { timeoutMs: 5000 }));
     }
 
@@ -3206,6 +3245,8 @@ export class GitService {
      * Resolve the current HEAD commit hash.
      */
     async getHeadHash(): Promise<string> {
+        const viaApi = this._api?.tryHeadHash();
+        if (viaApi !== undefined) {return viaApi;}
         // Read HEAD + refs from the filesystem (no subprocess). The git directory
         // comes from resolveGitDir so linked worktrees are read the same way.
         const repoPath = this._repositoryPath;
@@ -3238,6 +3279,8 @@ export class GitService {
      */
     async getCommitMessage(hash: string): Promise<string> {
         assertHash(hash);
+        const viaApi = await this._api?.tryCommitMessage(hash);
+        if (viaApi !== undefined) {return viaApi;}
         return (await this.executeGitArgs(['log', '-1', '--format=%B', hash])).trim();
     }
 
@@ -3445,6 +3488,8 @@ export class GitService {
      */
     async getParents(hash: string): Promise<string[]> {
         assertHash(hash);
+        const viaApi = await this._api?.tryCommitParents(hash);
+        if (viaApi !== undefined) {return viaApi;}
         const output = await this.executeGitArgs(['rev-list', '--parents', '-n', '1', hash]);
         const parts = output.trim().split(/\s+/);
         return parts.slice(1); // Skip the commit hash itself

@@ -22,12 +22,10 @@
 
 ## What's New
 
-### History changes stay on the branch you are on
+### Works with the built-in Git extension, works without it
 
-- **Force-push asks twice.** A second confirmation warns that remote history will be rewritten, with a stronger warning for protected branches.
-- **Drop commits without extra gates.** Deleting is no longer limited to the newest commit; the root commit can be selected too, and Git decides whether the rewrite is possible.
-- **Only actions that can run are listed.** Context menus omit unavailable items instead of showing them greyed out, and history-changing operations are offered only while you are viewing the checked-out branch.
-- **Switch branches with local edits.** Uncommitted changes are carried across, and double-clicking a branch refreshes its ahead/behind counts. The push dialog now gives commit messages more room than files and details.
+- **Uses the built-in Git extension when it is available.** Repository information is read through its stable public API when VS Code has it active, and GitCharm transparently falls back to its own implementation otherwise — the UI and every command behave the same either way.
+- **Nothing is taken away.** Commands, progress indicators, credential prompts, conflict handling and cache refreshes still use the existing implementation; only read-only lookups that can return identical results are delegated.
 
 ## Overview
 
@@ -220,12 +218,10 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 改写历史只动你正在看的分支
+### 内置 Git 扩展可用就用，不可用也照常工作
 
-- **强制推送再确认一次**：提醒会改写远端历史，受保护分支给出更重的警告。
-- **删除提交不再额外设限**：不要求必须是最新提交，首个提交也可选择，最终能否改写由 Git 判断。
-- **菜单里只留能做的操作**：右键菜单中当前做不到的项直接不显示；回退、改消息、重置、删除、压缩只在查看当前分支时提供。
-- **带未提交改动切分支**：改动会一起带过去；双击分支会同步刷新领先/落后数。推送弹框也让提交消息占了更多空间。
+- **自动优先使用内置 Git 扩展**：VS Code 已激活内置 Git 扩展时，通过它稳定公开的 API 读取仓库信息；不可用时无缝回退到 GitCharm 自带的实现，界面和所有操作表现一致。
+- **现有功能一点不少**：命令、进度提示、凭据输入、冲突处理与缓存刷新仍走原有实现；只有能返回一致结果的只读查询才会交给内置扩展。
 
 ## 概览
 
