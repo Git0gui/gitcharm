@@ -2,7 +2,7 @@
   "name": "git-charm",
   "displayName": "GitCharm — IDEA Git Log & Graph",
   "description": "%ext.description%",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "publisher": "liugui",
   "icon": "resources/icon.png",
   "license": "MIT",
@@ -474,6 +474,11 @@
             "master"
           ],
           "description": "%config.protectedBranches%"
+        },
+        "idea-git.authentication.useVSCodeSession": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.useVSCodeSession%"
         }
       }
     }

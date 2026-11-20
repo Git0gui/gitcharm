@@ -4,6 +4,7 @@ import { GitService } from './services/gitService';
 import { formatGitError } from './services/gitUtils';
 import { GitAskpass } from './services/askpass';
 import { logger } from './services/logger';
+import { createGitApiBackend, watchGitApiAvailability } from './services/gitApiHost';
 import { GraphViewProvider } from './views/graphView';
 import type { RevealOptions } from './views/messages';
 import { BlameProvider } from './services/blameProvider';
@@ -51,6 +52,16 @@ export function activate(ctx: vscode.ExtensionContext) {
     // Owns a workspace-folders listener and the .git watchers; without this they
     // outlive the service when the extension deactivates.
     ctx.subscriptions.push(gitService);
+
+    // OPTIONAL public-API backend: adopt its read-only capabilities only when
+    // VS Code has already activated the built-in Git extension. Nothing is
+    // declared as a dependency and the built-in extension is never activated
+    // by us; on absence, disablement or any failure GitCharm's own code runs.
+    gitService.setApiBackend(createGitApiBackend(gitService.repositoryPath));
+    ctx.subscriptions.push(watchGitApiAvailability(
+        () => gitService.repositoryPath,
+        backend => gitService.setApiBackend(backend)
+    ));
 
     // Check if current workspace has a git repository
     const hasGitRepo = gitService.repositoryPath !== undefined;

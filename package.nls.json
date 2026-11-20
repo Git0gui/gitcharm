@@ -64,5 +64,6 @@
     "config.language.en": "English",
     "config.debug": "Enable debug logging (written to the extension host console for troubleshooting)",
     "config.autoFetchMinutes": "Fetch from the remote every N minutes while the GitCharm panel is open. 0 (the default) disables it. Silent: no credential prompt, no error toast.",
-    "config.protectedBranches": "Branch name patterns that ask for confirmation before a force-push or deletion. `*` matches any run of characters (e.g. `release/*`). The operation is never blocked outright."
+    "config.protectedBranches": "Branch name patterns that ask for confirmation before a force-push or deletion. `*` matches any run of characters (e.g. `release/*`). The operation is never blocked outright.",
+    "config.useVSCodeSession": "When a GitHub push needs credentials, reuse VS Code's own signed-in GitHub account (browser sign-in) instead of asking for a token. Turn this off to always use GitCharm's credential box. Other hosts such as GitLab, Gitee and self-hosted servers are unaffected — they use the generic personal access token and credential helper guidance."
 }
