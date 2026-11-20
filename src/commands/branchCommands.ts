@@ -373,15 +373,23 @@ export function registerBranchCommands(
                 if (!result || result.action === 'cancel') {return;}
                 const target = result.preview;
 
-                // Force-push is the one push that rewrites history others may
-                // already have; ask again when the target is protected.
-                if (result.force === true && matchesBranchPattern(branchName, protectedPatterns())) {
+                // Force-push rewrites history others may already have, so it always
+                // gets a second confirmation. Protected branches keep their extra
+                // warning; the buttons answer with stable keys, not localized text.
+                if (result.force === true) {
+                    const isProtected = matchesBranchPattern(branchName, protectedPatterns());
+                    const message = isProtected
+                        ? t('push.protectedConfirm', { name: branchName })
+                        : t('push.forceConfirm', { name: branchName });
                     const proceed = await graphView.showDialog(
-                        t('push.protectedConfirm', { name: branchName }),
+                        message,
                         [t('push.forceAnyway'), t('common.cancel')],
-                        'warn'
+                        'warn',
+                        ['force', 'cancel']
                     );
-                    if (proceed !== t('push.forceAnyway')) {return;}
+                    // A hidden panel falls back to a native modal, which can only
+                    // return the label; accept both forms and nothing else.
+                    if (proceed !== 'force' && proceed !== t('push.forceAnyway')) {return;}
                 }
 
                 // Progress, not a silent wait: a push over our own askpass can stop for

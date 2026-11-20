@@ -4127,7 +4127,7 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'showDialog') {
         showDialog(m.message, m.actions || [], m.type || 'warn', function (action) {
             vscode.postMessage({ command: 'dialogAction', action: action });
-        });
+        }, m.actionKeys);
     } else if (m.command === 'showSquashMessageDialog') {
         showSquashMessageDialog(m.prompt, m.initialValue, m.placeholder);
     } else if (m.command === 'showPushDialog') {
@@ -4169,13 +4169,16 @@ var dialogIconMap = {
     error: '<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
 };
 
-function showDialog(message, actions, type, onPick) {
+function showDialog(message, actions, type, onPick, actionKeys) {
     var overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
     var iconSvg = dialogIconMap[type] || dialogIconMap.warn;
     var btns = actions.map(function (a, i) {
         var cls = i === 0 ? 'primary' : 'secondary';
-        return '<button class="dialog-btn ' + cls + '" data-action="' + esc(a) + '">' + esc(a) + '</button>';
+        // Stable keys let the host compare data-action instead of localized text;
+        // dialogs without keys keep the legacy label as their action value.
+        var action = actionKeys && actionKeys[i] ? actionKeys[i] : a;
+        return '<button class="dialog-btn ' + cls + '" data-action="' + esc(action) + '">' + esc(a) + '</button>';
     }).join('');
     overlay.innerHTML = '<div class="dialog-box">' +
         '<div class="dialog-title"><span class="dialog-icon ' + type + '">' + iconSvg + '</span><span>' + esc(message) + '</span></div>' +

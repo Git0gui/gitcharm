@@ -851,13 +851,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Show a custom theme-aware dialog inside the webview.
      * Returns the selected action or undefined if dismissed.
      */
-    showDialog(message: string, actions: string[], type: 'warn' | 'info' | 'error' = 'warn'): Promise<string | undefined> {
+    showDialog(message: string, actions: string[], type: 'warn' | 'info' | 'error' = 'warn', actionKeys?: string[]): Promise<string | undefined> {
         const view = this._view;
         if (!view) {return Promise.resolve(undefined);}
         // Command palette can run a command whose dialog would land in a hidden
         // view, where the frame (and the dialog with it) does not exist. Ask in a
         // native modal instead: buffering it would wait for a panel the user has
-        // no reason to open.
+        // no reason to open. Native buttons only return their label, so callers
+        // using actionKeys must accept that label as a fallback.
         if (!view.visible) {
             const options: vscode.MessageOptions = { modal: true };
             const ask = (msg: string): Thenable<string | undefined> =>
@@ -885,7 +886,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 if (!view.visible) {settle(undefined);}
             }));
             subscriptions.push(view.onDidDispose(() => settle(undefined)));
-            this._post({ command: 'showDialog', message, actions, type });
+            this._post({ command: 'showDialog', message, actions, type, actionKeys });
         });
     }
 
