@@ -2,7 +2,7 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
-## [0.3.0] - 2026-11-20
+## [0.3.0] - 2026-11-21
 
 按用户要求重新（受控地）接入内置 Git 扩展。历史上项目曾因 `repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定、refs/HEAD 缓存滞后、激活触发多 spawn 冷启动扫描而**彻底移除**该依赖（见 0.0.5 与 §3 旧规则）；本版不是回退到"直接替换"，而是加一层**可选能力网关**：可用时优先用公开 API，任何不可用/异常/结果不可信都降级到原有实现。
 
@@ -72,8 +72,9 @@
 - `src/services/gitService.ts` 构造函数新增**可选**第三参 `apiBackend?`（不传 = 完整走原实现），并提供 `setApiBackend()` 供热更新；`src/extension.ts` 在激活时注入网关并订阅可用性事件。
 - `src/test/noVscodeGit.test.ts` 从"全面禁止"改为"边界守卫"：仅 `gitApiHost.ts` 允许出现 `vscode.git` / `getExtension(` / `getAPI(`，且强制 `getAPI(1)`、禁 `register*`、禁 `import 'vscode.git'`；`package.json` 仍禁止 `extensionDependencies` 与任何 gitapi 依赖声明。
 - 新增 `src/test/gitApiGateway.test.ts`：覆盖扩展不存在/未激活/未启用/`getAPI` 抛错/`state` 未初始化/仓库路径不匹配/能力缺失/API 抛错/结果校验失败共 9 类降级，混合 refs 的 `RefType` 过滤回归，双路径返回形状一致性与能力表约束（写/网络/自定义 argv 一律 `local-only`，api-first 恰 9 项）。
+- 推送认证引导另新增 `src/services/authPrompt.ts`（平台无关纯函数）、`src/services/vscodeAuth.ts`（唯一接触 `vscode.authentication` 的会话层）、`src/test/authGuidance.test.ts`（prompt 解析、provider 白名单、平台命令、降级链路、token 不外泄、中英文案），并改 `askpass.ts` / `branchCommands.ts` / `gitService.ts` / `src/i18n/index.ts` / `package.nls*.json`；同步 `src/test/pushDialog.test.ts` 断言。
 - 不确定处不靠记忆：通过本机代理（`127.0.0.1:7890`）拉取 microsoft/vscode 官方源码逐行核对 API 语义，据此把 `readBlob` / `configValue` 从 api-first 收紧为 local-only，并修正远程分支过滤。
-- `AGENTS.md` §3 改写为"可选接入 + 强制降级"的新规则；`npm run compile` 通过、`npm run lint -- --quiet` 0 error、`npm test` **526 例全绿 / 0 失败**。
+- `AGENTS.md` §3 改写为"可选接入 + 强制降级"的新规则；`npm run compile` 通过、`npm run lint -- --quiet` 0 error、`npm test` **526 例全绿 / 0 失败**（gitapi 接入），同版本加入推送认证引导后增至 **538 例全绿 / 0 失败**。
 
 ## [0.2.5] - 2026-11-20
 

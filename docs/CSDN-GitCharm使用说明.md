@@ -174,7 +174,7 @@ Blame 只告诉你"这一行最后是谁改的"，再往前就断了。选中若
 
 ### 不依赖内置 Git 扩展
 
-这是架构上最大的一次改动。早期版本是调 `vscode.git` 的 API 拿分支和提交历史的，后来全部拆掉了，原因有三条：
+这是架构上最大的一次改动。早期版本是调 `vscode.git` 的 API 拿分支和提交历史的，后来把这条路径整体换成了自研实现（0.3.0 起又加回一层**可选**的只读旁路，见本节末），原因有三条：
 
 1. 激活内置扩展会触发一次多子进程的仓库扫描，大仓库秒级；
 2. 它的 refs/HEAD 缓存滞后于真实变更；
@@ -182,7 +182,7 @@ Blame 只告诉你"这一行最后是谁改的"，再往前就断了。选中若
 
 现在分支列表和 `HEAD` 是**直接读 git 目录下的 refs 文件**（loose + packed-refs），超前/落后是单条 `git for-each-ref`。数百分支的仓库也不会卡。仓库位置统一由 `resolveGitDir()` 定位，因为 linked worktree 的 `.git` 是个 `gitdir:` 指针文件，refs 还在 `commondir` 指向的公共目录，直接拼 `.git/refs` 会读空。
 
-代价是要自己处理凭据：远端要账号密码时，扩展自己挂 `GIT_ASKPASS` 弹输入框（机密项掩码），不再借内置 Git 的提示。
+代价是要自己处理凭据：远端要账号密码时，扩展自己挂 `GIT_ASKPASS` 弹输入框（机密项掩码），不借内置 Git 的提示。0.3.0 起在 GitHub 上还可选用 VS Code 已登录的账号（浏览器授权）并自动重试本次推送，其他平台提供「打开仓库网页 / 复制凭据助手命令 / 重试 / PAT 当密码」的通用引导；任何环节不可用都回到这个输入框。内置扩展的只读旁路同样只在它**已经激活**时才使用，不会主动去激活，自研的 refs 读取仍是权威路径。
 
 ### 失败提示要能行动
 
@@ -314,6 +314,7 @@ Otherwise, please use 'git rebase --skip'
 | `idea-git.autoFetchMinutes` | 面板打开期间每 N 分钟静默 fetch 一次远端，只更新分支树与箭头；不弹凭据框、不弹错误，仓库没远端时一个子进程都不启（`0` 关闭） | `0` |
 | `idea-git.fileHistory` | 「文件历史」打开的界面：`custom`（GitCharm 自带面板）或 `native`（VS Code 时间线） | `custom` |
 | `idea-git.debug` | 调试日志（输出到扩展宿主控制台） | `false` |
+| `idea-git.authentication.useVSCodeSession` | 推送 GitHub 需要凭据时优先复用 VS Code 已登录的 GitHub 账号（浏览器登录），关闭后始终用自带凭据输入框；GitLab / Gitee / 自建服务不受影响 | `true` |
 
 ---
 

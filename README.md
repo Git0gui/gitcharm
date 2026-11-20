@@ -89,7 +89,7 @@ GitCharm provides a three-panel Git log view:
 - **Instant open**: the page of history you last saw is painted from disk before any git command runs, and only when the branch tip it was taken from hasn't moved — the live load then replaces it. Branch names come straight off the filesystem and the ahead/behind arrows arrive a moment later
 - **Details keep up**: selecting one commit skips the history-ordering walk a single commit doesn't need; selecting several runs ordering, details and files side by side. The merged file list still comes out in history order, oldest first
 - **Filesystem refs**: resolves the git directory (plain clones, linked worktrees, shared `commondir`) and parses its refs (loose + packed-refs) directly — hundreds of branches stay smooth, no flood of `git rev-parse` subprocesses
-- **No built-in git extension needed**: GitCharm never activates or reads `vscode.git`; branch lists, the current branch and ahead/behind counts all come from our own refs reader and a single `for-each-ref`, so the panel works even with the built-in Git extension disabled
+- **No built-in git extension required**: GitCharm never activates `vscode.git` on its own; branch lists, the current branch and ahead/behind counts come from our own refs reader and a single `for-each-ref`, so the panel works even with the built-in Git extension disabled. When that extension is already active, a few read-only lookups may use its stable public API as an optional shortcut, with a full fallback to our own implementation
 - **Smart cache**: branch info persisted to workspace state (Memento), instantly available after restart; a filesystem watch on the git directory drops stale caches when you commit, fetch or switch branches elsewhere
 - **No idle subprocesses**: git availability is remembered across sessions, in-progress operations are detected by reading `.git` state files, and a re-shown panel replays its cached graph unless the displayed tip actually moved — the first load records that tip itself, so a visibility event right after startup no longer re-runs the same query
 - **Canvas graph**: pixel-precise commit graph rendered on Canvas with high-DPI support, several times faster than SVG/DOM
@@ -120,7 +120,7 @@ GitCharm provides a three-panel Git log view:
 - **Menus ordered by use**: context menus run from the actions you reach for most to the destructive ones, and a branch menu only offers what the repository can actually do — no remote means no Pull / Push / Open on remote, and a branch without an upstream says "First push"
 - **A row's context menu keeps your selection**: right-clicking one of several selected commits operates on the whole group instead of collapsing the selection down to that row
 - **Stale lock files, handled with a question**: if a write hits a `.lock` file left behind by a killed git process, GitCharm asks once, then deletes it and retries the same command — no hand-cleaning inside the git directory
-- **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH
+- **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH. On GitHub it can optionally reuse VS Code's signed-in account (browser authorization) and retry the push; `idea-git.authentication.useVSCodeSession` turns this off, and all other hosts keep the generic credential-helper / personal-access-token guidance
 - **Full error detail on demand**: the error notification stays short, while the complete git output (credentials redacted) goes to the GitCharm output channel, reachable from a Show Log button on the notification
 - **Optional background fetch**: set `idea-git.autoFetchMinutes` and the panel fetches from the remote every N minutes while it is open, refreshing the branch tree and the ahead/behind arrows. Silent by design — no credential prompt, no error toast, and no subprocess at all when the repository has no remote
 - **Several repositories in one workspace**: whether they come from several workspace folders or from a plain parent directory holding a dozen sibling projects, GitCharm discovers them all and puts a repository switcher above the branch tree (and `GitCharm: Switch Repository` in the command palette); the choice is remembered per workspace, and switching clears what belonged to the other repository instead of reusing branch names and hashes that only look valid
@@ -188,6 +188,7 @@ Search `idea-git` in settings:
 | `idea-git.debug` | Enable debug logging to the extension host console | `false` |
 | `idea-git.autoFetchMinutes` | Fetch from the remote every N minutes while the panel is open (silent; `0` disables) | `0` |
 | `idea-git.protectedBranches` | Branch patterns that get an extra confirmation before force-push or delete (`*` wildcards supported) | `["main", "master"]` |
+| `idea-git.authentication.useVSCodeSession` | Reuse VS Code's signed-in GitHub account for GitHub pushes instead of prompting for a token; other hosts are unaffected | `true` |
 
 ## Development
 
@@ -286,7 +287,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **秒开**：上一次看的那一页提交历史在任何 git 命令之前就从磁盘画出来，而且只在它所属分支的 tip 没动时才用（真正的加载随后覆盖它）；分支名直接读文件系统，ahead/behind 箭头晚一步补上
 - **第三栏跟得上**：只选一条提交时跳过它不需要的历史排序遍历；多选时排序、详情、文件三路并行。合并出的文件清单仍按历史顺序旧→新排列
 - **直读 refs**：先定位 git 目录（普通克隆、linked worktree、共享 `commondir` 都能解析），再直接读 refs（loose + packed-refs），数百分支也不卡死，避免大量 `git rev-parse` 子进程
-- **不依赖内置 git 扩展**：全程不激活、不读取 `vscode.git`；分支列表、当前分支、超前/落后全部来自自研 refs 读取器 + 单条 `for-each-ref`，禁用内置 Git 扩展也能正常用
+- **不依赖内置 git 扩展**：不会主动激活 `vscode.git`；分支列表、当前分支、超前/落后默认全部来自自研 refs 读取器 + 单条 `for-each-ref`，禁用内置 Git 扩展也能正常用。内置扩展已激活时，少数只读查询可选用它公开稳定的 API 作为加速，任何异常都回退到自研实现
 - **智能缓存**：分支信息持久化到工作区状态（Memento），重启后立即可用；对 git 目录做文件监听，在别处提交 / 拉取 / 切分支时自动失效
 - **空闲时不启子进程**：git 可用性跨会话记忆，进行中操作靠读 `.git` 状态文件判断，面板重新显示时只要展示的 tip 没动就直接复用缓存——首次加载自己就会记下这个 tip，所以启动刚结束那一下可见性事件不再重跑同一条查询
 - **Canvas 图谱**：提交图用 Canvas 像素级绘制，高 DPI 自适应，比 SVG/DOM 高效数倍
@@ -317,7 +318,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **菜单按使用频率排**：右键菜单从最常点的操作一路排到破坏性操作；分支菜单只给这个仓库真能做的——没配远端就不出现拉取／推送／在远端打开，还没上游的分支直接写成「首次推送」
 - **行右键不改选中**：在多选出来的几条提交里右键其中一行，菜单作用于整组选择，不会把选择缩成这一行
 - **残留锁文件先问再删**：写操作撞上被杀掉的 git 进程留下的 `.lock` 文件时先问一句，同意后删除它并重试同一条命令，不必自己去 git 目录里手动清理
-- **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不再依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH
+- **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH。GitHub 可选复用 VS Code 已登录的账号并自动重试本次推送，`idea-git.authentication.useVSCodeSession` 可关闭；其他平台统一走凭据助手 / 个人访问令牌引导
 - **完整错误随时可查**：错误通知保持简短，完整的 git 输出（凭据已脱敏）写入 GitCharm 输出通道，通知条上的"显示日志"按钮可直接打开
 - **可选的后台定时 fetch**：设置 `idea-git.autoFetchMinutes` 后，面板打开期间每隔 N 分钟静默 fetch 一次，只更新分支树与超前/落后箭头。刻意保持安静：不弹凭据输入、不弹错误提示，仓库没有远端时一个子进程也不 spawn
 - **一个工作区里有多个仓库**：不管它们来自多个工作区文件夹，还是一个普通父目录下并排的十几个工程，都会被一并发现，分支树上方出现仓库切换器（命令面板另有 `GitCharm: 切换仓库`），选择按工作区记忆；切换会清掉属于另一个仓库的状态，而不是拿"看着像真的"的同名分支与短哈希继续用。只有一个仓库时这个控件不出现
@@ -385,6 +386,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | `idea-git.debug` | 启用调试日志（输出到扩展宿主控制台） | `false` |
 | `idea-git.autoFetchMinutes` | 面板打开期间每隔 N 分钟静默 fetch 一次远端（`0` 表示关闭） | `0` |
 | `idea-git.protectedBranches` | 强制推送或删除前需要二次确认的分支模式（支持 `*` 通配） | `["main", "master"]` |
+| `idea-git.authentication.useVSCodeSession` | 推送 GitHub 需要凭据时复用 VS Code 已登录的 GitHub 账号，不再手工输入令牌；其他平台不受影响 | `true` |
 
 ## 开发
 
