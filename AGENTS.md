@@ -12,6 +12,7 @@ npm run package   # vsce package --no-yarn --allow-missing-repository
 ```
 
 - 每次改动后必须依次通过 compile、lint（0 error）、test（全绿），然后才允许提交。
+- **开发过程中允许自动寻找并安装所需技能**：遇到现有能力不足以完成当前任务时，可先检索可用的 Skill/插件，找到与任务匹配的技能后自主安装并加载使用，不必先征得确认；安装后按该技能的规范执行。不得因此跳过 compile/lint/test 验证或本文件的其他硬性规定。
 - Windows 本机 PowerShell 为 Constrained Language Mode：在 PowerShell 里必须调用 `npm.cmd`（`npm.ps1` 会报 MethodInvocationNotSupported）；Git Bash 里直接用 `npm` 即可。
 - 改了 `out/` 或 `media/` 后调试宿主（Extension Development Host）跑的是旧代码，必须完全重启宿主再验证，必要时 bump 版本号使缓存失效——避免"改了还是一样"的误判。
 - `engines.vscode` 不得低于 `@types/vscode` 的声明下限，否则 `vsce package` 直接报 `ERROR @types/vscode ... greater than engines.vscode ...` 且无 flag 可绕过。本仓库**实测代码下限是 1.66**（唯一卡点是 `src/services/fileIcons.ts` 用的 `ColorThemeKind.HighContrastLight`，1.65 typings 编译报 1 错、1.66 起 0 错；webview 视图与 `new RelativePattern(uri, …)` 在更早的 typings 里就有，不是卡点），所以 `engines.vscode` 与 `@types/vscode` 一起定为 `1.66`。

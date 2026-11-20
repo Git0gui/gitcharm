@@ -101,20 +101,29 @@ export function registerBranchCommands(
                         return;
                     }
 
+                    // Uncommitted edits must not strand the user on the old
+                    // branch. Git's `--merge` checkout carries them over; a
+                    // failure to inspect the worktree just means we use the
+                    // ordinary checkout and let git make the call.
+                    let carryLocalChanges = false;
+                    try {
+                        carryLocalChanges = !(await gitService.isClean());
+                    } catch { /* fall back to plain checkout */ }
+
                     let actualBranch = branchName;
                     if (branchName.startsWith('origin/')) {
                         const localName = branchName.replace(/^origin\//, '');
                         const localBranches = await gitService.getLocalBranches();
                         if (localBranches.includes(localName)) {
                             // Local branch already exists: switch to it.
-                            await gitService.checkout(localName);
+                            await gitService.checkout(localName, false, carryLocalChanges);
                         } else {
                             // Create a local tracking branch from the remote ref.
-                            await gitService.checkoutTracking(branchName);
+                            await gitService.checkoutTracking(branchName, carryLocalChanges);
                         }
                         actualBranch = localName;
                     } else {
-                        await gitService.checkout(branchName);
+                        await gitService.checkout(branchName, false, carryLocalChanges);
                     }
                     gitService.selectedBranch = actualBranch;
 
