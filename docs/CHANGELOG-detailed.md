@@ -6,6 +6,25 @@
 
 按用户要求重新（受控地）接入内置 Git 扩展。历史上项目曾因 `repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定、refs/HEAD 缓存滞后、激活触发多 spawn 冷启动扫描而**彻底移除**该依赖（见 0.0.5 与 §3 旧规则）；本版不是回退到"直接替换"，而是加一层**可选能力网关**：可用时优先用公开 API，任何不可用/异常/结果不可信都降级到原有实现。
 
+### 推送未登录：复用 VS Code 自身账号 + 平台无关引导 + 全量降级
+
+用户提出「推送时没有登录」的体验问题，并要求参考其他 Git 客户端、尽量复用 VS Code 自身能力且必须有降级方案。先核对上游，确定**能复用什么、不能复用什么**：
+
+- **不能把 push 交给内置 Git 扩展**：`extensions/git/src/api/git.d.ts` 的公开 API v1 `Repository` 没有 push 方法；`registerCredentialsProvider` 只在**内置扩展自己**的 `Askpass.handleAskpass` 里被遍历（`extensions/git/src/askpass.ts`：username 请求时查 provider 并缓存 60s，password 请求时回缓存），而 GitCharm 的 push 走自有 `GIT_ASKPASS`，注册了也不会被调用。改用 `git.push` 命令还会丢掉推送预览、强推二次确认、`--force-with-lease`、`withProgress` 与自有错误文案，违反 §3「写/网络 local-only」。
+- **能复用的是 `vscode.authentication.getSession`**：VS Code 官方文档明确「push 到 GitHub 仓库时会提示登录，不需要扩展」，凭据由内置的 `github-authentication` 扩展（`extensions/github-authentication/src/extension.ts` 注册 `registerAuthenticationProvider('github', …)`）通过浏览器 OAuth 取得。该 API 是公开稳定接口，`@types/vscode@1.66` 已含 `getSession(providerId, scopes, options)`、`{silent:true}` 与 `{createIfNone:true}`。
+- **GitLab / Gitee 没有开箱即用的方案**：官方 API 参考列出的内置 provider 只有 `github` / `microsoft` / `github-enterprise` / `microsoft-sovereign-cloud`；`authentication` 命名空间**没有枚举 provider 的 API**。GitLab Workflow 是第三方扩展，靠 `GitLab: Add Account` 的 PAT 或自建 OAuth 应用（redirect `vscode://gitlab.gitlab-workflow/authentication`，`api` scope）独立管理账户。因此**禁止猜 `gitlab` / `gitee` provider id**：未知主机一律走通用引导。
+
+实现（新增 `authPrompt.ts` 纯函数 + `vscodeAuth.ts` 宿主层，改 `askpass.ts` / `branchCommands.ts` / `gitService.ts`）：
+
+| 层 | 行为 | 降级 |
+| --- | --- | --- |
+| `GitAskpass._handle` | HTTPS username/password 且 `resolveAuthProvider(host)` 命中时，`readSessionToken(host)` 用 `{silent:true}` 静默拿 token，返回 `x-access-token` / token；60s 内存缓存，不落盘、不写日志 | 无 provider / 无 session / 用户未授权 / API 抛错 / 设置关闭 / 其它主机 → 原 `showInputBox` |
+| `branchCommands.showAuthFailure` | 只有 push **真的**认证失败后才出现；GitHub 给「使用 VS Code 登录」按钮（`{createIfNone:true}`），成功后用同一 `target`/`force` 自动重试 | 用户取消 / 登录失败 → 保留原错误通知；重试失败 → `auth.retryFailed` + 显示日志 |
+| 平台无关引导 | 从**本仓库 remote URL** 经 `remoteUrlToWebBase()` 推导网页入口（不硬编码 host）→ `vscode.env.openExternal`；`credentialHelperCommand()` 按平台给可复制命令；`hasCredentialHelper()` 只用于 `auth.noHelperHint` / `auth.staleHelperHint` 文案；`auth.patHint` 说明 PAT 当密码；另有重试、显示日志 | 无 remote 信息 → 只给通用文案；剪贴板/浏览器不可用 → `auth.actionFailed` |
+| `idea-git.authentication.useVSCodeSession` | 默认 true | 设为 false 后整条复用链路关闭，行为与 0.2.5 完全一致 |
+
+顺带修正三处旧问题：① 用户取消 askpass（204 → git 128）宿主侧原来完全无法感知，现在 `GitAskpass._cancelled` + `GitService.consumeCredentialCancellation()` 让命令层显示 `auth.cancelledHint`；② 命令层旧词表不认 `terminal prompts disabled` / `could not read Username`，现在用 `classifyGitNetworkFailure(rawText)` 兜底；③ 推送失败通知原来只有「显示日志」一个按钮，配置命令只能手抄，现在可复制、可打开网页、可重试。`GIT_TERMINAL_PROMPT=0`、`fetchSilent` 裸路径与 askpass 脚本一字未改。回归测试 `src/test/authGuidance.test.ts` 覆盖 prompt 解析、provider 白名单（GitLab/Gitee/钓鱼域名一律降级）、平台命令、降级链路、token 不外泄与中英文案。
+
 ### 设计约束
 
 - **只用公开稳定接口**：`GitExtension.getAPI(1)` 是唯一对外承诺的版本；`API` / `Repository` / `RepositoryState` 上明确公开的只读成员。`RefType` / `Status` / `ForcePushMode` 是 `const enum`（运行时不存在，不能引用），一律按结构化数字/鸭子类型处理；不用 `register*` 扩展点、不用 proposed / 实验性 / 内部字段、不用 `getAPI(2)`。

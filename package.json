@@ -474,6 +474,11 @@
             "master"
           ],
           "description": "%config.protectedBranches%"
+        },
+        "idea-git.authentication.useVSCodeSession": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.useVSCodeSession%"
         }
       }
     }

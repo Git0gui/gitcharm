@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import { GitService } from '../services/gitService';
-import { formatGitError, matchesBranchPattern, redactUrlCredentials } from '../services/gitUtils';
+import type { PushPreview } from '../services/gitService';
+import { classifyGitNetworkFailure, formatGitError, matchesBranchPattern, redactUrlCredentials, remoteUrlToWebBase } from '../services/gitUtils';
+import { credentialHelperCommand, resolveAuthProvider } from '../services/authPrompt';
+import { isVSCodeSessionEnabled, signIn } from '../services/vscodeAuth';
 import { logger } from '../services/logger';
 import { GraphViewProvider } from '../views/graphView';
 import {
@@ -29,6 +32,92 @@ export function registerBranchCommands(
         void vscode.window.showErrorMessage(message, t('log.showEntry')).then(choice => {
             if (choice) {void vscode.commands.executeCommand('idea-git.showLog');}
         });
+    }
+
+    /**
+     * Authentication failures used to offer only "Show Log". Following the
+     * sign-in flows of GitHub Desktop / VS Code / SourceTree, this gives a
+     * platform-independent path forward: a built-in VS Code sign-in when the
+     * host has one (GitHub), otherwise a link to the remote web page plus a
+     * copyable credential-helper command, and in every case a one-click retry
+     * of the exact same push. Every branch degrades to the original toast, so
+     * hosts with no provider (GitLab, Gitee, self-hosted, GHE) are never asked
+     * to sign in to the wrong account.
+     */
+    async function showAuthFailure(
+        message: string,
+        context: { host: string; webUrl: string | undefined; hasHelper: boolean },
+        retry: () => Promise<void>
+    ): Promise<void> {
+        const provider = resolveAuthProvider(context.host);
+        const providerLabel = provider ? provider.label : '';
+        const signInLabel = provider ? t('auth.signInWithVSCode', { provider: providerLabel }) : '';
+        const openLabel = t('auth.openRemotePage');
+        const retryLabel = t('auth.retryOperation');
+        const copyLabel = t('auth.copyHelperCommand');
+        const logLabel = t('log.showEntry');
+
+        // A notification truncates its tail, so the actionable line goes first.
+        // Without a built-in provider the generic PAT guidance works for every
+        // host, and we also report whether a credential helper is configured.
+        const detail = provider
+            ? message
+            : `${t('auth.patHint')}\n${context.hasHelper
+                ? t('auth.staleHelperHint') : t('auth.noHelperHint')}`;
+
+        const actions: string[] = [];
+        if (provider && isVSCodeSessionEnabled()) {
+            actions.push(signInLabel);
+        } else if (context.webUrl) {
+            actions.push(openLabel);
+        }
+        actions.push(retryLabel, copyLabel, logLabel);
+
+        const choice = await vscode.window.showErrorMessage(detail, ...actions);
+        if (!choice) {return;}
+        if (choice === logLabel) {
+            void vscode.commands.executeCommand('idea-git.showLog');
+            return;
+        }
+        if (choice === copyLabel) {
+            try {
+                await vscode.env.clipboard.writeText(credentialHelperCommand());
+                void vscode.window.showInformationMessage(t('auth.commandCopied'));
+            } catch {
+                void vscode.window.showWarningMessage(t('auth.actionFailed'));
+            }
+            return;
+        }
+        if (choice === openLabel) {
+            const url = context.webUrl;
+            if (!url) {return;}
+            try {
+                const opened = await vscode.env.openExternal(vscode.Uri.parse(url));
+                if (!opened) {await vscode.env.clipboard.writeText(url);}
+            } catch {
+                void vscode.window.showWarningMessage(t('auth.actionFailed'));
+            }
+            return;
+        }
+        if (signInLabel && choice === signInLabel) {
+            const ok = await signIn(context.host);
+            if (!ok) {
+                void vscode.window.showWarningMessage(t('auth.signInCancelled'));
+                return;
+            }
+            void vscode.window.showInformationMessage(t('auth.signInSuccess', { provider: providerLabel }));
+        }
+        // Retry the original operation with the same target and force flags.
+        // The askpass now silently reuses the fresh VS Code session.
+        try {
+            await retry();
+            void vscode.window.showInformationMessage(t('auth.retrySuccess'));
+        } catch (error) {
+            const raw = combineErrorText(error);
+            logger.error(`[GitCharm] retry failed: ${redactUrlCredentials(raw)}`);
+            void vscode.window.showErrorMessage(t('auth.retryFailed', { error: formatGitError(error) }), logLabel)
+                .then(pick => { if (pick) {void vscode.commands.executeCommand('idea-git.showLog');} });
+        }
     }
 
     /**
@@ -358,6 +447,29 @@ export function registerBranchCommands(
                 return;
             }
 
+            /** The network leg only: safe to replay after an interactive sign-in. */
+            const runPush = async (target: PushPreview, isForce: boolean): Promise<void> => {
+                // Progress, not a silent wait: a push over our own askpass can stop for
+                // a credential box, and `_execNetwork` sets no timeout so a large
+                // branch is not cut off — without an indicator that just looks frozen.
+                await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('push.pushing', { name: branchName }),
+                    cancellable: false
+                }, () => gitService.push(target.remote, branchName, isForce, !target.hasUpstream));
+                // Invalidate cache after push to ensure fresh divergence data
+                gitService.invalidateVolatile();
+                // Get current branch to decide refresh strategy
+                const currentBranch = await gitService.getCurrentBranch();
+                if (branchName === currentBranch) {
+                    graphView.refresh(true);
+                } else {
+                    graphView.refreshBranchesOnly();
+                }
+            };
+
+            let target: PushPreview | undefined;
+            let force = false;
             try {
                 // Everything the dialog shows for a target remote, including the
                 // remote choice itself. The dialog can switch targets; the preview
@@ -371,12 +483,13 @@ export function registerBranchCommands(
                 const result = await graphView.showPushDialog(preview);
 
                 if (!result || result.action === 'cancel') {return;}
-                const target = result.preview;
+                target = result.preview;
+                force = result.force === true;
 
                 // Force-push rewrites history others may already have, so it always
                 // gets a second confirmation. Protected branches keep their extra
                 // warning; the buttons answer with stable keys, not localized text.
-                if (result.force === true) {
+                if (force) {
                     const isProtected = matchesBranchPattern(branchName, protectedPatterns());
                     const message = isProtected
                         ? t('push.protectedConfirm', { name: branchName })
@@ -392,55 +505,72 @@ export function registerBranchCommands(
                     if (proceed !== 'force' && proceed !== t('push.forceAnyway')) {return;}
                 }
 
-                // Progress, not a silent wait: a push over our own askpass can stop for
-                // a credential box, and `_execNetwork` sets no timeout so a large
-                // branch is not cut off — without an indicator that just looks frozen.
-                await vscode.window.withProgress({
-                    location: vscode.ProgressLocation.Notification,
-                    title: t('push.pushing', { name: branchName }),
-                    cancellable: false
-                }, () => gitService.push(target.remote, branchName, result.force === true, !target.hasUpstream));
+                await runPush(target, force);
                 // git exits 0 with "Everything up-to-date" on stderr, so without this
                 // the user would be told a push happened when nothing was sent.
-                const pushedNothing = !result.force && target.hasUpstream
+                const pushedNothing = !force && target.hasUpstream
                     && target.aheadCount === 0 && target.behindCount === 0;
                 if (pushedNothing) {
                     vscode.window.showInformationMessage(t('push.upToDate', { name: branchName }));
                 } else {
-                    vscode.window.showInformationMessage(t(result.force ? 'push.forceSuccess' : 'push.success', { name: branchName }));
-                }
-
-                // Invalidate cache after push to ensure fresh divergence data
-                gitService.invalidateVolatile();
-
-                // Get current branch to decide refresh strategy
-                const currentBranch = await gitService.getCurrentBranch();
-                if (branchName === currentBranch) {
-                    // Full refresh including commits for current branch
-                    graphView.refresh(true);
-                } else {
-                    // Just refresh branches tree and divergence arrows
-                    graphView.refreshBranchesOnly();
+                    vscode.window.showInformationMessage(t(force ? 'push.forceSuccess' : 'push.success', { name: branchName }));
                 }
             } catch (error) {
                 // Detect on git's raw output (a long dump can push the keyword past
                 // the display cap), show the formatted one.
                 const rawText = combineErrorText(error);
                 logger.error(`[GitCharm] push failed: ${redactUrlCredentials(rawText)}`);
+                const cancelled = gitService.consumeCredentialCancellation();
                 // Parse common git push errors into user-friendly messages
                 let friendlyMsg: string;
+                let isAuth = false;
                 if (rawText.includes('non-fast-forward') || rawText.includes('[rejected]')) {
                     friendlyMsg = t('push.rejectedNonFastForward', { name: branchName });
                 } else if (rawText.includes('remote contains work that you do not have locally')) {
                     friendlyMsg = t('push.remoteAhead', { name: branchName });
                 } else if (rawText.includes('permission denied') || rawText.includes('403')) {
+                    // An SSH key / repository permission problem: signing in
+                    // would not fix it, so keep the original wording.
                     friendlyMsg = t('push.permissionDenied');
-                } else if (rawText.includes('authentication failed') || rawText.includes('401')) {
+                } else if (cancelled) {
+                    friendlyMsg = t('auth.cancelledHint');
+                    isAuth = true;
+                } else if (rawText.includes('authentication failed') || rawText.includes('401')
+                    || classifyGitNetworkFailure(rawText) === 'auth') {
+                    // classifyGitNetworkFailure also recognises the typical
+                    // "terminal prompts disabled" / "could not read Username"
+                    // text produced by GIT_TERMINAL_PROMPT=0, which the old
+                    // keyword list missed entirely.
                     friendlyMsg = t('push.authFailed');
+                    isAuth = true;
                 } else {
                     friendlyMsg = t('push.failed', { error: formatGitError(error) });
                 }
-                showNetworkError(friendlyMsg);
+
+                if (isAuth && target) {
+                    const retryTarget: PushPreview = target;
+                    // Derive the web entry point from THIS repository's remote
+                    // URL — never a hardcoded host — so GitHub, GitLab, Gitee
+                    // and self-hosted servers all get a usable sign-in page.
+                    let webUrl: string | undefined;
+                    let host = '';
+                    try {
+                        const remotes = await gitService.getRemotes();
+                        const url = remotes.find(r => r.name === retryTarget.remote)?.url;
+                        webUrl = url ? remoteUrlToWebBase(url) : undefined;
+                        if (webUrl) {
+                            host = vscode.Uri.parse(webUrl).authority.replace(/:\d+$/, '').toLowerCase();
+                        }
+                    } catch {
+                        // No remote info: fall back to generic guidance only.
+                        webUrl = undefined;
+                    }
+                    const hasHelper = await gitService.hasCredentialHelper();
+                    await showAuthFailure(friendlyMsg, { host, webUrl, hasHelper },
+                        () => runPush(retryTarget, force));
+                } else {
+                    showNetworkError(friendlyMsg);
+                }
             }
         }),
 

@@ -1186,6 +1186,35 @@ export class GitService {
     }
 
     /**
+     * True when the user dismissed the credential box during the last network
+     * command (askpass answered 204). Consumed once by the command layer so a
+     * cancellation is not misreported as a bad password; the flag is not read
+     * anywhere in the network path itself, so the error classification above
+     * stays untouched.
+     */
+    consumeCredentialCancellation(): boolean {
+        return this._askpass?.consumeCancellation() ?? false;
+    }
+
+    /**
+     * Whether git has a credential helper configured (any scope). Platform
+     * independent: GitHub, GitLab, Gitee and self-hosted remotes all rely on
+     * it. Used only to word the post-failure guidance, never to change a
+     * command. A missing key exits non-zero, which simply means "not set".
+     */
+    async hasCredentialHelper(): Promise<boolean> {
+        try {
+            const value = (await this.executeGitArgs(
+                ['config', '--get', 'credential.helper'],
+                { timeoutMs: 5000 }
+            )).trim();
+            return value.length > 0;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * A remote failure is only useful if it says what to do next: an
      * `GIT_TERMINAL_PROMPT=0` rejection otherwise reads as an opaque one-liner,
      * and "Failed to connect to github.com port 443" says nothing about the fix

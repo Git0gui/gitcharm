@@ -64,5 +64,6 @@
     "config.language.en": "English",
     "config.debug": "启用调试日志（输出到扩展宿主控制台，用于问题排查）",
     "config.autoFetchMinutes": "GitCharm 面板打开时每隔 N 分钟自动 fetch 一次远端。0 表示关闭（默认）。静默执行：不弹凭据输入、不弹错误提示。",
-    "config.protectedBranches": "受保护分支的模式列表：强制推送或删除这些分支前会再确认一次。`*` 匹配任意字符（如 `release/*`）。只增加确认步骤，不会直接禁止操作。"
+    "config.protectedBranches": "受保护分支的模式列表：强制推送或删除这些分支前会再确认一次。`*` 匹配任意字符（如 `release/*`）。只增加确认步骤，不会直接禁止操作。",
+    "config.useVSCodeSession": "推送 GitHub 仓库需要凭据时，优先复用 VS Code 已登录的 GitHub 账号（浏览器登录），不再要求手工输入令牌。关闭后始终使用 GitCharm 自带的凭据输入框。GitLab、Gitee、自建 Git 服务等其他平台不受此设置影响，统一走个人访问令牌与 Git 凭据助手引导。"
 }

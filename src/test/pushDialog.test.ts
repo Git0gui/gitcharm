@@ -16,7 +16,10 @@ const i18n = read('src', 'i18n', 'index.ts');
 describe('push dialog', () => {
     it('confirms every force push with stable action keys', () => {
         // Force-push is no longer confirmed only for protected branches.
-        assert.match(branchCommands, /if \(result\.force === true\) \{[\s\S]*?\['force', 'cancel'\]/);
+        // The dialog result is captured once and reused for the confirmation
+        // and for the replayable network leg (auth-failure retry).
+        assert.match(branchCommands, /force = result\.force === true;/);
+        assert.match(branchCommands, /if \(force\) \{[\s\S]*?\['force', 'cancel'\]/);
         assert.doesNotMatch(branchCommands, /result\.force === true && matchesBranchPattern/);
         assert.match(branchCommands, /proceed !== 'force' && proceed !== t\('push\.forceAnyway'\)/);
         assert.match(i18n, /'push\.forceConfirm':/);
