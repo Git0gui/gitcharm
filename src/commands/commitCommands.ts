@@ -476,7 +476,6 @@ export function registerCommitCommands(
             // Validate: only allow dropping commits that are reachable from HEAD
             const head = await gitService.getHeadHash();
             const invalidHashes: string[] = [];
-            const blockedHashes: Array<{ hash: string; reason: string }> = [];
             const warnedHashes: string[] = []; // Pushed commits - warn but allow
             
             for (const hash of selectedHashes) {
@@ -490,12 +489,9 @@ export function registerCommitCommands(
                         continue;
                     }
                     
-                    // Check if it's the initial commit
-                    const isInitial = await gitService.isInitialCommit(hash);
-                    if (isInitial) {
-                        blockedHashes.push({ hash: hash.substring(0, 7), reason: t('err.dropInitialCommit') });
-                        continue;
-                    }
+                    // Root commits are allowed now: the rebase planner starts at
+                    // `--root` when the oldest selected commit has no parent.
+                    // Git still decides whether the rewrite can succeed.
                     
                     // Check if already pushed to remote (warn but don't block)
                     const isPushed = await gitService.isCommitPushed(hash);
@@ -509,12 +505,6 @@ export function registerCommitCommands(
             
             if (invalidHashes.length > 0) {
                 vscode.window.showErrorMessage(t('commit.dropNotReachable', { hashes: invalidHashes.join(', ') }));
-                return;
-            }
-            
-            if (blockedHashes.length > 0) {
-                const reasons = blockedHashes.map(b => `${b.hash}: ${b.reason}`).join('\n');
-                vscode.window.showErrorMessage(reasons);
                 return;
             }
             
@@ -538,7 +528,10 @@ export function registerCommitCommands(
                 : t('commit.dropMultipleConfirm', { count: toDrop.length, hashes: hashList });
             
             if (warnedHashes.length > 0) {
-                confirmMessage += `\n\n⚠️ ${warnedHashes.length} 个提交已推送到远程：${warnedHashes.join(', ')}\n删除后将导致本地与远程历史不一致，需要强制推送。`;
+                confirmMessage += '\n\n' + t('commit.dropPushedWarning', {
+                    count: warnedHashes.length,
+                    hashes: warnedHashes.join(', ')
+                });
             }
             
             const confirm = await graphView.showDialog(
@@ -554,16 +547,12 @@ export function registerCommitCommands(
                 title: t('commit.droppingMultiple', { count: toDrop.length }),
                 cancellable: false
             }, async () => {
-                // toDrop is in chronological order (oldest first)
+                // toDrop is in chronological order (oldest first). A root
+                // commit has no parent: the rebase planner uses `--root` then.
                 const oldestHash = toDrop[0];
                 const parents = await gitService.getParents(oldestHash);
-                
-                if (parents.length === 0) {
-                    throw new Error(t('err.dropInitialCommit'));
-                }
-                
-                const baseRef = parents[0];
-                
+                const baseRef = parents.length > 0 ? parents[0] : null;
+
                 // Use interactive rebase to drop all selected commits at once
                 await gitService.dropCommitsWithRebase(baseRef, toDrop);
                 
@@ -711,28 +700,11 @@ export function registerCommitCommands(
                 return;
             }
             
-            // Validate: check for merge commits
-            const blockedHashes: Array<{ hash: string; reason: string }> = [];
-            
-            for (const hash of selectedHashes) {
-                assertHash(hash);
-                
-                try {
-                    const isMerge = await gitService.isMergeCommit(hash);
-                    if (isMerge) {
-                        blockedHashes.push({ hash: hash.substring(0, 7), reason: t('err.squashContainsMerge') });
-                    }
-                } catch {
-                    // If we can't determine, skip validation for this commit
-                }
-            }
-            
-            if (blockedHashes.length > 0) {
-                const reasons = blockedHashes.map(b => `${b.hash}: ${b.reason}`).join('\n');
-                vscode.window.showErrorMessage(reasons);
-                return;
-            }
-            
+            // No extra gate on what git can fold: planning below works out the
+            // actual rebase range and lets git reject anything it cannot replay
+            // (including merge commits, which never appear in a rebase todo).
+            selectedHashes.forEach(assertHash);
+
             // Which folds this selection really is: runs of adjacent commits, each
             // folding into one commit in place. A gap in the selection is not a
             // refusal — it means two folds. Every commit outside a run keeps both its

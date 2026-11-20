@@ -851,13 +851,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Show a custom theme-aware dialog inside the webview.
      * Returns the selected action or undefined if dismissed.
      */
-    showDialog(message: string, actions: string[], type: 'warn' | 'info' | 'error' = 'warn'): Promise<string | undefined> {
+    showDialog(message: string, actions: string[], type: 'warn' | 'info' | 'error' = 'warn', actionKeys?: string[]): Promise<string | undefined> {
         const view = this._view;
         if (!view) {return Promise.resolve(undefined);}
         // Command palette can run a command whose dialog would land in a hidden
         // view, where the frame (and the dialog with it) does not exist. Ask in a
         // native modal instead: buffering it would wait for a panel the user has
-        // no reason to open.
+        // no reason to open. Native buttons only return their label, so callers
+        // using actionKeys must accept that label as a fallback.
         if (!view.visible) {
             const options: vscode.MessageOptions = { modal: true };
             const ask = (msg: string): Thenable<string | undefined> =>
@@ -885,7 +886,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 if (!view.visible) {settle(undefined);}
             }));
             subscriptions.push(view.onDidDispose(() => settle(undefined)));
-            this._post({ command: 'showDialog', message, actions, type });
+            this._post({ command: 'showDialog', message, actions, type, actionKeys });
         });
     }
 
@@ -1375,7 +1376,11 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     this._branch = branch;
                     // Clear cherry-pick resume state when switching branches
                     await this._gitService.clearCherryPickResume(this._memento);
-                    await this._withCancellableGitQuery(() => this._reload());
+                    // A double-click is a scope change: the log must show that
+                    // branch, and the ahead/behind arrows must be recomputed even
+                    // when the shared refs snapshot is still inside its TTL. The
+                    // refresh runs in the background — it never delays the rows.
+                    await this._withCancellableGitQuery(() => this._reload(false, false, true));
                     break;
                 }
                 case 'refresh':
@@ -2096,6 +2101,19 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * History rewriting moves HEAD's branch, never the branch the log happens
+     * to be scoped to. The panel greys these actions when the log is showing
+     * another branch; this guard is the host-side equivalent for stale webview
+     * state and command-palette entry points that route through the panel.
+     */
+    private _assertHistoryScope(): void {
+        const current = this._gitService.readCurrentBranch();
+        if (!current || this._branch !== current) {
+            throw new Error(t('err.historyOtherBranch', { branch: current || '' }));
+        }
+    }
+
+    /**
      * Context-menu actions from the webview reuse the palette commands by
      * passing them a node-shaped argument they already understand.
      */
@@ -2180,6 +2198,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'revert': {
+                    this._assertHistoryScope();
                     const revertNode = message.hashes && message.hashes.length > 1
                         ? { hashes: message.hashes, label: `${message.hashes.length} commits` }
                         : commitNode;
@@ -2188,6 +2207,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'amend':
+                    this._assertHistoryScope();
                     await vscode.commands.executeCommand('idea-git.amendCommit', commitNode);
                     forceReload = true;
                     break;
@@ -2264,10 +2284,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await vscode.commands.executeCommand('idea-git.removeWorktree', { path: message.worktreePath });
                     return;
                 case 'reset':
+                    this._assertHistoryScope();
                     await vscode.commands.executeCommand('idea-git.resetToCommit', commitNode);
                     forceReload = true;
                     break;
                 case 'dropCommit': {
+                    this._assertHistoryScope();
                     // Pass multiple hashes if present
                     const dropNode = message.hashes && message.hashes.length > 1
                         ? { hashes: message.hashes, label: `${message.hashes.length} commits` }
@@ -2277,6 +2299,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'squashCommits': {
+                    this._assertHistoryScope();
                     // Pass multiple hashes for squash operation
                     const squashNode = message.hashes && message.hashes.length > 0
                         ? { hashes: message.hashes, label: `${message.hashes.length} commits` }
@@ -2305,10 +2328,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 case 'interactiveRebase':
+                    this._assertHistoryScope();
                     await vscode.commands.executeCommand('idea-git.interactiveRebase');
                     forceReload = true;
                     break;
                 case 'editMessage':
+                    this._assertHistoryScope();
                     await vscode.commands.executeCommand('idea-git.editCommitMessage', commitNode);
                     forceReload = true;
                     break;
@@ -2758,7 +2783,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
-    private async _reload(force: boolean = false, preserveSelection = false) {
+    private async _reload(force: boolean = false, preserveSelection = false, forceDivergence = false) {
         if (!this._view) {return;}
         const ticket = ++this._dataTicket;
         // Every reload other than the reveal itself goes back to the branch tip:
@@ -2789,7 +2814,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     resultCount: payload.commits.length
                 } : undefined
             });
-            this._refreshDivergence();
+            this._refreshDivergence(forceDivergence);
         } catch (error) {
             if (isGitCommandCancelled(error)) {return;}
             if (await this._recoverMissingGit()) {return;}
@@ -3066,12 +3091,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Background-compute each local branch's ahead/behind versus its upstream so
      * the tree can show push/pull arrows without blocking the main data load.
      */
-    private async _refreshDivergence(): Promise<void> {
+    private async _refreshDivergence(force = false): Promise<void> {
         if (!this._view || this._repoState !== 'ready') {return;}
         try {
             // Use lightweight method that only queries divergence info (much faster than full branch details)
             const [divergenceMap, branchMenuState] = await Promise.all([
-                this._gitService.getDivergenceInfo(),
+                this._gitService.getDivergenceInfo(force),
                 this._gitService.getBranchMenuState()
             ]);
             

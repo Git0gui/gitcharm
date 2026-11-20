@@ -101,7 +101,7 @@ describe('a panel nobody looked at does not compete with startup', () => {
 });
 
 describe('the remembered page survives its own verification', () => {
-    const reload = body('private async _reload\\(force: boolean = false, preserveSelection = false\\)');
+    const reload = body('private async _reload\\(force: boolean = false, preserveSelection = false, forceDivergence = false\\)');
     const paint = body('private async _paintPersistedFirstPage\\(\\)');
 
     it('a reload that lands on the snapshot keeps what the panel restored', () => {

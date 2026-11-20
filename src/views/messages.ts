@@ -276,7 +276,7 @@ export type ExtToWebviewMessage =
     }
     | { command: 'restoreViewState'; state: PersistedViewState }
     | { command: 'loading'; area: 'rows' | 'detail' | 'branches' | 'search' | 'multiCommits'; on: boolean }
-    | { command: 'showDialog'; message: string; actions: string[]; type?: string }
+    | { command: 'showDialog'; message: string; actions: string[]; type?: string; actionKeys?: string[] }
     | { command: 'showSquashMessageDialog'; prompt: string; initialValue: string; placeholder: string }
     | {
         command: 'showPushDialog';

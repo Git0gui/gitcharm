@@ -1317,18 +1317,24 @@ export class GitService {
     /**
      * Switch to (or create) a branch; invalidates volatile caches.
      */
-    async checkout(ref: string, create: boolean = false): Promise<void> {
+    async checkout(ref: string, create: boolean = false, carryLocalChanges = false): Promise<void> {
         assertRef(ref);
-        await this._execMutate(['checkout', ...(create ? ['-b'] : []), ref]);
+        // `-m` is git's "smart checkout": uncommitted changes travel with HEAD
+        // instead of blocking the switch. Conflicts, if any, are left in the
+        // worktree for the usual conflict UI; we never silently discard edits.
+        const args = ['checkout', ...(carryLocalChanges ? ['-m'] : []), ...(create ? ['-b'] : []), ref];
+        await this._execMutate(args);
     }
 
     /**
      * Create and switch to a local branch that tracks a remote ref.
      * Example: checkoutTracking('origin/feature-x') creates local 'feature-x'.
      */
-    async checkoutTracking(remoteRef: string): Promise<void> {
+    async checkoutTracking(remoteRef: string, carryLocalChanges = false): Promise<void> {
         assertRef(remoteRef);
-        await this._execMutate(['checkout', '--track', remoteRef]);
+        await this._execMutate([
+            'checkout', ...(carryLocalChanges ? ['-m'] : []), '--track', remoteRef
+        ]);
     }
 
     /**
@@ -2469,10 +2475,13 @@ export class GitService {
      * Lightweight method to get only divergence info (ahead/behind) for all branches.
      * Much faster than getBranchesWithDetails as it only queries track info.
      */
-    async getDivergenceInfo(): Promise<Record<string, { ahead: number; behind: number; upstream?: string }>> {
+    async getDivergenceInfo(force = false): Promise<Record<string, { ahead: number; behind: number; upstream?: string }>> {
         const result: Record<string, { ahead: number; behind: number; upstream?: string }> = {};
 
         try {
+            // A double-click on a branch asks for fresh arrows; the shared
+            // snapshot is otherwise served from its short TTL.
+            if (force) {this._refsSnapshotCache = undefined;}
             const trackMap = await this._getBranchTrackInfo();
             const untracked: string[] = [];
             for (const [branchName, t] of trackMap) {
@@ -3155,10 +3164,12 @@ export class GitService {
     /**
      * Get the rebase todo content (commits to be rebased)
      */
-    async getRebaseTodo(upstream: string): Promise<Array<{ action: string; hash: string; message: string }>> {
-        assertShellSafe(upstream, t('label.rebaseBase'));
+    async getRebaseTodo(upstream: string | null): Promise<Array<{ action: string; hash: string; message: string }>> {
+        // null means "from the initial commit" — the range is all of HEAD.
+        if (upstream) {assertShellSafe(upstream, t('label.rebaseBase'));}
+        const range = upstream ? `${upstream}..HEAD` : 'HEAD';
         const output = (await this.executeGitArgs([
-            'log', '--reverse', '--format=%H|%s', `${upstream}..HEAD`
+            'log', '--reverse', '--format=%H|%s', range
         ])).trim();
 
         if (!output) {return [];}
@@ -3333,9 +3344,11 @@ export class GitService {
 
     /**
      * Drop multiple commits using interactive rebase in a single operation.
-     * All selected commits are removed from the history at once.
+     * All selected commits are removed from the history at once. A null upstream
+     * means the selection reaches the initial commit, so the pass starts at
+     * `--root` instead of `<parent>..HEAD`.
      */
-    async dropCommitsWithRebase(upstream: string, commitHashes: string[]): Promise<void> {
+    async dropCommitsWithRebase(upstream: string | null, commitHashes: string[]): Promise<void> {
         if (commitHashes.length === 0) {
             throw new Error(t('commit.dropNoValid'));
         }
@@ -3343,7 +3356,7 @@ export class GitService {
 
         const todos = await this.getRebaseTodo(upstream);
         const selected = new Set(commitHashes);
-        
+
         // Build rebase todo: skip selected commits entirely
         const remaining: string[] = [];
         for (const t of todos) {
@@ -3352,19 +3365,22 @@ export class GitService {
             }
         }
 
-        // If all commits are being dropped, just reset to upstream
+        // Everything selected: with a parent we can simply move the branch ref.
+        // With the root included there is nowhere to move it — git has no ref for
+        // an empty branch, so this is git's own limit, not a UI restriction.
         if (remaining.length === 0) {
+            if (!upstream) {throw new Error(t('err.dropAllCommits'));}
             await this._execMutate(['reset', '--hard', assertShellSafe(upstream, t('label.rebaseBase'))]);
             return;
         }
 
         // If nothing was selected from the range (all commits outside range), error
         if (remaining.length === todos.length) {
-            throw new Error(t('err.squashNotInRange') + ': ' + 
+            throw new Error(t('err.squashNotInRange') + ': ' +
                 commitHashes.map(h => h.substring(0, 7)).join(', '));
         }
 
-        await this._runRebaseWithTodo(upstream, remaining.join('\n') + '\n');
+        await this._runRebaseWithTodo(upstream ?? '--root', remaining.join('\n') + '\n');
     }
 
     /**

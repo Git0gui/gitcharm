@@ -5,6 +5,10 @@ import * as path from 'path';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const webview = fs.readFileSync(path.join(ROOT, 'media', 'webview.js'), 'utf8').replace(/\r\n/g, '\n');
+const graphView = fs.readFileSync(path.join(ROOT, 'src', 'views', 'graphView.ts'), 'utf8').replace(/\r\n/g, '\n');
+const commitCommands = fs.readFileSync(path.join(ROOT, 'src', 'commands', 'commitCommands.ts'), 'utf8').replace(/\r\n/g, '\n');
+const branchCommands = fs.readFileSync(path.join(ROOT, 'src', 'commands', 'branchCommands.ts'), 'utf8').replace(/\r\n/g, '\n');
+const gitService = fs.readFileSync(path.join(ROOT, 'src', 'services', 'gitService.ts'), 'utf8').replace(/\r\n/g, '\n');
 
 function between(start: string, end: string): string {
     const from = webview.indexOf(start);
@@ -24,14 +28,16 @@ function ordered(source: string, ...actions: string[]): void {
 }
 
 describe('context menu frequency order', () => {
-    it('puts common branch actions before maintenance and keeps favorites last', () => {
+    it('puts common branch actions before maintenance, omits unavailable ones and keeps favorites last', () => {
         const branches = between(
-            'var menuItems;\n    if (isRemote)',
+            'var menuItems;',
             "\ndocument.getElementById('rows').addEventListener('click'"
         );
-        const localBranch = branches.slice(branches.indexOf('// Other local branches:'));
+        // The remote/current variants are separate blocks; the full order applies
+        // to another local branch, which is the row that offers this action set.
+        const otherBranch = branches.slice(branches.indexOf('} else {'));
         ordered(
-            localBranch,
+            otherBranch,
             "['checkout'",
             "['update'",
             "['push'",
@@ -45,12 +51,15 @@ describe('context menu frequency order', () => {
             "['deleteBranch'"
         );
         assert.match(branches, /menuItems\.concat\(\[\['toggleFavorite'/);
-        const currentBranch = branches.match(/else if \(isCurrent\) \{[\s\S]*?\n\s{4}\} else \{/)?.[0];
-        assert.ok(currentBranch, 'current branch menu should be separate from other local branches');
-        assert.doesNotMatch(currentBranch, /\['checkout'/, 'the checked-out branch cannot be checked out again');
+        // Items are pairs only: an action that cannot run is not in the menu.
+        assert.match(branches, /else if \(isCurrent\) \{[\s\S]*?menuItems\.push\(\['rename'/);
+        assert.match(branches, /\} else \{\s*\n\s*menuItems = \[\['checkout'/);
         assert.match(branches, /if \(hasRemote\) \{menuItems\.push\(\['update', T\('menu\.pull'\)\], \['push'/);
         assert.match(webview, /var hasRemote = state\.branchMenuStateLoaded && state\.hasRemote;/);
         assert.match(webview, /state\.branchMenuStateLoaded = true;/);
+        assert.doesNotMatch(webview, /it\[2\] === true/);
+        assert.doesNotMatch(webview, /classList\.contains\('disabled'\)/);
+        assert.match(webview, /\['worktreeRemove', T\('menu\.worktreeRemove'\)\]/);
     });
 
     it('puts commit inspection before history changes and destructive actions last', () => {
@@ -81,6 +90,14 @@ describe('context menu frequency order', () => {
             "['openRemoteCommit'",
             "['dropCommit'"
         );
+        // History rewriting is offered on every commit of the checked-out
+        // branch; when the log shows another branch those items are absent.
+        assert.match(commit, /var onCurrentBranch = !!state\.current && state\.selectedBranch === state\.current;/);
+        assert.match(commit, /if \(canRewrite\) \{items\.push\(\s*\['revert'/);
+        assert.match(commit, /if \(canRewrite && isHead\) \{/);
+        assert.match(commit, /if \(canRewrite\) \{items\.push\(\['dropCommit'/);
+        assert.match(commit, /if \(rowTags\.length > 0\) \{/);
+        assert.doesNotMatch(commit, /!canRewrite|!headOnly|rowTags\.length === 0/);
     });
 
     it('puts common file navigation and comparison before filtering and cherry-picking', () => {
@@ -96,6 +113,8 @@ describe('context menu frequency order', () => {
             "['filterPath'",
             "['fileCherryPick'"
         );
+        assert.match(files, /if \(hasSource\) \{items\.push\(\['fileJumpToSource'/);
+        assert.doesNotMatch(files, /!hasSource/);
     });
 
     it('keeps stash and worktree removal behind their common open/apply actions', () => {
@@ -104,6 +123,7 @@ describe('context menu frequency order', () => {
             "document.getElementById('rows').addEventListener('click'"
         );
         ordered(menu, "['worktreeOpen'", "['worktreeRemove'");
+        assert.match(menu, /if \(!worktreeRow\.classList\.contains\('main'\)\) \{/);
         ordered(menu, "['stashApply'", "['stashPop'", "['stashDrop'");
     });
 
@@ -137,5 +157,39 @@ describe('context menu frequency order', () => {
         );
         assert.match(rows, /var contextHashes = state\.selectedHashes\.indexOf\(hash\) >= 0[\s\S]*?: \[hash\];/);
         assert.doesNotMatch(rows, /state\.selectedHashes\s*=/);
+    });
+});
+
+describe('history rewriting stays on the checked-out branch', () => {
+    it('guards every conflict-prone action at the host entry point', () => {
+        const actions = ['revert', 'amend', 'reset', 'dropCommit', 'squashCommits', 'editMessage', 'interactiveRebase'];
+        for (const action of actions) {
+            const from = graphView.indexOf(`case '${action}'`);
+            assert.ok(from >= 0, `missing action case: ${action}`);
+            const slice = graphView.slice(from, from + 220);
+            assert.match(slice, /_assertHistoryScope\(\)/, `${action} must verify the log scope`);
+        }
+        assert.match(graphView, /if \(!current \|\| this\._branch !== current\)/);
+    });
+
+    it('lets git decide whether a commit can be dropped, including the root', () => {
+        const drop = commitCommands.slice(
+            commitCommands.indexOf("registerCommand('idea-git.dropCommit'"),
+            commitCommands.indexOf("registerCommand('idea-git.editCommitMessage'")
+        );
+        assert.doesNotMatch(drop, /isInitialCommit/);
+        assert.match(drop, /parents\.length > 0 \? parents\[0\] : null/);
+        assert.match(gitService, /dropCommitsWithRebase\(upstream: string \| null/);
+        assert.match(gitService, /_runRebaseWithTodo\(upstream \?\? '--root'/);
+    });
+
+    it('carries uncommitted changes across a branch switch', () => {
+        const checkout = branchCommands.slice(
+            branchCommands.indexOf("registerCommand('idea-git.checkoutBranch'"),
+            branchCommands.indexOf("registerCommand('idea-git.deleteBranch'")
+        );
+        assert.match(checkout, /carryLocalChanges = !\(await gitService\.isClean\(\)\)/);
+        assert.match(checkout, /gitService\.checkout\(branchName, false, carryLocalChanges\)/);
+        assert.match(gitService, /'checkout', \.\.\.\(carryLocalChanges \? \['-m'\] : \[\]\)/);
     });
 });

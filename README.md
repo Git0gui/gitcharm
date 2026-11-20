@@ -22,10 +22,12 @@
 
 ## What's New
 
-### Search is faster, clearer, and starts in the branch you are using
+### History changes stay on the branch you are on
 
-- **Search without losing your place.** Results highlight the matching text in commit subjects. Filtering keeps the existing list visible while it updates, avoids re-reading branches and other repository state, and repeated identical searches reuse the cached result.
-- **Open the history you expect.** A first-time panel opens on the checked-out branch. “All Branches” is the first row in the branch tree, and the Reflog dialog can switch between the selected branch’s record and `HEAD`.
+- **Force-push asks twice.** A second confirmation warns that remote history will be rewritten, with a stronger warning for protected branches.
+- **Drop commits without extra gates.** Deleting is no longer limited to the newest commit; the root commit can be selected too, and Git decides whether the rewrite is possible.
+- **Only actions that can run are listed.** Context menus omit unavailable items instead of showing them greyed out, and history-changing operations are offered only while you are viewing the checked-out branch.
+- **Switch branches with local edits.** Uncommitted changes are carried across, and double-clicking a branch refreshes its ahead/behind counts. The push dialog now gives commit messages more room than files and details.
 
 ## Overview
 
@@ -218,10 +220,12 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 搜索更快、更清楚，打开面板直达当前分支
+### 改写历史只动你正在看的分支
 
-- **搜索结果一目了然**：提交信息中会高亮匹配词；筛选时旧列表保持可读，避免重复读取分支等仓库状态，相同搜索条件直接复用缓存结果。
-- **打开面板就是熟悉的历史**：首次打开默认查看当前检出的分支；「全部分支」放在分支树第一行；Reflog 对话框可在「选中分支」与 `HEAD` 的操作记录间切换。
+- **强制推送再确认一次**：提醒会改写远端历史，受保护分支给出更重的警告。
+- **删除提交不再额外设限**：不要求必须是最新提交，首个提交也可选择，最终能否改写由 Git 判断。
+- **菜单里只留能做的操作**：右键菜单中当前做不到的项直接不显示；回退、改消息、重置、删除、压缩只在查看当前分支时提供。
+- **带未提交改动切分支**：改动会一起带过去；双击分支会同步刷新领先/落后数。推送弹框也让提交消息占了更多空间。
 
 ## 概览
 

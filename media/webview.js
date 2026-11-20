@@ -1627,9 +1627,7 @@ function showMenu(x, y, items, onPick) {
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.innerHTML = items.map(function (it) {
-        var disabled = it[2] === true;
-        return '<div class="context-menu-item' + (disabled ? ' disabled' : '') + '" data-action="' + esc(it[0]) + '"' +
-            (disabled ? ' aria-disabled="true"' : '') + '>' + esc(it[1]) + '</div>';
+        return '<div class="context-menu-item" data-action="' + esc(it[0]) + '">' + esc(it[1]) + '</div>';
     }).join('');
     document.body.appendChild(menu);
     var vw = window.innerWidth, vh = window.innerHeight;
@@ -1639,7 +1637,6 @@ function showMenu(x, y, items, onPick) {
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.querySelectorAll('.context-menu-item').forEach(function (item) {
-        if (item.classList.contains('disabled')) {return;}
         item.addEventListener('click', function () {
             onPick(item.getAttribute('data-action'));
             menu.remove();
@@ -2672,6 +2669,9 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         ? T('pushDlg.firstPush')
         : T('menu.push');
     
+    // Only list actions that can actually run: checkout is meaningless on the
+    // current branch, and merge/rebase/delete act on the checked-out branch so
+    // they are offered only for other local branches.
     var menuItems;
     if (isRemote) {
         menuItems = [
@@ -2681,7 +2681,6 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         ];
         if (hasRemote) {menuItems.splice(1, 0, ['fetch', T('menu.fetchRemote')]);}
     } else if (isCurrent) {
-        // Current branch: only show applicable actions
         menuItems = [];
         if (hasRemote) {
             menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);
@@ -2690,7 +2689,6 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         if (hasRemote) {menuItems.push(['openRemoteBranch', T('menu.openOnRemote')]);}
         menuItems.push(['rename', T('menu.rename')]);
     } else {
-        // Other local branches: full action set
         menuItems = [['checkout', T('menu.checkout')]];
         if (hasRemote) {menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);}
         menuItems.push(
@@ -2799,32 +2797,46 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
     var isMultiSelect = contextHashes.length > 1;
     
     var isHead = !!state.headHash && hash === state.headHash;
+    // History rewriting always applies to the CHECKED-OUT branch. A log scoped
+    // to another branch (or to all branches) may show the same commit hashes —
+    // deleting one there used to rewrite the branch we were standing on while
+    // leaving the branch on screen untouched. Omit those actions entirely.
+    var onCurrentBranch = !!state.current && state.selectedBranch === state.current;
+    var canRewrite = onCurrentBranch;
     var items = [];
-    
+
     if (isMultiSelect) {
         // Multi-select mode: routine history actions come before destructive drop.
-        items = [
-            ['cherryPick', T('menu.cherryPick') + ' (' + contextHashes.length + ')'],
-            ['revert', T('menu.revert') + ' (' + contextHashes.length + ')'],
-            ['squashCommits', T('menu.squashCommits') + ' (' + contextHashes.length + ')'],
+        items = [['cherryPick', T('menu.cherryPick') + ' (' + contextHashes.length + ')']];
+        if (canRewrite) {
+            items.push(
+                ['revert', T('menu.revert') + ' (' + contextHashes.length + ')'],
+                ['squashCommits', T('menu.squashCommits') + ' (' + contextHashes.length + ')']
+            );
+        }
+        items.push(
             ['copy', T('menu.copyHash')],
-            ['openRemoteCommit', T('menu.openOnRemote')],
-            ['dropCommit', T('menu.dropCommit') + ' (' + contextHashes.length + ')']
-        ];
+            ['openRemoteCommit', T('menu.openOnRemote')]
+        );
+        if (canRewrite) {items.push(['dropCommit', T('menu.dropCommit') + ' (' + contextHashes.length + ')']);}
     } else {
         items = [
             ['showDiff', T('menu.showDiff')],
             ['copy', T('menu.copyHash')],
             ['openRemoteCommit', T('menu.openOnRemote')],
-            ['cherryPick', T('menu.cherryPick')],
-            ['revert', T('menu.revert')],
+            ['cherryPick', T('menu.cherryPick')]
+        ];
+        if (canRewrite) {items.push(['revert', T('menu.revert')]);}
+        items.push(
             ['newBranchFrom', T('menu.newBranchFrom')],
             ['newTag', T('menu.newTag')]
-        ];
-        if (isHead) {
-            items.push(['editMessage', T('menu.editMessage')]);
-            items.push(['amend', T('menu.amend')]);
-            items.push(['reset', T('menu.reset')]);
+        );
+        if (canRewrite && isHead) {
+            items.push(
+                ['editMessage', T('menu.editMessage')],
+                ['amend', T('menu.amend')],
+                ['reset', T('menu.reset')]
+            );
         }
 
         // The host knows which refs are tags, so only offer to manage the ones
@@ -2832,10 +2844,14 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
         var rowCommit = (state.commits || []).find(function (x) { return x.hash === hash; });
         var rowTags = (rowCommit && rowCommit.tags) || [];
         if (rowTags.length > 0) {
-            items.push(['pushTag', T('menu.pushTag') + ' (' + rowTags.length + ')']);
-            items.push(['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')']);
+            items.push(
+                ['pushTag', T('menu.pushTag') + ' (' + rowTags.length + ')'],
+                ['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')']
+            );
         }
-        if (isHead) {items.push(['dropCommit', T('menu.dropCommit')]);}
+        // Drop is no longer restricted to HEAD or to non-root commits: git
+        // decides whether the history can be rewritten (see dropCommitsWithRebase).
+        if (canRewrite) {items.push(['dropCommit', T('menu.dropCommit')]);}
     }
 
     showMenu(e.clientX, e.clientY, items, function (action) {
@@ -2915,7 +2931,7 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     var path = file.getAttribute('data-path');
     var items = [];
     // Two distinct paths to the code. "Jump to Source" opens the checked-out
-    // branch's copy in the working tree — greyed when that path no longer exists
+    // branch's copy in the working tree — omitted when that path no longer exists
     // there, since it must never resurrect history over the working file. "Open
     // this commit's version" always works: it opens the historical blob in a
     // read-only tab, so a file deleted since is still readable.
@@ -2923,10 +2939,8 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
         var localPaths = state.detail && Array.isArray(state.detail.existingPaths)
             ? state.detail.existingPaths : null;
         var hasSource = !localPaths || localPaths.indexOf(path) >= 0;
-        items.push(
-            ['fileJumpToSource', T('menu.fileJumpToSource'), !hasSource],
-            ['fileOpenRevision', T('menu.fileOpenRevision')]
-        );
+        if (hasSource) {items.push(['fileJumpToSource', T('menu.fileJumpToSource')]);}
+        items.push(['fileOpenRevision', T('menu.fileOpenRevision')]);
     }
     items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],
@@ -4137,7 +4151,7 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'showDialog') {
         showDialog(m.message, m.actions || [], m.type || 'warn', function (action) {
             vscode.postMessage({ command: 'dialogAction', action: action });
-        });
+        }, m.actionKeys);
     } else if (m.command === 'showSquashMessageDialog') {
         showSquashMessageDialog(m.prompt, m.initialValue, m.placeholder);
     } else if (m.command === 'showPushDialog') {
@@ -4179,13 +4193,16 @@ var dialogIconMap = {
     error: '<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
 };
 
-function showDialog(message, actions, type, onPick) {
+function showDialog(message, actions, type, onPick, actionKeys) {
     var overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
     var iconSvg = dialogIconMap[type] || dialogIconMap.warn;
     var btns = actions.map(function (a, i) {
         var cls = i === 0 ? 'primary' : 'secondary';
-        return '<button class="dialog-btn ' + cls + '" data-action="' + esc(a) + '">' + esc(a) + '</button>';
+        // Stable keys let the host compare data-action instead of localized text;
+        // dialogs without keys keep the legacy label as their action value.
+        var action = actionKeys && actionKeys[i] ? actionKeys[i] : a;
+        return '<button class="dialog-btn ' + cls + '" data-action="' + esc(action) + '">' + esc(a) + '</button>';
     }).join('');
     overlay.innerHTML = '<div class="dialog-box">' +
         '<div class="dialog-title"><span class="dialog-icon ' + type + '">' + iconSvg + '</span><span>' + esc(message) + '</span></div>' +
