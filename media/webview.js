@@ -1627,9 +1627,7 @@ function showMenu(x, y, items, onPick) {
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.innerHTML = items.map(function (it) {
-        var disabled = it[2] === true;
-        return '<div class="context-menu-item' + (disabled ? ' disabled' : '') + '" data-action="' + esc(it[0]) + '"' +
-            (disabled ? ' aria-disabled="true"' : '') + '>' + esc(it[1]) + '</div>';
+        return '<div class="context-menu-item" data-action="' + esc(it[0]) + '">' + esc(it[1]) + '</div>';
     }).join('');
     document.body.appendChild(menu);
     var vw = window.innerWidth, vh = window.innerHeight;
@@ -1639,7 +1637,6 @@ function showMenu(x, y, items, onPick) {
     menu.style.left = x + 'px';
     menu.style.top = y + 'px';
     menu.querySelectorAll('.context-menu-item').forEach(function (item) {
-        if (item.classList.contains('disabled')) {return;}
         item.addEventListener('click', function () {
             onPick(item.getAttribute('data-action'));
             menu.remove();
@@ -2628,11 +2625,11 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         if (window._hideTooltip) window._hideTooltip();
 
         var worktreePath = worktreeRow.getAttribute('data-worktree');
-        // Git refuses to remove the main worktree; keep the item visible but grey.
-        var worktreeMenu = [
-            ['worktreeOpen', T('menu.worktreeOpen')],
-            ['worktreeRemove', T('menu.worktreeRemove'), worktreeRow.classList.contains('main')]
-        ];
+        // Git refuses to remove the main worktree, so that row only offers to open.
+        var worktreeMenu = [['worktreeOpen', T('menu.worktreeOpen')]];
+        if (!worktreeRow.classList.contains('main')) {
+            worktreeMenu.push(['worktreeRemove', T('menu.worktreeRemove')]);
+        }
         showMenu(e.clientX, e.clientY, worktreeMenu, function (action) {
             vscode.postMessage({ command: 'action', action: action, worktreePath: worktreePath });
         });
@@ -2672,25 +2669,41 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         ? T('pushDlg.firstPush')
         : T('menu.push');
     
-    // IDEA keeps the menu shape stable: an action that cannot run right now is
-    // greyed out, never removed. `showMenu` reads the third element as disabled.
-    // Merge/rebase/delete branch act on the checked-out branch, so they are only
-    // offered for other local branches.
-    var mergesIntoCurrent = !isRemote && !isCurrent;
-    var menuItems = [
-        ['checkout', T('menu.checkout'), isCurrent],
-        ['update', T('menu.pull'), !hasRemote],
-        ['push', pushLabel, !hasRemote],
-        ['fetch', T('menu.fetchRemote'), !hasRemote],
-        ['compareBranch', T('menu.compareWithCurrent'), isCurrent],
-        ['merge', T('menu.merge'), !mergesIntoCurrent],
-        ['rebase', T('menu.rebase'), !mergesIntoCurrent],
-        ['newBranchFrom', T('menu.newBranchFrom'), false],
-        ['worktreeAdd', T('menu.worktreeAdd'), isRemote],
-        ['openRemoteBranch', T('menu.openOnRemote'), !hasRemote],
-        ['rename', T('menu.rename'), isRemote],
-        ['deleteBranch', T('menu.deleteBranch'), isRemote || isCurrent]
-    ];
+    // Only list actions that can actually run: checkout is meaningless on the
+    // current branch, and merge/rebase/delete act on the checked-out branch so
+    // they are offered only for other local branches.
+    var menuItems;
+    if (isRemote) {
+        menuItems = [
+            ['checkout', T('menu.checkout')],
+            ['newBranchFrom', T('menu.newBranchFrom')],
+            ['compareBranch', T('menu.compareWithCurrent')]
+        ];
+        if (hasRemote) {menuItems.splice(1, 0, ['fetch', T('menu.fetchRemote')]);}
+    } else if (isCurrent) {
+        menuItems = [];
+        if (hasRemote) {
+            menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);
+        }
+        menuItems.push(['newBranchFrom', T('menu.newBranchFrom')]);
+        if (hasRemote) {menuItems.push(['openRemoteBranch', T('menu.openOnRemote')]);}
+        menuItems.push(['rename', T('menu.rename')]);
+    } else {
+        menuItems = [['checkout', T('menu.checkout')]];
+        if (hasRemote) {menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);}
+        menuItems.push(
+            ['compareBranch', T('menu.compareWithCurrent')],
+            ['merge', T('menu.merge')],
+            ['rebase', T('menu.rebase')],
+            ['newBranchFrom', T('menu.newBranchFrom')],
+            ['worktreeAdd', T('menu.worktreeAdd')]
+        );
+        if (hasRemote) {menuItems.push(['openRemoteBranch', T('menu.openOnRemote')]);}
+        menuItems.push(
+            ['rename', T('menu.rename')],
+            ['deleteBranch', T('menu.deleteBranch')]
+        );
+    }
 
     // Marking a branch is the one action every kind of row offers, so the
     // type-specific list keeps its order on top and the star sits below it.
@@ -2787,45 +2800,58 @@ document.getElementById('rows').addEventListener('contextmenu', function (e) {
     // History rewriting always applies to the CHECKED-OUT branch. A log scoped
     // to another branch (or to all branches) may show the same commit hashes —
     // deleting one there used to rewrite the branch we were standing on while
-    // leaving the branch on screen untouched. Keep those items visible but grey.
+    // leaving the branch on screen untouched. Omit those actions entirely.
     var onCurrentBranch = !!state.current && state.selectedBranch === state.current;
     var canRewrite = onCurrentBranch;
-    var headOnly = canRewrite && isHead;
     var items = [];
 
     if (isMultiSelect) {
         // Multi-select mode: routine history actions come before destructive drop.
-        items = [
-            ['cherryPick', T('menu.cherryPick') + ' (' + contextHashes.length + ')'],
-            ['revert', T('menu.revert') + ' (' + contextHashes.length + ')', !canRewrite],
-            ['squashCommits', T('menu.squashCommits') + ' (' + contextHashes.length + ')', !canRewrite],
+        items = [['cherryPick', T('menu.cherryPick') + ' (' + contextHashes.length + ')']];
+        if (canRewrite) {
+            items.push(
+                ['revert', T('menu.revert') + ' (' + contextHashes.length + ')'],
+                ['squashCommits', T('menu.squashCommits') + ' (' + contextHashes.length + ')']
+            );
+        }
+        items.push(
             ['copy', T('menu.copyHash')],
-            ['openRemoteCommit', T('menu.openOnRemote')],
-            ['dropCommit', T('menu.dropCommit') + ' (' + contextHashes.length + ')', !canRewrite]
-        ];
+            ['openRemoteCommit', T('menu.openOnRemote')]
+        );
+        if (canRewrite) {items.push(['dropCommit', T('menu.dropCommit') + ' (' + contextHashes.length + ')']);}
     } else {
         items = [
             ['showDiff', T('menu.showDiff')],
             ['copy', T('menu.copyHash')],
             ['openRemoteCommit', T('menu.openOnRemote')],
-            ['cherryPick', T('menu.cherryPick')],
-            ['revert', T('menu.revert'), !canRewrite],
-            ['newBranchFrom', T('menu.newBranchFrom')],
-            ['newTag', T('menu.newTag')],
-            ['editMessage', T('menu.editMessage'), !headOnly],
-            ['amend', T('menu.amend'), !headOnly],
-            ['reset', T('menu.reset'), !headOnly]
+            ['cherryPick', T('menu.cherryPick')]
         ];
+        if (canRewrite) {items.push(['revert', T('menu.revert')]);}
+        items.push(
+            ['newBranchFrom', T('menu.newBranchFrom')],
+            ['newTag', T('menu.newTag')]
+        );
+        if (canRewrite && isHead) {
+            items.push(
+                ['editMessage', T('menu.editMessage')],
+                ['amend', T('menu.amend')],
+                ['reset', T('menu.reset')]
+            );
+        }
 
         // The host knows which refs are tags, so only offer to manage the ones
-        // actually sitting on this commit. With no tags the items stay grey.
+        // actually sitting on this commit.
         var rowCommit = (state.commits || []).find(function (x) { return x.hash === hash; });
         var rowTags = (rowCommit && rowCommit.tags) || [];
-        items.push(['pushTag', T('menu.pushTag') + ' (' + rowTags.length + ')', rowTags.length === 0]);
-        items.push(['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')', rowTags.length === 0]);
+        if (rowTags.length > 0) {
+            items.push(
+                ['pushTag', T('menu.pushTag') + ' (' + rowTags.length + ')'],
+                ['deleteTag', T('menu.deleteTag') + ' (' + rowTags.length + ')']
+            );
+        }
         // Drop is no longer restricted to HEAD or to non-root commits: git
         // decides whether the history can be rewritten (see dropCommitsWithRebase).
-        items.push(['dropCommit', T('menu.dropCommit'), !canRewrite]);
+        if (canRewrite) {items.push(['dropCommit', T('menu.dropCommit')]);}
     }
 
     showMenu(e.clientX, e.clientY, items, function (action) {
@@ -2905,7 +2931,7 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
     var path = file.getAttribute('data-path');
     var items = [];
     // Two distinct paths to the code. "Jump to Source" opens the checked-out
-    // branch's copy in the working tree — greyed when that path no longer exists
+    // branch's copy in the working tree — omitted when that path no longer exists
     // there, since it must never resurrect history over the working file. "Open
     // this commit's version" always works: it opens the historical blob in a
     // read-only tab, so a file deleted since is still readable.
@@ -2913,10 +2939,8 @@ document.getElementById('d-files').addEventListener('contextmenu', function (e) 
         var localPaths = state.detail && Array.isArray(state.detail.existingPaths)
             ? state.detail.existingPaths : null;
         var hasSource = !localPaths || localPaths.indexOf(path) >= 0;
-        items.push(
-            ['fileJumpToSource', T('menu.fileJumpToSource'), !hasSource],
-            ['fileOpenRevision', T('menu.fileOpenRevision')]
-        );
+        if (hasSource) {items.push(['fileJumpToSource', T('menu.fileJumpToSource')]);}
+        items.push(['fileOpenRevision', T('menu.fileOpenRevision')]);
     }
     items.push(
         ['fileCompareLocal', T('menu.fileCompareLocal')],

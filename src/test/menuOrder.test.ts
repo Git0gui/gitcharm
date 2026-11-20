@@ -28,13 +28,16 @@ function ordered(source: string, ...actions: string[]): void {
 }
 
 describe('context menu frequency order', () => {
-    it('puts common branch actions before maintenance, greys unavailable ones and keeps favorites last', () => {
+    it('puts common branch actions before maintenance, omits unavailable ones and keeps favorites last', () => {
         const branches = between(
-            'var menuItems = [',
+            'var menuItems;',
             "\ndocument.getElementById('rows').addEventListener('click'"
         );
+        // The remote/current variants are separate blocks; the full order applies
+        // to another local branch, which is the row that offers this action set.
+        const otherBranch = branches.slice(branches.indexOf('} else {'));
         ordered(
-            branches,
+            otherBranch,
             "['checkout'",
             "['update'",
             "['push'",
@@ -48,15 +51,15 @@ describe('context menu frequency order', () => {
             "['deleteBranch'"
         );
         assert.match(branches, /menuItems\.concat\(\[\['toggleFavorite'/);
-        // Every item is a triple; the third slot is showMenu's disabled flag.
-        assert.match(branches, /\['checkout', T\('menu\.checkout'\), isCurrent\]/);
-        assert.match(branches, /\['merge', T\('menu\.merge'\), !mergesIntoCurrent\]/);
-        assert.match(branches, /\['rebase', T\('menu\.rebase'\), !mergesIntoCurrent\]/);
-        assert.match(branches, /\['deleteBranch', T\('menu\.deleteBranch'\), isRemote \|\| isCurrent\]/);
-        assert.doesNotMatch(branches, /if \(isCurrent\) \{[\s\S]*?menuItems = \[\]/);
+        // Items are pairs only: an action that cannot run is not in the menu.
+        assert.match(branches, /else if \(isCurrent\) \{[\s\S]*?menuItems\.push\(\['rename'/);
+        assert.match(branches, /\} else \{\s*\n\s*menuItems = \[\['checkout'/);
+        assert.match(branches, /if \(hasRemote\) \{menuItems\.push\(\['update', T\('menu\.pull'\)\], \['push'/);
         assert.match(webview, /var hasRemote = state\.branchMenuStateLoaded && state\.hasRemote;/);
         assert.match(webview, /state\.branchMenuStateLoaded = true;/);
-        assert.match(webview, /\['worktreeRemove', T\('menu\.worktreeRemove'\), worktreeRow\.classList\.contains\('main'\)\]/);
+        assert.doesNotMatch(webview, /it\[2\] === true/);
+        assert.doesNotMatch(webview, /classList\.contains\('disabled'\)/);
+        assert.match(webview, /\['worktreeRemove', T\('menu\.worktreeRemove'\)\]/);
     });
 
     it('puts commit inspection before history changes and destructive actions last', () => {
@@ -88,14 +91,13 @@ describe('context menu frequency order', () => {
             "['dropCommit'"
         );
         // History rewriting is offered on every commit of the checked-out
-        // branch, and greyed (not hidden) when the log shows another branch.
+        // branch; when the log shows another branch those items are absent.
         assert.match(commit, /var onCurrentBranch = !!state\.current && state\.selectedBranch === state\.current;/);
-        assert.match(commit, /var canRewrite = onCurrentBranch;/);
-        assert.doesNotMatch(commit, /if \(isHead\) \{items\.push\(\['dropCommit'/);
-        assert.match(commit, /\['dropCommit', T\('menu\.dropCommit'\), !canRewrite\]/);
-        assert.match(multiCommit, /\['squashCommits', T\('menu\.squashCommits'\)[\s\S]*?!canRewrite\]/);
-        assert.match(singleCommit, /\['editMessage', T\('menu\.editMessage'\), !headOnly\]/);
-        assert.match(singleCommit, /\['pushTag', T\('menu\.pushTag'\)[\s\S]*?rowTags\.length === 0\]/);
+        assert.match(commit, /if \(canRewrite\) \{items\.push\(\s*\['revert'/);
+        assert.match(commit, /if \(canRewrite && isHead\) \{/);
+        assert.match(commit, /if \(canRewrite\) \{items\.push\(\['dropCommit'/);
+        assert.match(commit, /if \(rowTags\.length > 0\) \{/);
+        assert.doesNotMatch(commit, /!canRewrite|!headOnly|rowTags\.length === 0/);
     });
 
     it('puts common file navigation and comparison before filtering and cherry-picking', () => {
@@ -111,6 +113,8 @@ describe('context menu frequency order', () => {
             "['filterPath'",
             "['fileCherryPick'"
         );
+        assert.match(files, /if \(hasSource\) \{items\.push\(\['fileJumpToSource'/);
+        assert.doesNotMatch(files, /!hasSource/);
     });
 
     it('keeps stash and worktree removal behind their common open/apply actions', () => {
@@ -119,6 +123,7 @@ describe('context menu frequency order', () => {
             "document.getElementById('rows').addEventListener('click'"
         );
         ordered(menu, "['worktreeOpen'", "['worktreeRemove'");
+        assert.match(menu, /if \(!worktreeRow\.classList\.contains\('main'\)\) \{/);
         ordered(menu, "['stashApply'", "['stashPop'", "['stashDrop'");
     });
 

@@ -1743,16 +1743,6 @@ canvas.graph-canvas {
     background: var(--vscode-menu-selectionBackground, #094771);
     transform: translateX(2px);
 }
-/* Unavailable actions stay visible (IDEA greys them out) so the menu does not
-   reshuffle by context; they must not read as clickable either. */
-.context-menu-item.disabled,
-.context-menu-item.disabled:hover {
-    opacity: .45;
-    cursor: default;
-    background: transparent;
-    transform: none;
-}
-
 /* ---- custom confirm dialog (theme-aware) ---- */
 .dialog-overlay {
     position: fixed;
