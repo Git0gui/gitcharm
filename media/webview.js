@@ -2683,14 +2683,20 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
     } else if (isCurrent) {
         menuItems = [];
         if (hasRemote) {
-            menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);
+            menuItems.push(['update', T('menu.update')], ['push', pushLabel]);
         }
         menuItems.push(['newBranchFrom', T('menu.newBranchFrom')]);
         if (hasRemote) {menuItems.push(['openRemoteBranch', T('menu.openOnRemote')]);}
         menuItems.push(['rename', T('menu.rename')]);
     } else {
         menuItems = [['checkout', T('menu.checkout')]];
-        if (hasRemote) {menuItems.push(['update', T('menu.pull')], ['push', pushLabel]);}
+        // One step for a local branch that is not current: switch to it and
+        // pull its upstream. Remote rows create a tracking branch instead, and
+        // the checked-out branch has nothing to check out, so this lives here.
+        if (hasRemote) {
+            menuItems.push(['checkoutAndUpdate', T('menu.checkoutAndUpdate')]);
+            menuItems.push(['update', T('menu.update')], ['push', pushLabel]);
+        }
         menuItems.push(
             ['compareBranch', T('menu.compareWithCurrent')],
             ['merge', T('menu.merge')],

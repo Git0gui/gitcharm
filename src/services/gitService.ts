@@ -1829,8 +1829,13 @@ export class GitService {
      * Update a local branch from its upstream.
      * For the checked-out branch, run pull. For a non-current branch, fetch the
      * upstream and fast-forward the local ref (fails if not fast-forwardable).
+     *
+     * `asCurrent` is set by the combined "check out and update" action: we just
+     * moved HEAD through our own exec, and the optional built-in Git API can
+     * still report the previous HEAD, so take the pull path explicitly instead
+     * of trusting that cache.
      */
-    async updateBranch(branchName: string): Promise<string> {
+    async updateBranch(branchName: string, asCurrent = false): Promise<string> {
         assertRef(branchName);
         const current = await this.getCurrentBranch();
         let upstream = await this.getUpstream(branchName);
@@ -1850,7 +1855,7 @@ export class GitService {
             }
         }
         
-        if (branchName === current) {
+        if (asCurrent || branchName === current) {
             // Read pull strategy from configuration
             const config = vscode.workspace.getConfiguration('idea-git');
             const pullStrategy = config.get<string>('pullStrategy', 'merge');

@@ -327,7 +327,7 @@ export type ExtToWebviewMessage =
 /** Actions the webview can request via { command: 'action', action: ... }. */
 export type WebviewAction =
     | 'continueOperation' | 'abortOperation'
-    | 'checkout' | 'push' | 'pull' | 'fetch' | 'merge' | 'rebase' | 'update'
+    | 'checkout' | 'checkoutAndUpdate' | 'push' | 'pull' | 'fetch' | 'merge' | 'rebase' | 'update'
     | 'commit' | 'rename' | 'deleteBranch' | 'newBranchFrom' | 'compareBranch'
     | 'showDiff' | 'cherryPick' | 'reset' | 'dropCommit' | 'squashCommits' | 'interactiveRebase' | 'editMessage'
     | 'revert' | 'amend' | 'openRemoteCommit' | 'openRemoteBranch'

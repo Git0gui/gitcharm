@@ -158,18 +158,21 @@ export function registerBranchCommands(
             }
         }),
 
-        vscode.commands.registerCommand('idea-git.checkoutBranch', async (branchNode: any) => {
+        // Returns `true` only when HEAD actually switched. "Check out and
+        // update" uses it as a gate: on any failure/diverted checkout the
+        // combined action must not touch another branch's refs.
+        vscode.commands.registerCommand('idea-git.checkoutBranch', async (branchNode: any): Promise<boolean> => {
             const branchName = getBranchName(branchNode);
             if (!branchName) {
                 vscode.window.showErrorMessage(t('common.noBranchSelected'));
-                return;
+                return false;
             }
 
-            await vscode.window.withProgress({
+            return await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
                 title: t('branch.switching', { name: branchName }),
                 cancellable: false
-            }, async () => {
+            }, async (): Promise<boolean> => {
                 try {
                     // Check for in-progress rebase/merge before switching branches
                     const inProgress = await gitService.getInProgressOperation();
@@ -181,13 +184,13 @@ export function registerBranchCommands(
                             [t('checkout.resolveBtn'), t('common.cancel')],
                             'warn'
                         );
-                        if (choice !== t('checkout.resolveBtn')) {return;}
+                        if (choice !== t('checkout.resolveBtn')) {return false;}
 
                         // Open the conflicted files: resolution happens in the editor,
                         // continue/abort stays in the panel's operation bar.
                         await handleConflictLoop(gitService, graphView, opLabel);
                         // After resolving, try checkout again
-                        return;
+                        return false;
                     }
 
                     // Uncommitted edits must not strand the user on the old
@@ -223,9 +226,11 @@ export function registerBranchCommands(
 
                     // Async full refresh in background (fetches new commits, ahead/behind, etc.)
                     graphView.refresh();
+                    return true;
                 } catch (error: any) {
                     const errMsg = formatGitError(error);
                     vscode.window.showErrorMessage(t('branch.switchFailed', { error: errMsg }));
+                    return false;
                 }
             });
         }),
@@ -712,13 +717,17 @@ export function registerBranchCommands(
             }
 
             try {
-                // The panel's 拉取 entry lands here, and updateBranch fetches/pulls over
+                // The panel's 更新 entry lands here, and updateBranch fetches/pulls over
                 // the network — same rule as push/pull/fetch: never wait silently.
+                // `asCurrent` is set only by "check out and update", which just
+                // switched HEAD itself; asking the pull path explicitly avoids a
+                // stale cached HEAD from the optional Git API.
+                const asCurrent = branchNode?.asCurrent === true;
                 const result = await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
                     title: t('branch.updating', { name: branchName }),
                     cancellable: false
-                }, () => gitService.updateBranch(branchName));
+                }, () => gitService.updateBranch(branchName, asCurrent));
                 const first = (result || '').split('\n')[0];
                 vscode.window.showInformationMessage(t('branch.updated', { name: branchName, detail: first ? `: ${first}` : '' }));
                 graphView.refresh();

@@ -2191,6 +2191,28 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     } catch {}
                     forceReload = true;
                     break;
+                case 'checkoutAndUpdate': {
+                    // Only a non-current local branch offers this: the webview
+                    // excludes remote rows and the already checked-out branch.
+                    // checkoutBranch shows its own errors and reports whether
+                    // HEAD actually moved. If it did not, updating would
+                    // fast-forward another branch's ref while the worktree is
+                    // still on the old one, so stop instead of risking that.
+                    const switched = await vscode.commands.executeCommand<boolean>('idea-git.checkoutBranch', branchNode);
+                    if (switched !== true) {return;}
+                    // Ask for the current-branch pull path explicitly: a cached
+                    // HEAD from the optional Git API may not have caught up with
+                    // the checkout we just performed ourselves.
+                    await vscode.commands.executeCommand('idea-git.updateBranch', { ...branchNode, asCurrent: true });
+                    // A local branch keeps its name on checkout (unlike an
+                    // origin/* tracking branch), so point the log at it now.
+                    // The two commands fire their own async refreshes before
+                    // this assignment, so let the common reload repaint from
+                    // the new scope once HEAD and refs have both changed.
+                    this._branch = message.branch;
+                    forceReload = true;
+                    break;
+                }
                 case 'push':
                     await vscode.commands.executeCommand('idea-git.pushBranch', branchNode);
                     break;
