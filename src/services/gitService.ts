@@ -273,6 +273,12 @@ export class GitService {
 
     // Volatile caches: invalidated whenever history/refs change
     private _graphCache = new LruCache<GraphData>(GitService.CACHE_MAX);
+    /**
+     * Bumped on every volatile-cache drop. Pure bookkeeping: nothing about the
+     * caches themselves changes. The view puts this in its paint signature so a
+     * screen cached before an external ref change is never replayed as current.
+     */
+    private _volatileEpoch = 0;
     private _branchCache = new LruCache<BranchDetails>(GitService.CACHE_MAX);
     // Immutable caches: keyed by commit hash, safe until evicted
     private _filesCache = new LruCache<FileStat[]>(GitService.DETAIL_CACHE_MAX);
@@ -1329,6 +1335,7 @@ export class GitService {
      * replaced wholesale by the next forced detail load.
      */
     invalidateVolatile(): void {
+        this._volatileEpoch++;
         this._graphCache.clear();
         this._branchCache.clear();
         this._refsSnapshotCache = undefined;
@@ -1337,6 +1344,11 @@ export class GitService {
         this._refsReader.invalidate();
         // The in-memory detail map holds ahead/behind; the persisted snapshot
         // (workspaceState) is untouched and still seeds the next startup.
+    }
+
+    /** Read-only generation counter for replay-safe screen caching. */
+    get volatileEpoch(): number {
+        return this._volatileEpoch;
     }
 
     /**

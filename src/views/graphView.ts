@@ -13,6 +13,7 @@ import { GitBlobFileSystemProvider } from '../services/blobFs';
 import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed, withFavoriteToggled } from '../services/branchMarks';
 import { parseFirstPage, serializeFirstPage } from '../services/firstPageStore';
 import { isGitCommandCancelled } from '../services/gitRunner';
+import { paintSignature, samePaint } from '../services/paintCache';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -149,6 +150,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     // Tip of the rev the middle list is showing; a change means history moved
     // outside this extension and the commit rows have to follow.
     private _lastKnownTip: string | undefined;
+    /**
+     * The last full `setData` payload and the scope it answered. Hiding a
+     * WebviewView destroys its DOM, so a re-show must paint again — but when
+     * the scope is unchanged the rows can be replayed from here instead of
+     * running `_collect` (git log + refs + a loading spinner) a second time.
+     */
+    private _lastPaint: { payload: GraphPayload; signature: string } | undefined;
     // Contents of refs/stash ('' when the repo has none); a change means a stash
     // was created, applied or dropped outside this extension.
     private _lastStashSignature: string | undefined;
@@ -697,6 +705,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._branch = this._defaultBranchScope();
         this._lastKnownBranch = undefined;
         this._lastKnownTip = undefined;
+        this._lastPaint = undefined;
         this._lastInProgress = null;
         this._skipBranchCheckUntil = 0;
         this._revRoot = undefined;
@@ -1376,6 +1385,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     this._branch = branch;
                     // Clear cherry-pick resume state when switching branches
                     await this._gitService.clearCherryPickResume(this._memento);
+                    // Double-clicking the branch already on screen cannot change
+                    // the rows: the tip is the same, so `git log` would answer
+                    // with the page we already have. Keep the 0.2.5 contract
+                    // (refresh ahead/behind) but skip _collect and the full
+                    // setData that would clear the selection and detail.
+                    const tip = await this._tipOfDisplayedRev();
+                    if (this._lastPaint && tip === this._lastKnownTip
+                        && this._lastPaint.signature === this._paintSignature(tip)) {
+                        void this._refreshDivergence(true);
+                        break;
+                    }
                     // A double-click is a scope change: the log must show that
                     // branch, and the ahead/behind arrows must be recomputed even
                     // when the shared refs snapshot is still inside its TTL. The
@@ -1766,7 +1786,28 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 // is free, and it also covers the watcher's debounce window where
                 // the cache has not been dropped yet.
                 const tip = await this._tipOfDisplayedRev();
-                void this._reload(!!tip && tip !== this._lastKnownTip);
+                // Hiding destroys the webview DOM, so the screen must be painted
+                // again on show. When the scope and tip are unchanged, the rows
+                // are already in memory: replay them instead of running _collect
+                // (git log + refs snapshot + a loading spinner) a second time.
+                if (this._lastPaint && tip === this._lastKnownTip
+                    && this._lastPaint.signature === this._paintSignature(tip)) {
+                    const hasSearchFilter = !!this._filters?.text || !!this._filters?.path;
+                    this._post({
+                        command: 'setData',
+                        ...this._lastPaint.payload,
+                        preserveSelection: true,
+                        searchContext: hasSearchFilter ? {
+                            query: this._filters.text ?? this._filters.path,
+                            resultCount: this._lastPaint.payload.commits.length
+                        } : undefined
+                    });
+                    // Arrows live in the rebuilt DOM too. A non-forced read hits
+                    // the shared refs snapshot, so this adds no spawn.
+                    void this._refreshDivergence(false);
+                } else {
+                    void this._reload(!!tip && tip !== this._lastKnownTip);
+                }
             }
             this._startBranchCheck();
             return;
@@ -2025,6 +2066,18 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         } catch {
             return undefined;
         }
+    }
+
+    /** Identity of the screen currently painted; see paintCache.ts. */
+    private _paintSignature(tip: string | undefined): string {
+        return paintSignature({
+            epoch: this._gitService.volatileEpoch,
+            repoPath: this._gitService.repositoryPath ?? '',
+            branch: this._branch ?? '',
+            tip: tip ?? '',
+            rootRev: this._revRoot?.rev ?? '',
+            filters: this._filters
+        });
     }
 
     /**
@@ -2805,15 +2858,35 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             
             // Include search context if filters are active
             const hasSearchFilter = !!this._filters?.text || !!this._filters?.path;
-            this._post({
-                command: 'setData',
-                ...payload,
-                preserveSelection: preserveSelection || this._takeSnapshotPaint(),
-                searchContext: hasSearchFilter ? {
-                    query: this._filters.text ?? this._filters.path,
-                    resultCount: payload.commits.length
-                } : undefined
-            });
+            const searchContext = hasSearchFilter ? {
+                query: this._filters.text ?? this._filters.path,
+                resultCount: payload.commits.length
+            } : undefined;
+            const signature = this._paintSignature(this._lastKnownTip);
+            // A reload whose answer paints exactly the screen already on display
+            // has nothing to replace. A rows-only repaint keeps the selected
+            // commit and its detail and leaves the branch tree untouched.
+            if (this._lastPaint?.signature === signature
+                && samePaint(this._lastPaint.payload, payload)) {
+                this._post({
+                    command: 'setCommits',
+                    commits: payload.commits,
+                    hasMore: payload.hasMore,
+                    hasMoreAbove: payload.hasMoreAbove,
+                    rooted: payload.rooted,
+                    highlight: payload.highlight,
+                    searchContext
+                });
+            } else {
+                this._post({
+                    command: 'setData',
+                    ...payload,
+                    preserveSelection: preserveSelection || this._takeSnapshotPaint(),
+                    searchContext
+                });
+            }
+            // Remembered for the next re-show and for the comparison above.
+            this._lastPaint = { payload, signature };
             this._refreshDivergence(forceDivergence);
         } catch (error) {
             if (isGitCommandCancelled(error)) {return;}
