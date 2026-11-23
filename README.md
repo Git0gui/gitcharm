@@ -22,11 +22,11 @@
 
 ## What's New
 
-### Works with the built-in Git extension, works without it
+### Faster history, cleaner branch actions (0.3.1)
 
-- **Uses the built-in Git extension when it is available.** Repository information is read through its stable public API when VS Code has it active, and GitCharm transparently falls back to its own implementation otherwise — the UI and every command behave the same either way.
-- **Nothing is taken away.** Commands, progress indicators, credential prompts, conflict handling and cache refreshes still use the existing implementation; only read-only lookups that can return identical results are delegated.
-- **Clear path when a push is not signed in.** On GitHub, GitCharm can reuse VS Code's own signed-in GitHub account (browser authorization) and retry the push automatically. On GitLab, Gitee and self-hosted servers — where VS Code has no built-in sign-in — it offers a platform-independent path: open the repository web page derived from your own remote URL, copy the platform-specific credential-helper command, retry the push, or enter a personal access token in the existing masked prompt. Cancelling a credential prompt is now reported as a cancellation instead of a bad password. Every path degrades to the original credential box, and `idea-git.authentication.useVSCodeSession` switches the reuse off.
+- **No redundant history reloads.** When the repository has not changed, GitCharm no longer re-reads and repaints the entire commit list — reopening the panel or double-clicking the branch already on screen stays instant. One action no longer fires several competing refreshes.
+- **"Check out and Update" in the branch menu.** One step switches to another local branch and brings it up to date. It appears only when that branch has a remote counterpart, and it never updates anything unless the checkout succeeded. The former "Pull" entry is now called "Update".
+- **External changes show up promptly.** A change made in a terminal or another tool is no longer masked by the panel's own refresh.
 
 ## Overview
 
@@ -220,11 +220,11 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 内置 Git 扩展可用就用，不可用也照常工作
+### 提交历史更快，分支操作更顺（0.3.1）
 
-- **自动优先使用内置 Git 扩展**：VS Code 已激活内置 Git 扩展时，通过它稳定公开的 API 读取仓库信息；不可用时无缝回退到 GitCharm 自带的实现，界面和所有操作表现一致。
-- **现有功能一点不少**：命令、进度提示、凭据输入、冲突处理与缓存刷新仍走原有实现；只有能返回一致结果的只读查询才会交给内置扩展。
-- **推送没登录也有明确出路**：GitHub 仓库可直接复用 VS Code 已登录的 GitHub 账号（浏览器授权），登录成功自动重试本次推送；GitLab、Gitee、自建 Git 服务等 VS Code 没有内置登录的平台，统一提供「打开远程仓库网页（由本仓库 remote 地址推导）」「复制对应平台的 Git 凭据助手命令」「重试推送」，并说明在网页创建个人访问令牌、推送时把 PAT 当密码输入。取消凭据输入会被明确识别为「已取消」，不再误报成密码错误。以上全部是可选增强，任何环节不可用或把 `idea-git.authentication.useVSCodeSession` 设为 false，都会回到原来的掩码输入框，行为与旧版一致。
+- **不再重复加载提交历史**：仓库数据没变时，不再重新读取并整屏重绘提交列表 —— 重新打开面板、双击当前所在分支都立刻可见；一次操作也不会再同时触发好几条刷新。
+- **分支右键新增「检出并更新」**：一步切到另一个本地分支并同步到最新；只在分支有对应远程分支时出现，检出没成功绝不会去动别的分支。原「拉取」更名为「更新」。
+- **外部变更及时上屏**：在终端或其它工具里改动仓库后，面板能及时感知并更新，不再被自身刷新的误判遮盖。
 
 ## 概览
 

@@ -2,6 +2,49 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.3.1] - 2026-11-24
+
+本版由用户连续三轮反馈驱动：先问「还有哪些优化点，再看看重复操作的问题」，选定「统一刷新调度」；再问「代码有问题吗」，据实审报告修掉三个语义瑕疵；最后追加「检出并更新，只限有远程分支的本地分支」。全部改动都在 `v0.3.1/history-reload-shortcircuit` 上，未 bump 前版本仍是 0.3.0。
+
+### 提交历史慢：先短路重绘，再合并重复请求（`032a298`）
+
+- 用户反馈「启动、再次点击、双击分支后，提交历史还是比较慢」。诊断出 `_reload` 每次都发全量 `setData` → webview `renderRows()` 全量重建，即使 `git log` 的答案与上一屏完全相同。
+- `src/services/paintCache.ts`：`paintSignature()` 把 `volatileEpoch / repoPath / branch / tip / rootRev / filters` 拼成画面签名，`samePaint()` 逐字段比较。结果相同改发 `setCommits`（rows-only，不重建分支树/不丢选中与详情）；`_onPanelShown` 重放缓存画面；双击同分支只 `_refreshDivergence(true)`。
+- 性能复测纠正过一次测量错误：第一次 497ms 是 `spawnSync` 冷启动异常，统一异步测量后是 30–75ms。`docs/perf/coldstart.mjs` 钉住首屏 ≤2 spawn、记住页 <10ms 且 0 spawn。
+
+### 分支菜单：新增「检出并更新」，「拉取」更名「更新」（`7df4897`）
+
+- 新项只在**非当前的本地分支**出现；远程行是建跟踪分支、当前分支无需检出，都排除。中文「检出并更新」/ 英文 "Check out and Update"，`menu.pull` 键整体改名 `menu.update`，`branch.updating` 进度文案同步。
+- **安全门控**：组合动作绝不能在检出失败后继续更新（否则会快进别的分支 ref）。`idea-git.checkoutBranch` 改为返回 `Promise<boolean>`（4 条 false 路径：无分支名 / 取消冲突对话框 / 解决冲突后未重试 / 抛错），宿主 `case 'checkoutAndUpdate'` 用 `executeCommand<boolean>` 取值，`switched !== true` 直接 return。
+- **第二个坑**：`gitService.updateBranch()` 靠 `getCurrentBranch()` 判 pull 还是 fetch+快进；刚由自己 exec 检出后，可选 gitapi 的 HEAD 缓存可能滞后，误判成「非当前分支」会直接 `update-ref` 让工作区与 HEAD 不一致。因此加 `updateBranch(branchName, asCurrent = false)`，命令层从 `branchNode?.asCurrent === true` 读取，判据改 `if (asCurrent || branchName === current)`。
+- 宿主 case 用 `forceReload = true; break;` 而非 `return`：两个命令各自的异步 refresh 发生在 `this._branch = message.branch` 之前，必须由公共 `_reload` 用新范围重画一次。
+
+### 统一刷新调度：打断「一次操作四条刷新链」（`c66685a`）
+
+- 复核发现上一轮只解决**结果重复绘制**，请求本身仍重复：一次面板内 commit 有 4 条互不知情的触发链 —— action 末尾 `_reload`、`_execMutate` 的 `invalidateVolatile()` 清缓存、两套 watcher（250ms 只清缓存 + 300ms HEAD 检测后 `_reload(true,true)`）、2s 轮询。`_dataTicket` 只丢弃晚到结果，`git log` 已 spawn。另 `_refreshDivergence` 有 8 个调用点零去重零序号，`setDivergence` 每条都触发 `renderTree()` 全量重建左树；`_tickAutoFetch` 同一次 fetch 调两次 divergence；两套 branches-only 实现（一套带不可取消的 `setTimeout(50)`）。
+- 新增纯模块 `src/services/refreshScheduler.ts`（无 vscode import，node:test 直载）：`RefreshScheduler<A>` 每通道单飞 —— 同 key 并发共享、不同 key 只留最新一个排队尾调用、`generation` + `isLatest` 让旧结果不投递、`reuseMs` 短窗口复用、`invalidateReuse()` 给外部变化强制重查。
+- 接线：`_reload`/`_reloadRows` 共用 rows 通道（key 含 kind/repo/branch/epoch/rootRev/filters，**不含 args**）；`_refreshDivergence` 走独立通道并在 post 前 `isLatest`；两套 branches-only 合并；删 `_tickAutoFetch` 的重复 divergence 与 50ms 定时器。`gitService` 加 `_selfWriteUntil`(600ms)，自身 mutation 的 watcher 回声不再二次清缓存。
+- **两个必须记录的取舍**：① `invalidateVolatile(): void` 签名被 `paintCache.test.ts` 静态断言钉住，不能加参数（第一次改成 `fromWatch` 参数直接让用例失败），改用状态标志。② rows 通道**不能开 `reuseMs`**：`docs/perf/search.mjs` 第 2 阶段要求「重复同词仍投递一次 `setCommits`（0 spawn）」，短窗口会把消息一起吞掉导致脚本超时，且用户主动刷新/搜索不该被吞；最终 rows 用 `reuseMs=0`（只做并发合并），250ms 窗口只给纯自动的 arrows/分支通道。同理**撤回 `setFilters` 相同输入短路** —— `_reloadRows` 的图缓存本就 0 spawn，短路只会省掉必需的消息。
+
+### 审查后修掉三个语义瑕疵（`79b75cd`）
+
+- **P1｜抑制窗口开错地方**：`invalidateVolatile()` 原本「非 watcher 来源就设 `_selfWriteUntil = now+600`」，但 `graphView._branchExists()` 分支查找 miss、stash 签名变化等都是**读侧**、且恰恰发生在外部刚改仓库时。后果：外部变更触发这些路径后开窗口 → 600ms 内真实外部 watcher 事件被当成自身回声跳过（2s 轮询兜底，最多晚约 2s 上屏，不会永久不一致）。修复：新增私有 `_invalidateAfterMutation()`，只由 `_execMutate` / `_execMutateWithEnv` / `_execNetwork` / `fetchSilent` 4 个真写路径调用；`invalidateVolatile()` 恢复纯缓存失效，删除 `_invalidateFromWatch` 标志。命令层 5 处 `invalidateVolatile()` 都在写操作之后、底层已开窗口，语义不变。
+- **P2｜force 编进 divergence key**：key 原含 `force ? 'force' : 'cached'`，导致 `_reload(forceDivergence=true)` 后的 forced 与 branches-only 的 cached 调用 key 不同、无法合并，各跑一遍 `getDivergenceInfo` + `getBranchMenuState`；queued 单槽位还会让先到 force 被后到 cached 覆盖降级。修复：key 只含 repoPath+epoch；`RefreshScheduler` 加 `mergeQueued`（`force: prev.force || next.force`）与 `needsOwnRun`（`next.force && !running.force`），`_running` 因此带 `args`。
+- **P3｜250ms 复用窗口吞掉 force**：`_refreshDivergence(true)` 现在自己先 `invalidateReuse()`，调用方不必也不能忘记；`selectBranch` 的手动调用移除，`_onPanelShown` 调的是 cached 版本故保留自己的。
+- 另外确认几处「看着危险实际安全」：`_reloadRows` 持有 rows 通道时 `await _reload` 不会死锁（kind 恒为 `full` vs `rows`，走排队后由 `_finishRowsRefresh` 重放）；所有 early return 都释放通道；`samePaint` 不比分支标签但比 local/remote 列表，新建/删除分支仍退回完整 `setData`。
+
+### 「检出并更新」收紧到有远程分支的本地分支（`b83f4b5`）
+
+- 原门控 `hasRemote` 是**仓库级** `getRemoteNames().length > 0`，不是分支级 —— 只要仓库配了任意 remote，所有非当前本地分支都会出现该项；纯本地分支点了会在 `updateBranch()` 抛 `err.noUpstreamNoRemote`。
+- 关键依据：`updateBranch()` 无 upstream 时用 `matchRemoteBranch(remote refs, branchName)` 从**同名远程分支**推断并 `--set-upstream-to`，找不到才报错。所以口径是「存在远程对应分支」而非「已配置 upstream」（后者会误排除已推送但没 `-u` 的分支）。
+- `media/webview.js` 新增 `hasRemoteCounterpart(branch)`，用 `state.remote`（`origin/main` / `fork/dev/x` 形式）去掉 remote 前缀后做**精确等值**比较；不用松散后缀，否则本地 `x` 会误匹配 `origin/feature/x`。`update`/`push` 仍走仓库级 `hasRemote` 未动；宿主侧不重复校验，靠 `updateBranch()` 自身兜底，避免为一次菜单判断多起子进程。
+
+### 验证与边界
+
+- 测试数随批次递增：538（0.3.0 合 main）→ 568（菜单）→ 586（调度）→ 592（P1/P2/P3）→ **593**（菜单门控）。新增 `paintCache.test.ts`、`checkoutAndUpdate.test.ts`、`refreshScheduler.test.ts`、`refreshWiring.test.ts`；其中 `refreshWiring.test.ts` 是读源码文本的静态接线断言，`checkoutAndUpdate.test.ts` 另用 `node:vm` 跑了一个**运行时**用例验证精确匹配。
+- 最终验证：compile rc=0 / lint 0 error（66 warning 为既有基线）/ test **593-593**；`docs/perf/coldstart.mjs` 首屏 2 spawn、记住页 0（曾有一次 snapshot paint 14ms 超标，是紧接 39s 测试后的机器抖动，重跑 3 次 4.73/4.27/7.28ms 全 PASS）；`docs/perf/search.mjs` 冷搜 1 / 重复 0 / 清空 0 spawn。
+- 本版**未做**（留给下一批）：webview `renderTree()` 的 rAF 合并（DOM 依赖同步查询，风险大于收益）、`_onPanelShown` 与 `ready` 握手可能的重复 `setData`、`getCommitGraphData` 的 force 并发写缓存、`_postStashes/_postWorktrees` 无签名短路、`_startBranchCheck` 每次 show 重建 watcher。所有 UI 行为仍需完整重启 Extension Development Host 手点验证。
+
 ## [0.3.0] - 2026-11-21
 
 按用户要求重新（受控地）接入内置 Git 扩展。历史上项目曾因 `repo.log(branch)` 忽略分支参数、`Commit.parents` 类型不稳定、refs/HEAD 缓存滞后、激活触发多 spawn 冷启动扫描而**彻底移除**该依赖（见 0.0.5 与 §3 旧规则）；本版不是回退到"直接替换"，而是加一层**可选能力网关**：可用时优先用公开 API，任何不可用/异常/结果不可信都降级到原有实现。
