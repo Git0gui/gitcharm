@@ -14,6 +14,7 @@ import { FavoriteStore, favoritesOf, normalizeFavoriteStore, withFavoriteRenamed
 import { parseFirstPage, serializeFirstPage } from '../services/firstPageStore';
 import { isGitCommandCancelled } from '../services/gitRunner';
 import { paintSignature, samePaint } from '../services/paintCache';
+import { RefreshScheduler, filterSignature } from '../services/refreshScheduler';
 import { getLocale, t, webviewStrings } from '../i18n';
 
 interface GraphPayload {
@@ -53,6 +54,17 @@ function revealLines(opts?: RevealOptions): { start: number; end: number } | und
 }
 /** How often to re-read HEAD while the panel is visible (watcher backstop). */
 const BRANCH_POLL_MS = 2000;
+/**
+ * A burst of automatic refreshes answers one screen, not one query per
+ * trigger. Only the arrows and branch-tree channels use it: a user-initiated
+ * refresh or search must never be answered by a paint from a moment ago.
+ */
+const REFRESH_REUSE_MS = 250;
+
+/** What a queued rows refresh has to replay once the channel is free. */
+type RowsRefreshArgs =
+    | { kind: 'full'; force: boolean; preserveSelection: boolean; forceDivergence: boolean }
+    | { kind: 'rows'; force: boolean };
 /**
  * Messages that paint the panel itself, as opposed to answering one request.
  * The webview discards anything posted before its script reports 'ready', and a
@@ -124,6 +136,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * that paints, or the tip page lands after the reveal and wipes it.
      */
     private _dataTicket = 0;
+    /**
+     * One channel per answer type. The action reload, the .git watcher, the
+     * poll and the visibility event all ask for the same screen; only one run
+     * per channel may spawn, and only the newest generation may paint.
+     */
+    private _rowsRefresh = new RefreshScheduler<RowsRefreshArgs>(0);
+    private _divergenceRefresh = new RefreshScheduler<{ force: boolean }>(REFRESH_REUSE_MS);
+    private _branchesRefresh = new RefreshScheduler<boolean>(REFRESH_REUSE_MS);
     /** The window above a rooted commit has unloaded rows left. */
     private _hasMoreAbove = false;
     private _loadingMoreAbove = false;
@@ -1393,6 +1413,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     const tip = await this._tipOfDisplayedRev();
                     if (this._lastPaint && tip === this._lastKnownTip
                         && this._lastPaint.signature === this._paintSignature(tip)) {
+                        // The double-click explicitly asks for fresh arrows; a
+                        // run that finished moments ago must not answer it.
+                        this._divergenceRefresh.invalidateReuse();
                         void this._refreshDivergence(true);
                         break;
                     }
@@ -1432,7 +1455,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     };
                     // Rows only: a filter changes which commits answer, not what
                     // the repository is, so the tree and its arrows stay as they
-                    // are instead of being re-read on every Enter.
+                    // are instead of being re-read on every Enter. A repeated
+                    // word is already a graph-cache hit (0 spawn); the rows
+                    // channel merges calls that arrive while one is running.
                     await this._withCancellableGitQuery(() => this._reloadRows());
                     break;
                 case 'loadMore':
@@ -1803,7 +1828,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                         } : undefined
                     });
                     // Arrows live in the rebuilt DOM too. A non-forced read hits
-                    // the shared refs snapshot, so this adds no spawn.
+                    // the shared refs snapshot, so this adds no spawn. The old
+                    // frame was destroyed, so a just-finished run must not be
+                    // reused: its answer was posted into the dead DOM.
+                    this._divergenceRefresh.invalidateReuse();
                     void this._refreshDivergence(false);
                 } else {
                     void this._reload(!!tip && tip !== this._lastKnownTip);
@@ -1909,9 +1937,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             logger.debug(`[GitCharm] Auto-fetch from ${remote} done`);
             // A fetch moves remote refs only: the branch tree and the behind/ahead
             // arrows are what changed. Local history is untouched, so the middle
-            // list is deliberately not reloaded.
+            // list is deliberately not reloaded. _refreshBranchesOnly already
+            // refreshes the arrows; a second explicit call only duplicated it.
             await this._refreshBranchesOnly();
-            this._refreshDivergence();
         } catch (error) {
             // Silent by design — offline, no credentials, or a remote that no
             // longer exists must not interrupt the user every few minutes.
@@ -2009,7 +2037,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 if (this._lastKnownTip && tip !== this._lastKnownTip) {
                     logger.info(`[GitCharm] History changed externally: ${this._lastKnownTip.slice(0, 8)} -> ${tip.slice(0, 8)}`);
                     this._lastKnownTip = tip;
-                    void this._reload(true, true);
+                    // The action handler already reloaded after its own mutation;
+                    // the watcher merely echoes that ref change. Painting the
+                    // same revision twice would spawn the same git log again.
+                    if (this._lastPaint && this._lastPaint.signature === this._paintSignature(tip)) {
+                        logger.debug('[GitCharm] History change already painted by the preceding reload');
+                    } else {
+                        // A real external change must never be swallowed by the
+                        // short reuse window, even when the epoch did not move.
+                        this._rowsRefresh.invalidateReuse();
+                        void this._reload(true, true);
+                    }
                 } else {
                     this._lastKnownTip = tip;
                 }
@@ -2858,8 +2896,49 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
+    /**
+     * Identity of the rows a reload would answer. The volatile epoch is part
+     * of it: an external ref change drops the caches and is a different answer
+     * even when the branch and the filters did not move.
+     */
+    private _rowsScopeKey(kind: 'full' | 'rows'): string {
+        return [
+            kind,
+            this._gitService.repositoryPath ?? '',
+            this._branch ?? '',
+            String(this._gitService.volatileEpoch),
+            this._revRoot?.rev ?? '',
+            filterSignature(this._filters)
+        ].join('\u001f');
+    }
+
+    /** Release the rows channel and replay the newest queued scope, if any. */
+    private _finishRowsRefresh(): void {
+        const next = this._rowsRefresh.end();
+        if (!next) {return;}
+        if (next.kind === 'rows') {
+            void this._reloadRows(next.force);
+        } else {
+            void this._reload(next.force, next.preserveSelection, next.forceDivergence);
+        }
+    }
+
+    private _finishDivergenceRefresh(): void {
+        const next = this._divergenceRefresh.end();
+        if (next) {void this._refreshDivergence(next.force);}
+    }
+
+    private _finishBranchesRefresh(): void {
+        const next = this._branchesRefresh.end();
+        if (next !== undefined) {void this._refreshBranchesOnly();}
+    }
+
     private async _reload(force: boolean = false, preserveSelection = false, forceDivergence = false) {
-        if (!this._view) {return;}
+        const claim = this._rowsRefresh.begin(this._rowsScopeKey('full'), {
+            kind: 'full', force, preserveSelection, forceDivergence
+        });
+        if (!claim) {return;}
+        if (!this._view) {this._finishRowsRefresh(); return;}
         const ticket = ++this._dataTicket;
         // Every reload other than the reveal itself goes back to the branch tip:
         // a rooted list would keep a new commit from ever showing up. Cleared even
@@ -2869,6 +2948,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         if (this._repoState !== 'ready') {
             // Guidance page is showing; history queries would fail here
             await this.refreshRepoState();
+            this._finishRowsRefresh();
             return;
         }
         logger.debug(`[GitCharm] _reload called with branch=${this._branch || 'all'}, force=${force}`);
@@ -2876,6 +2956,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         try {
             const payload = await this._collect(force, ticket);
             if (!payload) {return;}
+            if (!this._rowsRefresh.isLatest(claim.generation)) {return;}
             logger.debug(`[GitCharm] _reload sending setData with ${payload.commits.length} commits`);
             
             // Include search context if filters are active
@@ -2916,6 +2997,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('rows', false);
+            this._finishRowsRefresh();
         }
     }
 
@@ -2929,7 +3011,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * re-check would compare against a state the panel never received.
      */
     private async _reloadRows(force: boolean = false): Promise<void> {
-        if (!this._view) {return;}
+        const claim = this._rowsRefresh.begin(this._rowsScopeKey('rows'), { kind: 'rows', force });
+        if (!claim) {return;}
+        if (!this._view) {this._finishRowsRefresh(); return;}
         const ticket = ++this._dataTicket;
         // Same rule as _reload: a search answers from the branch tip, never from
         // a rooted window, or new commits could not enter the result set.
@@ -2937,11 +3021,13 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         this._hasMoreAbove = false;
         if (this._repoState !== 'ready') {
             await this.refreshRepoState();
+            this._finishRowsRefresh();
             return;
         }
         // A vanished selection is structural, not a filter: it needs the tree.
         if (this._dropVanishedBranch()) {
             await this._reload(force);
+            this._finishRowsRefresh();
             return;
         }
         this._postLoading('search', true);
@@ -2949,6 +3035,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             const first = await this._firstPageRows(force);
             const tip = await this._tipOfDisplayedRev();
             if (ticket !== this._dataTicket) {return;}
+            if (!this._rowsRefresh.isLatest(claim.generation)) {return;}
             this._lastKnownTip = tip;
             this._loaded = first.pageRows;
             this._hasMore = first.pageRows >= first.pageLimit;
@@ -2975,35 +3062,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             vscode.window.showErrorMessage(t('view.loadCommitsFailed', { error: formatGitError(error) }));
         } finally {
             this._postLoading('search', false);
+            this._finishRowsRefresh();
         }
     }
 
     /**
      * Reload only branches without affecting commits.
      */
+    /**
+     * Refresh only the branch tree. There used to be a second copy here that
+     * fired a floating `setTimeout(50)` divergence query: it could not be
+     * cancelled and raced with the user's own refresh. Both entry points now
+     * share the single implementation below.
+     */
     private async _reloadBranchesOnly(): Promise<void> {
-        if (!this._view) {return;}
-        
-        // Show loading indicator for branches area only
-        this._postLoading('branches', true);
-        
-        try {
-            const details = await this._gitService.getBranchesWithDetails(true);
-            
-            // Send only branch data, don't affect commits
-            this._postBranchList(details);
-            void this._postStashes();
-            void this._postWorktrees();
-            
-            // Async refresh divergence after branches are updated (non-blocking)
-            setTimeout(() => {
-                void this._refreshDivergence();
-            }, 50);
-        } catch (error) {
-            vscode.window.showErrorMessage(t('view.loadBranchesFailed', { error: formatGitError(error) }));
-        } finally {
-            this._postLoading('branches', false);
-        }
+        await this._refreshBranchesOnly();
     }
 
     /**
@@ -3118,16 +3191,28 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * Refresh only the branch tree without reloading commits.
      */
     private async _refreshBranchesOnly(): Promise<void> {
-        if (!this._view) {return;}
+        const claim = this._branchesRefresh.begin([
+            this._gitService.repositoryPath ?? '',
+            String(this._gitService.volatileEpoch)
+        ].join('\u001f'), true);
+        if (!claim) {return;}
         try {
-            const details = await this._gitService.getBranchesWithDetails(true);
-            this._postBranchList(details);
-            await Promise.all([this._postStashes(), this._postWorktrees()]);
-            // Also refresh divergence info (ahead/behind arrows)
-            await this._refreshDivergence();
-        } catch (error) {
-            if (isGitCommandCancelled(error)) {return;}
-            vscode.window.showErrorMessage(t('view.refreshBranchesFailed', { error: formatGitError(error) }));
+            if (!this._view) {return;}
+            this._postLoading('branches', true);
+            try {
+                const details = await this._gitService.getBranchesWithDetails(true);
+                this._postBranchList(details);
+                await Promise.all([this._postStashes(), this._postWorktrees()]);
+                // Also refresh divergence info (ahead/behind arrows)
+                await this._refreshDivergence();
+            } catch (error) {
+                if (isGitCommandCancelled(error)) {return;}
+                vscode.window.showErrorMessage(t('view.refreshBranchesFailed', { error: formatGitError(error) }));
+            } finally {
+                this._postLoading('branches', false);
+            }
+        } finally {
+            this._finishBranchesRefresh();
         }
     }
 
@@ -3187,34 +3272,48 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * the tree can show push/pull arrows without blocking the main data load.
      */
     private async _refreshDivergence(force = false): Promise<void> {
-        if (!this._view || this._repoState !== 'ready') {return;}
+        const claim = this._divergenceRefresh.begin([
+            this._gitService.repositoryPath ?? '',
+            String(this._gitService.volatileEpoch),
+            force ? 'force' : 'cached'
+        ].join('\u001f'), { force });
+        if (!claim) {return;}
         try {
-            // Use lightweight method that only queries divergence info (much faster than full branch details)
-            const [divergenceMap, branchMenuState] = await Promise.all([
-                this._gitService.getDivergenceInfo(force),
-                this._gitService.getBranchMenuState()
-            ]);
-            
-            logger.debug('[GitCharm] Divergence info:', JSON.stringify(divergenceMap));
-            
-            // Convert to the format expected by webview
-            const divergence: Record<string, { ahead: number; behind: number }> = {};
-            for (const [branchName, info] of Object.entries(divergenceMap)) {
-                if (info.ahead > 0 || info.behind > 0) {
-                    divergence[branchName] = { ahead: info.ahead, behind: info.behind };
+            if (!this._view || this._repoState !== 'ready') {return;}
+            try {
+                // Use lightweight method that only queries divergence info (much faster than full branch details)
+                const [divergenceMap, branchMenuState] = await Promise.all([
+                    this._gitService.getDivergenceInfo(force),
+                    this._gitService.getBranchMenuState()
+                ]);
+
+                logger.debug('[GitCharm] Divergence info:', JSON.stringify(divergenceMap));
+
+                // Convert to the format expected by webview
+                const divergence: Record<string, { ahead: number; behind: number }> = {};
+                for (const [branchName, info] of Object.entries(divergenceMap)) {
+                    if (info.ahead > 0 || info.behind > 0) {
+                        divergence[branchName] = { ahead: info.ahead, behind: info.behind };
+                    }
                 }
+
+                // Several triggers ask for the same arrows (reload, re-show,
+                // auto-fetch, branch poll). Only the newest run may paint, or a
+                // late reply rolls the arrows back to an older snapshot.
+                if (!this._divergenceRefresh.isLatest(claim.generation)) {return;}
+                logger.debug('[GitCharm] Sending divergence to webview:', JSON.stringify(divergence));
+                this._post({
+                    command: 'setDivergence',
+                    divergence,
+                    hasRemote: branchMenuState.hasRemote,
+                    branchesWithoutUpstream: branchMenuState.branchesWithoutUpstream
+                });
+            } catch (error) {
+                if (isGitCommandCancelled(error)) {return;}
+                logger.debug('[GitCharm] Failed to refresh divergence:', error);
             }
-            
-            logger.debug('[GitCharm] Sending divergence to webview:', JSON.stringify(divergence));
-            this._post({
-                command: 'setDivergence',
-                divergence,
-                hasRemote: branchMenuState.hasRemote,
-                branchesWithoutUpstream: branchMenuState.branchesWithoutUpstream
-            });
-        } catch (error) {
-            if (isGitCommandCancelled(error)) {return;}
-            logger.debug('[GitCharm] Failed to refresh divergence:', error);
+        } finally {
+            this._finishDivergenceRefresh();
         }
     }
 

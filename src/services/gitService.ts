@@ -209,6 +209,13 @@ export interface CommitDetail {
 
 /** Git dir writes arrive in bursts (one command touches several files). */
 const WATCH_DEBOUNCE_MS = 250;
+/**
+ * Our own mutations already call `invalidateVolatile()` synchronously. The
+ * watcher sees the same files ~250ms later; dropping the caches a second time
+ * only bumps the volatile epoch again, which makes a freshly painted screen
+ * look stale and starts a duplicate history query. External writes still pass.
+ */
+const WATCH_SELF_WRITE_SUPPRESS_MS = 600;
 
 /**
  * Temp files are named by the millisecond; a squash of several groups writes
@@ -342,6 +349,10 @@ export class GitService {
     private _workspaceFoldersListener: vscode.Disposable | undefined;
     private _watchDebounce: NodeJS.Timeout | undefined;
     private _watchRequested = false;
+    /** Until this timestamp, watcher events belong to a mutation we just ran. */
+    private _selfWriteUntil = 0;
+    /** Set only around the watcher's own cache drop, so it does not re-arm the window. */
+    private _invalidateFromWatch = false;
     private readonly _watchTokens = new Set<symbol>();
 
     // Credential prompts for remotes; absent when the host provides no askpass
@@ -462,8 +473,17 @@ export class GitService {
         if (this._watchDebounce) {clearTimeout(this._watchDebounce);}
         this._watchDebounce = setTimeout(() => {
             this._watchDebounce = undefined;
+            if (Date.now() < this._selfWriteUntil) {
+                logger.debug('[GitCharm] Watcher event follows our own mutation; caches were already dropped');
+                return;
+            }
             logger.debug('[GitCharm] Git directory changed, volatile caches dropped');
-            this.invalidateVolatile();
+            this._invalidateFromWatch = true;
+            try {
+                this.invalidateVolatile();
+            } finally {
+                this._invalidateFromWatch = false;
+            }
         }, WATCH_DEBOUNCE_MS);
     }
 
@@ -1344,6 +1364,9 @@ export class GitService {
         this._refsReader.invalidate();
         // The in-memory detail map holds ahead/behind; the persisted snapshot
         // (workspaceState) is untouched and still seeds the next startup.
+        if (!this._invalidateFromWatch) {
+            this._selfWriteUntil = Date.now() + WATCH_SELF_WRITE_SUPPRESS_MS;
+        }
     }
 
     /** Read-only generation counter for replay-safe screen caching. */
