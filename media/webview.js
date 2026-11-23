@@ -2612,6 +2612,22 @@ document.getElementById('rf-files').addEventListener('click', function () {
     }
 });
 
+// "Check out and Update" ends in updateBranch(), which needs a remote
+// counterpart: a configured upstream, or a same-named remote branch it can
+// adopt. A purely local branch has neither and would only throw
+// err.noUpstreamNoRemote, so the action must not be offered for it.
+// `state.remote` holds remote-tracking refs such as "origin/main" or
+// "fork/dev/x"; compare the part after the remote name to keep nested branch
+// names exact (local "x" must not match "origin/feature/x").
+function hasRemoteCounterpart(branch) {
+    for (var i = 0; i < state.remote.length; i++) {
+        var ref = state.remote[i];
+        var slash = ref ? ref.indexOf('/') : -1;
+        if (slash > 0 && ref.slice(slash + 1) === branch) {return true;}
+    }
+    return false;
+}
+
 document.getElementById('btree').addEventListener('contextmenu', function (e) {
     var worktreeRow = e.target.closest('.witem');
     if (worktreeRow) {
@@ -2665,6 +2681,7 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
     var isCurrent = branch === state.current;
     var isFavorite = state.favorites.indexOf(branch) >= 0;
     var hasRemote = state.branchMenuStateLoaded && state.hasRemote;
+    var canCheckoutAndUpdate = hasRemote && hasRemoteCounterpart(branch);
     var pushLabel = state.branchMenuStateLoaded && state.branchesWithoutUpstream.indexOf(branch) >= 0
         ? T('pushDlg.firstPush')
         : T('menu.push');
@@ -2691,10 +2708,13 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
     } else {
         menuItems = [['checkout', T('menu.checkout')]];
         // One step for a local branch that is not current: switch to it and
-        // pull its upstream. Remote rows create a tracking branch instead, and
-        // the checked-out branch has nothing to check out, so this lives here.
-        if (hasRemote) {
+        // pull its remote counterpart. Remote rows create a tracking branch
+        // instead, the checked-out branch has nothing to check out, and a
+        // branch with no remote twin would only fail in updateBranch().
+        if (canCheckoutAndUpdate) {
             menuItems.push(['checkoutAndUpdate', T('menu.checkoutAndUpdate')]);
+        }
+        if (hasRemote) {
             menuItems.push(['update', T('menu.update')], ['push', pushLabel]);
         }
         menuItems.push(

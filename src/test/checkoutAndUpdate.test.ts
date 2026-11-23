@@ -2,6 +2,7 @@ import { describe, it, afterEach } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vm from 'node:vm';
 import { setLocale, t, webviewStrings } from '../i18n';
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -58,14 +59,32 @@ describe('branch menu: rename Pull to Update, add Check out and Update', () => {
         assert.ok(!currentMenu.includes('checkoutAndUpdate'), 'the checked-out branch has nothing to check out');
     });
 
-    it('keeps the combined action behind the hasRemote gate, right after checkout', () => {
-        const gate = otherMenu.slice(otherMenu.indexOf('if (hasRemote) {'), otherMenu.indexOf("menuItems.push(\n            ['compareBranch'"));
-        assert.ok(gate.includes("'checkoutAndUpdate'"), 'it must be gated by hasRemote');
+    it('gates the combined action behind a remote counterpart, right after checkout', () => {
+        assert.match(webview, /var canCheckoutAndUpdate = hasRemote && hasRemoteCounterpart\(branch\);/);
+        const gate = otherMenu.slice(0, otherMenu.indexOf("menuItems.push(\n            ['compareBranch'"));
+        assert.match(gate, /if \(canCheckoutAndUpdate\) \{/, 'a purely local branch must not offer it');
         assert.ok(gate.indexOf("['checkout'") < gate.indexOf("['checkoutAndUpdate'"));
         assert.ok(gate.indexOf("['checkoutAndUpdate'") < gate.indexOf("['update'"));
+        assert.match(gate, /if \(hasRemote\) \{\s*\n\s*menuItems\.push\(\['update', T\('menu\.update'\)\], \['push', pushLabel\]\)/,
+            'standalone update/push keep the repo-level remote gate');
         // The standalone update stays available on both local variants.
         assert.match(currentMenu, /\['update', T\('menu\.update'\)\]/);
         assert.match(otherMenu, /\['update', T\('menu\.update'\)\], \['push', pushLabel\]\)/);
+    });
+
+    it('matches a remote twin by exact branch name, not merely by suffix', () => {
+        const source = webview.slice(webview.indexOf('function hasRemoteCounterpart('),
+            webview.indexOf("document.getElementById('btree').addEventListener('contextmenu'"));
+        const probe = (remote: string[], branch: string): boolean => {
+            const sandbox: { state: { remote: string[] }; result?: boolean } = { state: { remote } };
+            vm.runInNewContext(`${source}\nthis.result = hasRemoteCounterpart(${JSON.stringify(branch)});`, sandbox);
+            return sandbox.result === true;
+        };
+        assert.equal(probe(['origin/main', 'fork/dev/x'], 'main'), true);
+        assert.equal(probe(['origin/feature/x'], 'feature/x'), true, 'nested branch names work');
+        assert.equal(probe(['origin/feature/x'], 'x'), false, 'a loose suffix would offer a branch with no remote twin');
+        assert.equal(probe([], 'main'), false, 'no remote branches at all');
+        assert.equal(probe(['main'], 'main'), false, 'a ref without a remote prefix is not a remote branch');
     });
 });
 

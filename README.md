@@ -48,7 +48,7 @@ GitCharm provides a three-panel Git log view:
 
 ![Commit context menu multi-select](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu-multi.png)
 
-**Branch context menu** — right-click a branch node for Checkout / Check out and Update / Rename / Delete / Merge / Rebase / Push / Update; "Check out and Update" appears only on a local branch that is not the current one
+**Branch context menu** — right-click a branch node for Checkout / Check out and Update / Rename / Delete / Merge / Rebase / Push / Update; "Check out and Update" appears only on a local branch that is not the current one and has a remote counterpart
 
 ![Branch context menu](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
@@ -246,7 +246,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ![提交右键菜单多选](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu-multi.png)
 
-**分支右键菜单**：分支节点右键呼出 检出 / 检出并更新 / 重命名 / 删除 / 合并 / 变基 / 推送 / 更新；「检出并更新」只在非当前的本地分支上出现
+**分支右键菜单**：分支节点右键呼出 检出 / 检出并更新 / 重命名 / 删除 / 合并 / 变基 / 推送 / 更新；「检出并更新」只在非当前、且有对应远程分支的本地分支上出现
 
 ![分支右键菜单](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
@@ -270,7 +270,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ### Git 操作
 
-- **分支**：新建、检出、重命名、删除、合并到当前分支、变基到…、推送（落后远程时提供强制推送）、拉取、获取、更新（非当前分支可快进时安全更新）、检出并更新（一步切到某个本地分支并同步到最新）
+- **分支**：新建、检出、重命名、删除、合并到当前分支、变基到…、推送（落后远程时提供强制推送）、拉取、获取、更新（非当前分支可快进时安全更新）、检出并更新（一步切到某个有对应远程分支的本地分支并同步到最新）
 - **远端**：在推送对话框里新增远端、修改地址、重命名或删除；切换目标远端会立即重算提交预览，推送与拉取都使用分支真正跟踪的远端，不再写死 `origin`
 - **保护分支**：强制推送或删除命中 `idea-git.protectedBranches` 的分支（默认 `main` / `master`，支持 `*` 通配）时多一次确认
 - **提交**：显示差异（这次提交改动的全部文件在同一个多文件差异页里列出）、精选提交（Cherry-Pick，支持多选批量 + 冲突持久化恢复）、压缩提交（选中项按"紧挨着的一段一段"各自就地折叠，没选中的提交保持原消息、原位置——压两条早期提交不再改到最新那条的记录）、删除提交、编辑提交信息、回退提交（可多选，按时间从新到旧逐个回退）、修补最近提交、重置到此提交（命令面板也能直接执行，没选中提交时列出最近 50 条供选择）、在远端网页打开该提交 / 该分支
