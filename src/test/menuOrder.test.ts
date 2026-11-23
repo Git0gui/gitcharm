@@ -39,6 +39,7 @@ describe('context menu frequency order', () => {
         ordered(
             otherBranch,
             "['checkout'",
+            "['checkoutAndUpdate'",
             "['update'",
             "['push'",
             "['compareBranch'",
@@ -54,7 +55,8 @@ describe('context menu frequency order', () => {
         // Items are pairs only: an action that cannot run is not in the menu.
         assert.match(branches, /else if \(isCurrent\) \{[\s\S]*?menuItems\.push\(\['rename'/);
         assert.match(branches, /\} else \{\s*\n\s*menuItems = \[\['checkout'/);
-        assert.match(branches, /if \(hasRemote\) \{menuItems\.push\(\['update', T\('menu\.pull'\)\], \['push'/);
+        assert.match(branches, /menuItems\.push\(\['update', T\('menu\.update'\)\], \['push', pushLabel\]\)/);
+        assert.doesNotMatch(webview, /T\('menu\.pull'\)/);
         assert.match(webview, /var hasRemote = state\.branchMenuStateLoaded && state\.hasRemote;/);
         assert.match(webview, /state\.branchMenuStateLoaded = true;/);
         assert.doesNotMatch(webview, /it\[2\] === true/);

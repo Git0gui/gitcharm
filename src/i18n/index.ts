@@ -122,7 +122,7 @@ const zh: Record<string, string> = {
     'branch.noDiffWithCurrent': '"{name}" 与当前分支没有差异',
     'branch.compareFailed': '比较失败: {error}',
     'branch.updated': '已更新 "{name}"{detail}',
-    'branch.updating': '正在拉取 "{name}"…',
+    'branch.updating': '正在更新 "{name}"…',
     'branch.updateFailed': '更新失败: {error}',
     'branch.updatedToUpstream': '已将 "{name}" 更新到 {upstream}',
     'branch.updateConflictTitle': '更新 "{name}"',
@@ -695,10 +695,11 @@ const zh: Record<string, string> = {
 
     // webview menus
     'menu.checkout': '检出',
+    'menu.checkoutAndUpdate': '检出并更新',
     'menu.fetchRemote': '拉取远程更新',
     'menu.newBranchFrom': '从此处新建分支',
     'menu.compareWithCurrent': '与当前分支比较',
-    'menu.pull': '拉取',
+    'menu.update': '更新',
     'menu.push': '推送',
     'menu.rename': '重命名分支',
     'menu.merge': '合并到当前分支',
@@ -896,7 +897,7 @@ const en: Record<string, string> = {
     'branch.noDiffWithCurrent': '"{name}" has no differences with the current branch',
     'branch.compareFailed': 'Compare failed: {error}',
     'branch.updated': 'Updated "{name}"{detail}',
-    'branch.updating': 'Pulling "{name}"…',
+    'branch.updating': 'Updating "{name}"…',
     'branch.updateFailed': 'Update failed: {error}',
     'branch.updatedToUpstream': 'Updated "{name}" to {upstream}',
     'branch.updateConflictTitle': 'Update "{name}"',
@@ -1469,10 +1470,11 @@ const en: Record<string, string> = {
 
     // webview menus
     'menu.checkout': 'Check out',
+    'menu.checkoutAndUpdate': 'Check out and Update',
     'menu.fetchRemote': 'Fetch Remote Updates',
     'menu.newBranchFrom': 'New Branch from Here',
     'menu.compareWithCurrent': 'Compare with Current',
-    'menu.pull': 'Pull',
+    'menu.update': 'Update',
     'menu.push': 'Push',
     'menu.rename': 'Rename Branch',
     'menu.merge': 'Merge into Current Branch',

@@ -22,11 +22,11 @@
 
 ## What's New
 
-### Works with the built-in Git extension, works without it
+### Faster history, cleaner branch actions (0.3.1)
 
-- **Uses the built-in Git extension when it is available.** Repository information is read through its stable public API when VS Code has it active, and GitCharm transparently falls back to its own implementation otherwise — the UI and every command behave the same either way.
-- **Nothing is taken away.** Commands, progress indicators, credential prompts, conflict handling and cache refreshes still use the existing implementation; only read-only lookups that can return identical results are delegated.
-- **Clear path when a push is not signed in.** On GitHub, GitCharm can reuse VS Code's own signed-in GitHub account (browser authorization) and retry the push automatically. On GitLab, Gitee and self-hosted servers — where VS Code has no built-in sign-in — it offers a platform-independent path: open the repository web page derived from your own remote URL, copy the platform-specific credential-helper command, retry the push, or enter a personal access token in the existing masked prompt. Cancelling a credential prompt is now reported as a cancellation instead of a bad password. Every path degrades to the original credential box, and `idea-git.authentication.useVSCodeSession` switches the reuse off.
+- **No redundant history reloads.** When the repository has not changed, GitCharm no longer re-reads and repaints the entire commit list — reopening the panel or double-clicking the branch already on screen stays instant. One action no longer fires several competing refreshes.
+- **"Check out and Update" in the branch menu.** One step switches to another local branch and brings it up to date. It appears only when that branch has a remote counterpart, and it never updates anything unless the checkout succeeded. The former "Pull" entry is now called "Update".
+- **External changes show up promptly.** A change made in a terminal or another tool is no longer masked by the panel's own refresh.
 
 ## Overview
 
@@ -48,7 +48,7 @@ GitCharm provides a three-panel Git log view:
 
 ![Commit context menu multi-select](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu-multi.png)
 
-**Branch context menu** — right-click a branch node for Checkout / Rename / Delete / Merge / Rebase / Push / Pull
+**Branch context menu** — right-click a branch node for Checkout / Check out and Update / Rename / Delete / Merge / Rebase / Push / Update; "Check out and Update" appears only on a local branch that is not the current one and has a remote counterpart
 
 ![Branch context menu](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
@@ -72,7 +72,7 @@ GitCharm provides a three-panel Git log view:
 
 ### Git Operations
 
-- **Branches**: create, checkout, rename, delete, merge into current, rebase onto, push (force push offered when behind the remote), pull, fetch, update (safe fast-forward for non-current branches)
+- **Branches**: create, checkout, rename, delete, merge into current, rebase onto, push (force push offered when behind the remote), pull, fetch, update (safe fast-forward for non-current branches), check out and update (switch to a local branch and bring it up to date in one step)
 - **Remotes**: add a remote, edit its URL, rename or delete it right from the push dialog; switching the target remote recomputes the commit preview, and pushes / pulls use the branch's actual tracking remote instead of a hard-coded `origin`
 - **Protected branches**: force-pushing or deleting a branch that matches `idea-git.protectedBranches` (default `main` / `master`, `*` wildcards supported) asks for one more confirmation
 - **Commits**: show diff (every file the commit touched, listed in one multi-diff page), cherry-pick (multi-select batch + conflict-resumable), squash (the selection splits into runs of neighbouring commits and each run folds in place — commits you did not select keep their own message and position, so squashing two old commits no longer rewrites the newest one), drop commit, amend message, revert commit (single or several, newest first), reset to commit — also runnable straight from the command palette, which offers the last 50 commits to pick from — open the commit or a branch on the remote web page
@@ -117,7 +117,7 @@ GitCharm provides a three-panel Git log view:
 - **The panel follows real git state**: resolve the conflicts and commit in your own terminal and the operation bar retracts on its own once git's state files are gone, while the commit list reloads as soon as the displayed branch tip moves — keeping your selection, detail panel, folds and scroll position instead of jumping back to the top
 - **Shell-free execution**: every git command runs via argv `spawn`, eliminating argument injection
 - **Long reads can be stopped**: a query that takes noticeable time shows a cancellable notification, and cancelling kills the git subprocess that was actually running — quick lookups show no notification, write and network operations are never cancellable, and a cancelled read leaves no error toast and no stuck spinner
-- **Menus ordered by use**: context menus run from the actions you reach for most to the destructive ones, and a branch menu only offers what the repository can actually do — no remote means no Pull / Push / Open on remote, and a branch without an upstream says "First push"
+- **Menus ordered by use**: context menus run from the actions you reach for most to the destructive ones, and a branch menu only offers what the repository can actually do — no remote means no Update / Push / Open on remote, and a branch without an upstream says "First push"
 - **A row's context menu keeps your selection**: right-clicking one of several selected commits operates on the whole group instead of collapsing the selection down to that row
 - **Stale lock files, handled with a question**: if a write hits a `.lock` file left behind by a killed git process, GitCharm asks once, then deletes it and retries the same command — no hand-cleaning inside the git directory
 - **Own credential prompts**: when a remote asks for a username, password or token, the extension shows its own input box (masked for secrets) instead of relying on the built-in Git extension — cancelling is reported as a clear outcome, with a hint to configure a credential helper or switch to SSH. On GitHub it can optionally reuse VS Code's signed-in account (browser authorization) and retry the push; `idea-git.authentication.useVSCodeSession` turns this off, and all other hosts keep the generic credential-helper / personal-access-token guidance
@@ -158,7 +158,7 @@ Search **GitCharm** in the extensions panel (full name *GitCharm — IDEA Git Lo
 | View commit details | Click a commit row |
 | Show commit diff | Right-click commit → Show Diff (all files of that commit) |
 | Merge / Rebase | Right-click branch → Merge into Current / Rebase onto |
-| Push / Pull | Right-click branch → Push / Pull |
+| Push / Update | Right-click branch → Push / Update |
 | Cherry-pick | Multi-select commits → right-click → Cherry-Pick |
 | Squash | Multi-select commits → right-click → Squash |
 | Drop / Amend commit | Right-click commit row (only near HEAD) |
@@ -220,11 +220,11 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 内置 Git 扩展可用就用，不可用也照常工作
+### 提交历史更快，分支操作更顺（0.3.1）
 
-- **自动优先使用内置 Git 扩展**：VS Code 已激活内置 Git 扩展时，通过它稳定公开的 API 读取仓库信息；不可用时无缝回退到 GitCharm 自带的实现，界面和所有操作表现一致。
-- **现有功能一点不少**：命令、进度提示、凭据输入、冲突处理与缓存刷新仍走原有实现；只有能返回一致结果的只读查询才会交给内置扩展。
-- **推送没登录也有明确出路**：GitHub 仓库可直接复用 VS Code 已登录的 GitHub 账号（浏览器授权），登录成功自动重试本次推送；GitLab、Gitee、自建 Git 服务等 VS Code 没有内置登录的平台，统一提供「打开远程仓库网页（由本仓库 remote 地址推导）」「复制对应平台的 Git 凭据助手命令」「重试推送」，并说明在网页创建个人访问令牌、推送时把 PAT 当密码输入。取消凭据输入会被明确识别为「已取消」，不再误报成密码错误。以上全部是可选增强，任何环节不可用或把 `idea-git.authentication.useVSCodeSession` 设为 false，都会回到原来的掩码输入框，行为与旧版一致。
+- **不再重复加载提交历史**：仓库数据没变时，不再重新读取并整屏重绘提交列表 —— 重新打开面板、双击当前所在分支都立刻可见；一次操作也不会再同时触发好几条刷新。
+- **分支右键新增「检出并更新」**：一步切到另一个本地分支并同步到最新；只在分支有对应远程分支时出现，检出没成功绝不会去动别的分支。原「拉取」更名为「更新」。
+- **外部变更及时上屏**：在终端或其它工具里改动仓库后，面板能及时感知并更新，不再被自身刷新的误判遮盖。
 
 ## 概览
 
@@ -246,7 +246,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ![提交右键菜单多选](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/commit-context-menu-multi.png)
 
-**分支右键菜单**：分支节点右键呼出 检出 / 重命名 / 删除 / 合并 / 变基 / 推送 / 拉取
+**分支右键菜单**：分支节点右键呼出 检出 / 检出并更新 / 重命名 / 删除 / 合并 / 变基 / 推送 / 更新；「检出并更新」只在非当前、且有对应远程分支的本地分支上出现
 
 ![分支右键菜单](https://cdn.jsdelivr.net/gh/Git0gui/gitcharm@main/resources/screenshots/branch-context-menu.png)
 
@@ -270,7 +270,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 
 ### Git 操作
 
-- **分支**：新建、检出、重命名、删除、合并到当前分支、变基到…、推送（落后远程时提供强制推送）、拉取、获取、更新（非当前分支可快进时安全更新）
+- **分支**：新建、检出、重命名、删除、合并到当前分支、变基到…、推送（落后远程时提供强制推送）、拉取、获取、更新（非当前分支可快进时安全更新）、检出并更新（一步切到某个有对应远程分支的本地分支并同步到最新）
 - **远端**：在推送对话框里新增远端、修改地址、重命名或删除；切换目标远端会立即重算提交预览，推送与拉取都使用分支真正跟踪的远端，不再写死 `origin`
 - **保护分支**：强制推送或删除命中 `idea-git.protectedBranches` 的分支（默认 `main` / `master`，支持 `*` 通配）时多一次确认
 - **提交**：显示差异（这次提交改动的全部文件在同一个多文件差异页里列出）、精选提交（Cherry-Pick，支持多选批量 + 冲突持久化恢复）、压缩提交（选中项按"紧挨着的一段一段"各自就地折叠，没选中的提交保持原消息、原位置——压两条早期提交不再改到最新那条的记录）、删除提交、编辑提交信息、回退提交（可多选，按时间从新到旧逐个回退）、修补最近提交、重置到此提交（命令面板也能直接执行，没选中提交时列出最近 50 条供选择）、在远端网页打开该提交 / 该分支
@@ -315,7 +315,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **面板跟着真实 git 状态走**：在自己终端里解决冲突并提交，操作状态栏会在 git 状态文件清掉后自动收起；提交列表也在所选分支 tip 移动时自动重载，并保留当前选中项、第三栏详情、折叠状态与滚动位置，不再跳回顶部
 - **无 shell 命令执行**：所有 git 命令走 argv `spawn`，杜绝参数注入
 - **查得久的可以停下**：久到你能察觉的历史查询会给出一条带取消按钮的提示，按下去就真的把正在跑的 git 子进程杀掉；快的查询不打扰，改历史与走网络的操作不提供取消，取消后不弹错误提示、也不会留下转个不停的加载态
-- **菜单按使用频率排**：右键菜单从最常点的操作一路排到破坏性操作；分支菜单只给这个仓库真能做的——没配远端就不出现拉取／推送／在远端打开，还没上游的分支直接写成「首次推送」
+- **菜单按使用频率排**：右键菜单从最常点的操作一路排到破坏性操作；分支菜单只给这个仓库真能做的——没配远端就不出现更新／推送／在远端打开，还没上游的分支直接写成「首次推送」
 - **行右键不改选中**：在多选出来的几条提交里右键其中一行，菜单作用于整组选择，不会把选择缩成这一行
 - **残留锁文件先问再删**：写操作撞上被杀掉的 git 进程留下的 `.lock` 文件时先问一句，同意后删除它并重试同一条命令，不必自己去 git 目录里手动清理
 - **自有凭据输入**：远端要账号 / 密码 / 令牌时由扩展弹出输入框（机密项掩码、不写日志），不依赖内置 Git 的凭据提示；取消会明确回报，并提示配置凭据助手或改用 SSH。GitHub 可选复用 VS Code 已登录的账号并自动重试本次推送，`idea-git.authentication.useVSCodeSession` 可关闭；其他平台统一走凭据助手 / 个人访问令牌引导
@@ -356,7 +356,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 | 查看提交详情 | 单击中栏提交行 |
 | 查看提交差异 | 提交行右键 → 显示差异（该提交的全部文件） |
 | 合并 / 变基 | 分支右键 → 合并到当前分支 / 变基到… |
-| 推送 / 拉取 | 分支右键 → 推送 / 拉取 |
+| 推送 / 更新 | 分支右键 → 推送 / 更新 |
 | 精选提交 | 多选提交 → 右键 → 精选提交 |
 | 压缩提交 | 多选提交 → 右键 → 压缩提交 |
 | 删除 / 改提交信息 | 提交行右键（仅 HEAD 附近可用） |

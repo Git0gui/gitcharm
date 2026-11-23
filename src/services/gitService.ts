@@ -209,6 +209,14 @@ export interface CommitDetail {
 
 /** Git dir writes arrive in bursts (one command touches several files). */
 const WATCH_DEBOUNCE_MS = 250;
+/**
+ * Our own mutations run `_invalidateAfterMutation()` synchronously. The
+ * watcher sees the same files ~250ms later; dropping the caches a second time
+ * only bumps the volatile epoch again, which makes a freshly painted screen
+ * look stale and starts a duplicate history query. External writes still pass,
+ * because a read-side `invalidateVolatile()` never opens this window.
+ */
+const WATCH_SELF_WRITE_SUPPRESS_MS = 600;
 
 /**
  * Temp files are named by the millisecond; a squash of several groups writes
@@ -273,6 +281,12 @@ export class GitService {
 
     // Volatile caches: invalidated whenever history/refs change
     private _graphCache = new LruCache<GraphData>(GitService.CACHE_MAX);
+    /**
+     * Bumped on every volatile-cache drop. Pure bookkeeping: nothing about the
+     * caches themselves changes. The view puts this in its paint signature so a
+     * screen cached before an external ref change is never replayed as current.
+     */
+    private _volatileEpoch = 0;
     private _branchCache = new LruCache<BranchDetails>(GitService.CACHE_MAX);
     // Immutable caches: keyed by commit hash, safe until evicted
     private _filesCache = new LruCache<FileStat[]>(GitService.DETAIL_CACHE_MAX);
@@ -336,6 +350,8 @@ export class GitService {
     private _workspaceFoldersListener: vscode.Disposable | undefined;
     private _watchDebounce: NodeJS.Timeout | undefined;
     private _watchRequested = false;
+    /** Until this timestamp, watcher events belong to a mutation we just ran. */
+    private _selfWriteUntil = 0;
     private readonly _watchTokens = new Set<symbol>();
 
     // Credential prompts for remotes; absent when the host provides no askpass
@@ -456,6 +472,10 @@ export class GitService {
         if (this._watchDebounce) {clearTimeout(this._watchDebounce);}
         this._watchDebounce = setTimeout(() => {
             this._watchDebounce = undefined;
+            if (Date.now() < this._selfWriteUntil) {
+                logger.debug('[GitCharm] Watcher event follows our own mutation; caches were already dropped');
+                return;
+            }
             logger.debug('[GitCharm] Git directory changed, volatile caches dropped');
             this.invalidateVolatile();
         }, WATCH_DEBOUNCE_MS);
@@ -1090,7 +1110,7 @@ export class GitService {
      */
     private async _execMutate(args: string[], opts: Omit<GitRunOptions, 'cwd' | 'env'> = {}): Promise<string> {
         const out = await this._execWithLockRecovery(args, opts);
-        this.invalidateVolatile();
+        this._invalidateAfterMutation();
         return out.trim();
     }
 
@@ -1101,7 +1121,7 @@ export class GitService {
      */
     private async _execMutateWithEnv(args: string[], extraEnv: Record<string, string>): Promise<string> {
         const out = await this._execWithLockRecovery(args, { env: extraEnv, timeoutMs: 0 });
-        this.invalidateVolatile();
+        this._invalidateAfterMutation();
         return out.trim();
     }
 
@@ -1178,7 +1198,7 @@ export class GitService {
             // A fetch that updates remote-tracking refs takes the same ref locks
             // a checkout does, so it deserves the same recovery.
             const out = await this._execWithLockRecovery(args, { env, timeoutMs: 0 });
-            this.invalidateVolatile();
+            this._invalidateAfterMutation();
             return out.trim();
         } catch (error) {
             throw await this._explainNetworkFailure(error);
@@ -1329,6 +1349,7 @@ export class GitService {
      * replaced wholesale by the next forced detail load.
      */
     invalidateVolatile(): void {
+        this._volatileEpoch++;
         this._graphCache.clear();
         this._branchCache.clear();
         this._refsSnapshotCache = undefined;
@@ -1337,6 +1358,27 @@ export class GitService {
         this._refsReader.invalidate();
         // The in-memory detail map holds ahead/behind; the persisted snapshot
         // (workspaceState) is untouched and still seeds the next startup.
+    }
+
+    /**
+     * A write we ran ourselves: drop the caches, then ignore the watcher's echo
+     * of that same write for a short window.
+     *
+     * The window is opened ONLY here, never inside `invalidateVolatile()`.
+     * That method is also called from read-side paths — a ref that failed to
+     * resolve (`_branchExists`), a stash stack that changed in a terminal — and
+     * those mean the repository moved *elsewhere*. Opening the window there
+     * would suppress the watcher's report of the next external change, which is
+     * exactly the event the panel needs.
+     */
+    private _invalidateAfterMutation(): void {
+        this._selfWriteUntil = Date.now() + WATCH_SELF_WRITE_SUPPRESS_MS;
+        this.invalidateVolatile();
+    }
+
+    /** Read-only generation counter for replay-safe screen caching. */
+    get volatileEpoch(): number {
+        return this._volatileEpoch;
     }
 
     /**
@@ -1817,8 +1859,13 @@ export class GitService {
      * Update a local branch from its upstream.
      * For the checked-out branch, run pull. For a non-current branch, fetch the
      * upstream and fast-forward the local ref (fails if not fast-forwardable).
+     *
+     * `asCurrent` is set by the combined "check out and update" action: we just
+     * moved HEAD through our own exec, and the optional built-in Git API can
+     * still report the previous HEAD, so take the pull path explicitly instead
+     * of trusting that cache.
      */
-    async updateBranch(branchName: string): Promise<string> {
+    async updateBranch(branchName: string, asCurrent = false): Promise<string> {
         assertRef(branchName);
         const current = await this.getCurrentBranch();
         let upstream = await this.getUpstream(branchName);
@@ -1838,7 +1885,7 @@ export class GitService {
             }
         }
         
-        if (branchName === current) {
+        if (asCurrent || branchName === current) {
             // Read pull strategy from configuration
             const config = vscode.workspace.getConfiguration('idea-git');
             const pullStrategy = config.get<string>('pullStrategy', 'merge');
@@ -2337,7 +2384,7 @@ export class GitService {
             env: { GIT_TERMINAL_PROMPT: '0' },
             timeoutMs: 60000
         });
-        this.invalidateVolatile();
+        this._invalidateAfterMutation();
     }
 
     /**
