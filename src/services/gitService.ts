@@ -210,10 +210,11 @@ export interface CommitDetail {
 /** Git dir writes arrive in bursts (one command touches several files). */
 const WATCH_DEBOUNCE_MS = 250;
 /**
- * Our own mutations already call `invalidateVolatile()` synchronously. The
+ * Our own mutations run `_invalidateAfterMutation()` synchronously. The
  * watcher sees the same files ~250ms later; dropping the caches a second time
  * only bumps the volatile epoch again, which makes a freshly painted screen
- * look stale and starts a duplicate history query. External writes still pass.
+ * look stale and starts a duplicate history query. External writes still pass,
+ * because a read-side `invalidateVolatile()` never opens this window.
  */
 const WATCH_SELF_WRITE_SUPPRESS_MS = 600;
 
@@ -351,8 +352,6 @@ export class GitService {
     private _watchRequested = false;
     /** Until this timestamp, watcher events belong to a mutation we just ran. */
     private _selfWriteUntil = 0;
-    /** Set only around the watcher's own cache drop, so it does not re-arm the window. */
-    private _invalidateFromWatch = false;
     private readonly _watchTokens = new Set<symbol>();
 
     // Credential prompts for remotes; absent when the host provides no askpass
@@ -478,12 +477,7 @@ export class GitService {
                 return;
             }
             logger.debug('[GitCharm] Git directory changed, volatile caches dropped');
-            this._invalidateFromWatch = true;
-            try {
-                this.invalidateVolatile();
-            } finally {
-                this._invalidateFromWatch = false;
-            }
+            this.invalidateVolatile();
         }, WATCH_DEBOUNCE_MS);
     }
 
@@ -1116,7 +1110,7 @@ export class GitService {
      */
     private async _execMutate(args: string[], opts: Omit<GitRunOptions, 'cwd' | 'env'> = {}): Promise<string> {
         const out = await this._execWithLockRecovery(args, opts);
-        this.invalidateVolatile();
+        this._invalidateAfterMutation();
         return out.trim();
     }
 
@@ -1127,7 +1121,7 @@ export class GitService {
      */
     private async _execMutateWithEnv(args: string[], extraEnv: Record<string, string>): Promise<string> {
         const out = await this._execWithLockRecovery(args, { env: extraEnv, timeoutMs: 0 });
-        this.invalidateVolatile();
+        this._invalidateAfterMutation();
         return out.trim();
     }
 
@@ -1204,7 +1198,7 @@ export class GitService {
             // A fetch that updates remote-tracking refs takes the same ref locks
             // a checkout does, so it deserves the same recovery.
             const out = await this._execWithLockRecovery(args, { env, timeoutMs: 0 });
-            this.invalidateVolatile();
+            this._invalidateAfterMutation();
             return out.trim();
         } catch (error) {
             throw await this._explainNetworkFailure(error);
@@ -1364,9 +1358,22 @@ export class GitService {
         this._refsReader.invalidate();
         // The in-memory detail map holds ahead/behind; the persisted snapshot
         // (workspaceState) is untouched and still seeds the next startup.
-        if (!this._invalidateFromWatch) {
-            this._selfWriteUntil = Date.now() + WATCH_SELF_WRITE_SUPPRESS_MS;
-        }
+    }
+
+    /**
+     * A write we ran ourselves: drop the caches, then ignore the watcher's echo
+     * of that same write for a short window.
+     *
+     * The window is opened ONLY here, never inside `invalidateVolatile()`.
+     * That method is also called from read-side paths — a ref that failed to
+     * resolve (`_branchExists`), a stash stack that changed in a terminal — and
+     * those mean the repository moved *elsewhere*. Opening the window there
+     * would suppress the watcher's report of the next external change, which is
+     * exactly the event the panel needs.
+     */
+    private _invalidateAfterMutation(): void {
+        this._selfWriteUntil = Date.now() + WATCH_SELF_WRITE_SUPPRESS_MS;
+        this.invalidateVolatile();
     }
 
     /** Read-only generation counter for replay-safe screen caching. */
@@ -2377,7 +2384,7 @@ export class GitService {
             env: { GIT_TERMINAL_PROMPT: '0' },
             timeoutMs: 60000
         });
-        this.invalidateVolatile();
+        this._invalidateAfterMutation();
     }
 
     /**

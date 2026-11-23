@@ -55,16 +55,30 @@ export interface RefreshClaim<A> {
 }
 
 export class RefreshScheduler<A> {
-    private _running: { key: string; generation: number } | undefined;
+    private _running: { key: string; generation: number; args: A } | undefined;
     private _queued: { key: string; args: A } | undefined;
     private _generation = 0;
     private _lastKey: string | undefined;
     private _lastFinishedAt = 0;
     private readonly _reuseMs: number;
+    private readonly _mergeQueued: ((prev: A, next: A) => A) | undefined;
+    private readonly _needsOwnRun: ((running: A, next: A) => boolean) | undefined;
 
-    /** @param reuseMs how long a finished run keeps answering the same key. */
-    constructor(reuseMs = 0) {
+    /**
+     * @param reuseMs how long a finished run keeps answering the same key.
+     * @param mergeQueued how a superseding call combines with the call already
+     * waiting. Default is "newest wins". A strength flag wants the opposite:
+     * `force || force`, so a cached request arriving later cannot downgrade the
+     * forced refresh that is still queued.
+     * @param needsOwnRun a same-key call normally shares the running query.
+     * Return true when it must get its own follow-up run instead: a caller
+     * asking for fresh data cannot be answered by the cached query in flight.
+     */
+    constructor(reuseMs = 0, mergeQueued?: (prev: A, next: A) => A,
+        needsOwnRun?: (running: A, next: A) => boolean) {
         this._reuseMs = reuseMs;
+        this._mergeQueued = mergeQueued;
+        this._needsOwnRun = needsOwnRun;
     }
 
     get busy(): boolean { return this._running !== undefined; }
@@ -77,11 +91,19 @@ export class RefreshScheduler<A> {
      */
     begin(key: string, args: A): RefreshClaim<A> | undefined {
         if (this._running) {
-            if (this._running.key === key) {return undefined;}
-            // A different scope wins. Its result is the one the panel needs, so
-            // the in-flight answer must become stale and one follow-up is kept.
+            if (this._running.key === key && !this._needsOwnRun?.(this._running.args, args)) {
+                return undefined;
+            }
+            // A different scope — or a stronger request for the same scope —
+            // wins. Its result is the one the panel needs, so the in-flight
+            // answer must become stale and one follow-up is kept.
             this._generation++;
-            this._queued = { key, args };
+            this._queued = {
+                key,
+                args: this._queued && this._mergeQueued
+                    ? this._mergeQueued(this._queued.args, args)
+                    : args
+            };
             return undefined;
         }
         if (this._reuseMs > 0 && this._lastKey === key
@@ -89,7 +111,7 @@ export class RefreshScheduler<A> {
             return undefined;
         }
         this._generation++;
-        this._running = { key, generation: this._generation };
+        this._running = { key, generation: this._generation, args };
         return { generation: this._generation, args };
     }
 

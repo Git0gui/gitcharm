@@ -87,3 +87,54 @@ describe('filter comparison is field-wise and separator-safe', () => {
         assert.equal(filterSignature(a) === filterSignature(b), false);
     });
 });
+
+/** Mirrors the divergence channel: one scope, two strengths. */
+type StrengthArgs = { force: boolean };
+function strengthScheduler(reuseMs = 0): RefreshScheduler<StrengthArgs> {
+    return new RefreshScheduler<StrengthArgs>(
+        reuseMs,
+        (prev, next) => ({ force: prev.force || next.force }),
+        (running, next) => next.force && !running.force
+    );
+}
+
+describe('a stronger request is never lost when refreshes coalesce', () => {
+    it('a queued forced refresh is not downgraded by a later cached request', () => {
+        const s = strengthScheduler();
+        assert.ok(s.begin('a', { force: false }));
+        assert.equal(s.begin('b', { force: true }), undefined);
+        assert.equal(s.begin('b', { force: false }), undefined);
+        assert.deepEqual(s.end(), { force: true }, 'the queued strength survives');
+    });
+
+    it('a forced request gets its own run when a cached query is in flight', () => {
+        const s = strengthScheduler();
+        const first = s.begin('a', { force: false });
+        assert.ok(first);
+        const forced = s.begin('a', { force: true });
+        assert.equal(forced, undefined, 'it is folded into a follow-up, not run in parallel');
+        assert.equal(s.isLatest(first!.generation), false, 'the cached answer becomes stale');
+        assert.deepEqual(s.end(), { force: true }, 'the follow-up keeps the strength');
+        assert.ok(s.begin('a', { force: true }), 'the follow-up actually gets a run');
+        s.end();
+    });
+
+    it('a cached request shares an in-flight forced query', () => {
+        const s = strengthScheduler();
+        const first = s.begin('a', { force: true });
+        assert.ok(first);
+        assert.equal(s.begin('a', { force: false }), undefined);
+        assert.equal(s.isLatest(first!.generation), true);
+        assert.equal(s.end(), undefined, 'no second query is spawned');
+    });
+
+    it('invalidateReuse lets an explicit fresh read through the reuse window', () => {
+        const s = strengthScheduler(500);
+        assert.ok(s.begin('a', { force: false }));
+        s.end();
+        assert.equal(s.begin('a', { force: true }), undefined, 'the window would reuse the old paint');
+        s.invalidateReuse();
+        assert.ok(s.begin('a', { force: true }), 'a fresh read always gets a real query');
+        s.end();
+    });
+});

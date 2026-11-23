@@ -142,7 +142,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * per channel may spawn, and only the newest generation may paint.
      */
     private _rowsRefresh = new RefreshScheduler<RowsRefreshArgs>(0);
-    private _divergenceRefresh = new RefreshScheduler<{ force: boolean }>(REFRESH_REUSE_MS);
+    private _divergenceRefresh = new RefreshScheduler<{ force: boolean }>(
+        REFRESH_REUSE_MS,
+        // Arrows are one answer with two strengths: a later cached request must
+        // not downgrade the forced refresh that is still waiting its turn.
+        (prev, next) => ({ force: prev.force || next.force }),
+        // ...and a fresh-data request cannot be answered by the cached query
+        // already in flight for the same scope. It gets its own follow-up run.
+        (running, next) => next.force && !running.force
+    );
     private _branchesRefresh = new RefreshScheduler<boolean>(REFRESH_REUSE_MS);
     /** The window above a rooted commit has unloaded rows left. */
     private _hasMoreAbove = false;
@@ -1413,9 +1421,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     const tip = await this._tipOfDisplayedRev();
                     if (this._lastPaint && tip === this._lastKnownTip
                         && this._lastPaint.signature === this._paintSignature(tip)) {
-                        // The double-click explicitly asks for fresh arrows; a
-                        // run that finished moments ago must not answer it.
-                        this._divergenceRefresh.invalidateReuse();
+                        // The double-click explicitly asks for fresh arrows;
+                        // `_refreshDivergence(true)` drops the reuse window
+                        // itself, so a run that just finished cannot answer it.
                         void this._refreshDivergence(true);
                         break;
                     }
@@ -3272,10 +3280,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * the tree can show push/pull arrows without blocking the main data load.
      */
     private async _refreshDivergence(force = false): Promise<void> {
+        // `force` is a strength, not a scope: it is deliberately NOT part of the
+        // key. As `force|cached` it bought a second full query right after every
+        // forced one, because the two calls could never coalesce.
+        if (force) {
+            // An explicit "give me fresh arrows" is never answered by the screen
+            // painted a moment ago, so the reuse window does not apply to it.
+            this._divergenceRefresh.invalidateReuse();
+        }
         const claim = this._divergenceRefresh.begin([
             this._gitService.repositoryPath ?? '',
-            String(this._gitService.volatileEpoch),
-            force ? 'force' : 'cached'
+            String(this._gitService.volatileEpoch)
         ].join('\u001f'), { force });
         if (!claim) {return;}
         try {

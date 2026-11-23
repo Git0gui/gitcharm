@@ -44,6 +44,17 @@ describe('rows and arrows go through the refresh scheduler', () => {
         assert.match(divergence, /_finishDivergenceRefresh\(\)/);
     });
 
+    it('divergence treats force as a strength, not a separate scope', () => {
+        assert.doesNotMatch(divergence, /force \? 'force' : 'cached'/,
+            'encoding force in the key bought a second full query after every forced one');
+        const channel = slice(view, 'private _divergenceRefresh = new RefreshScheduler',
+            'private _branchesRefresh');
+        assert.match(channel, /prev\.force \|\| next\.force/,
+            'a later cached request must not downgrade a queued forced refresh');
+        assert.match(channel, /next\.force && !running\.force/,
+            'a fresh request must not be answered by the cached query already in flight');
+    });
+
     it('there is exactly one branches-only implementation and no 50ms timer', () => {
         assert.match(branches, /_branchesRefresh\.begin\(/);
         assert.match(branches, /_finishBranchesRefresh\(\)/);
@@ -65,8 +76,12 @@ describe('duplicate trigger points stay removed', () => {
         const shown = slice(view, 'private async _onPanelShown(', 'private _flushViewState(');
         assert.match(shown, /_divergenceRefresh\.invalidateReuse\(\)/);
         assert.match(shown, /void this\._refreshDivergence\(false\)/);
+        // A forced read drops the reuse window inside _refreshDivergence itself,
+        // so no caller can forget it. The double-click just asks for `true`.
+        const divBody = slice(view, 'private async _refreshDivergence(', 'private _getHtmlForWebview(');
+        assert.match(divBody, /if \(force\) \{/);
+        assert.match(divBody, /this\._divergenceRefresh\.invalidateReuse\(\)/);
         const select = slice(view, "case 'selectBranch': {", "case 'refresh':");
-        assert.match(select, /_divergenceRefresh\.invalidateReuse\(\)/);
         assert.match(select, /void this\._refreshDivergence\(true\)/);
     });
 
@@ -87,13 +102,35 @@ describe('duplicate trigger points stay removed', () => {
 describe('the .git watcher does not invalidate our own mutation twice', () => {
     const watch = slice(service, 'private _scheduleWatchInvalidation()', 'private _stopRepositoryWatch()');
 
-    it('suppresses the echo inside the self-write window', () => {
+    it('skips the echo inside the self-write window but still invalidates external writes', () => {
         assert.match(watch, /Date\.now\(\) < this\._selfWriteUntil/);
-        assert.match(watch, /_invalidateFromWatch = true/);
+        assert.match(watch, /return;/, 'the echo must not reach invalidateVolatile');
+        assert.match(watch, /this\.invalidateVolatile\(\);/, 'an external change still drops caches');
     });
 
     it('keeps the pinned invalidateVolatile signature intact', () => {
         assert.match(service, /invalidateVolatile\(\): void \{/);
         assert.match(service, /this\._volatileEpoch\+\+/);
+    });
+
+    it('opens the self-write window ONLY from real mutation paths', () => {
+        const invalidate = slice(service, 'invalidateVolatile(): void {',
+            'private _invalidateAfterMutation()');
+        assert.doesNotMatch(invalidate, /_selfWriteUntil/,
+            'a read-side invalidation must not suppress the watcher of a real external change');
+        const afterMutation = slice(service, 'private _invalidateAfterMutation(): void {',
+            '/**\n     * Read-only generation counter');
+        assert.match(afterMutation, /_selfWriteUntil = Date\.now\(\) \+ WATCH_SELF_WRITE_SUPPRESS_MS/);
+        assert.match(afterMutation, /this\.invalidateVolatile\(\)/);
+
+        for (const [start, end] of [
+            ['private async _execMutate(args:', '/**\n     * Mutating exec with extra'],
+            ['private async _execMutateWithEnv(', '/**\n     * A failed write'],
+            ['private async _execNetwork(', '/**\n     * True when the user dismissed'],
+            ['async fetchSilent(', '/**\n     * Compare a branch']
+        ]) {
+            assert.match(slice(service, start, end), /_invalidateAfterMutation\(\)/,
+                `${start} must open the window after its write`);
+        }
     });
 });
