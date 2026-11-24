@@ -2,6 +2,35 @@
 
 面向维护者：保留踩坑细节、实测数据与文件路径。随 VSIX 发布、市场页展示的简明版是 `CHANGELOG.md`；本文件位于 `docs/`，不进 VSIX。
 
+## [0.3.2] - 2026-11-24
+
+本版四个功能提交全部在 `v0.3.2/worktree-detection` 上：工作树检测与异常清理、更新失败引导绑定远程分支、reflog 救援增强。贯穿全程的硬约束：所有变更不得影响插件加载/启动/搜索速度，额外工作必须异步或以更轻的方式进行。
+
+### 工作树检测、检出占用提醒与目录丢失清理（`f5d27f5`）
+
+- `src/services/gitService.ts` 的 `linkedWorktreeStamp()` 只看 HEAD/locked 文件的 mtime 加目录存活状态：签名变化才 spawn `git worktree list --porcelain`；`hasLinkedWorktrees()` 作为检出预检的门控，避免为从不使用工作树的仓库增加任何启动/检出开销。`parseWorktreeList` 增加 `gitDir` 参数，`WorktreeEntry.missing` 标记登记还在但目录已删的条目。
+- 检出占用提醒：`checkoutBranch` 返回 `Promise<boolean>`，占用时给「跳转工作树 / 强制检出 / 取消」三选一，git 报错兜底走同一提示函数；目录丢失时引导先 `worktree prune`。路径：`branchCommands.ts`、`worktreeCommands.ts`、`gitPaths.ts`、i18n 与 worktree 测试。
+- 打包泄露：`npx vsce ls` 确认 `.workbuddy/**` 之前被打进 VSIX，`.vscodeignore` 增加排除后复验通过。
+
+### 更新失败引导绑定远程分支（`d2ea436`）
+
+- 场景边界：`updateBranch()` 无 upstream 时会自动用同名远程分支推断并设置 upstream，所以只有「无 upstream 且无同名孪生」这一种失败需要引导；仓库完全没有 remote 或 fetch 不到任何远程分支时无从绑定。
+- `branchCommands.ts` 新增 `promptUpstreamBinding()`，放在 update catch 的最后一级（顺序保持：空提交建议 → pull 冲突 → 统一冲突处理 → 引导 → 原始报错）。有同名孪生则 QuickPick 置顶供回车直选，绑定成功自动重试一次，二次失败按原样报错不递归；无远端则对话框引导走 `idea-git.pushBranch`。`gitService.setUpstreamBranch()` 双 `assertRef` 校验、走 `_execMutate` 保留自写抑制窗口。
+- 踩坑：`asCurrent` 原定义在 try 块内，catch 的引导重试取不到，编译报 TS2304，提到 try 之前修复。新增 i18n 四键与 6 个静态接线用例。
+
+### reflog 救援增强（`e4ecd72`）
+
+- 方案评审先确认 reflog 无性能问题：只在用户点击时 spawn 一次 `git log -g`，不在加载/搜索/轮询路径上；`gitApiBackend` 标记 reflog 为 `LOCAL_ONLY`（公开 Git API 无对应接口，符合 §3 受控旁路规则）。用户选定「方案 B 但去掉分支右键入口」——`menu.reflog` 死键与分支右键入口按用户要求保持现状。
+- `parseReflogList()` 尾部循环相邻行推导 `oldHash`：`entries[i].oldHash = entries[i+1].hash`（reflog 新→旧，下一行就是该步操作前的位置）。零额外 subprocess；最旧行无前驱，菜单自动不出现。`reflogRow` 加 `data-idx`（load-more 批次用 `visibleCount + i` 偏移），避免同一 hash 多行出现在不同位置时取错 entry。
+- 失败与空区分：`getReflog()` 读失败返回 `null`、真空输出仍返回 `[]`；命令层 `null` → `reflog.failed`，对话框 scope 切换 `null` → 原位 `reflog.failedScope`，webview 接收处 `m.entries === null ? null : ...` 防止被 `|| []` 压成空数组。窗口 100 → 500：`log -g` 读同一份文件，多轮 rebase/reset 回溯不再被截断。
+- 「查看这一步影响的提交」：右键 `reset`/`rebase*`/`cherry-pick` 行且存在 oldHash 时菜单出现新项，webview 直传两端 hash；host 的 `getReflogImpact(oldHash, newHash)` 用 `assertHash` 双校验、读 `log old..new`，结果复用 compare 对话框（新增可选 title 避免把哈希渲染成分支名）。reflog 对话框不随 compare 打开而关闭，host 查询失败时用户仍有原行可看。
+- 新增 11 个用例：解析推导、菜单门控、null 语义、compare 标题扩展、i18n 双语。踩坑：静态断言正则必须与实际代码精确对齐（变量是 `scroll` 而非 `reflog-scroll`、函数名在 i18n 键之前、`+ '` 空格、`\&` 在正则里是不必要转义触发 lint error）。
+
+### 验证与边界
+
+- 测试数：618（更新绑定）→ **629**（reflog 增强，+11）。最终 compile rc=0 / lint 0 error（66 warning 为既有基线）/ test **629-629** 全绿。
+- UI 行为（工作树跳转、检出提醒、绑定弹窗、reflog 右键新菜单）仍需完整重启 Extension Development Host 手点验证；本版未做 push、未打 tag。
+
 ## [0.3.1] - 2026-11-24
 
 本版由用户连续三轮反馈驱动：先问「还有哪些优化点，再看看重复操作的问题」，选定「统一刷新调度」；再问「代码有问题吗」，据实审报告修掉三个语义瑕疵；最后追加「检出并更新，只限有远程分支的本地分支」。全部改动都在 `v0.3.1/history-reload-shortcircuit` 上，未 bump 前版本仍是 0.3.0。

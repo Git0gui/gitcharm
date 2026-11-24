@@ -1,5 +1,6 @@
 .vscode/**
 .qoder/**
+.workbuddy/**
 src/**
 out/test/**
 .gitignore

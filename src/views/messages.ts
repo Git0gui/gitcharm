@@ -306,13 +306,20 @@ export type ExtToWebviewMessage =
         command: 'showReflog';
         /** Which rev's reflog this is, shown as the dialog subtitle. */
         scope: string;
-        entries: ReflogEntry[];
+        /** `null` marks a failed read: the dialog says "failed" in place instead of pretending the scope is empty. */
+        entries: ReflogEntry[] | null;
     }
     | {
         command: 'showCompareDialog';
         branchName: string;
         currentBranch: string;
         commits: PushDialogCommit[];
+        /**
+         * Optional title override (reflog's "affected commits" view names its
+         * two hashes, which the default "branch ⇄ branch" header would render
+         * as raw hex). Without it the dialog keeps its branch-compare header.
+         */
+        title?: string;
     }
     | { command: 'compareFilesResponse'; hash: string; files: Array<{ path: string; status: string }> }
     | { command: 'addBranchOptimistic'; branch: string; isCurrent: boolean }
@@ -334,8 +341,10 @@ export type WebviewAction =
     | 'newTag' | 'deleteTag' | 'deleteTags' | 'pushTag' | 'pushAllTags' | 'pickPushTags' | 'remoteTags'
     | 'toggleFavorite'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
-    | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove'
+    | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove' | 'worktreePrune'
     | 'reflog'
+    /** Reflog row action: show the commits one reflog step affected (`oldHash..hash`). */
+    | 'reflogLost'
     | 'fileDiff' | 'fileJumpToSource' | 'fileOpenRevision' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 
 /** Messages sent from the webview to the extension host. */
@@ -374,6 +383,8 @@ export type WebviewToExtMessage =
         action: WebviewAction;
         branch?: string;
         hash?: string;
+        /** The "before" end of a reflog step (`reflogLost`); `hash` is the "after" end. */
+        oldHash?: string;
         hashes?: string[];
         path?: string;
         /** Single tag a badge right-click asked about (`pushTag` / `deleteTag`). */

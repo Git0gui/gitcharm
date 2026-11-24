@@ -534,6 +534,28 @@ describe('parseReflogList', () => {
         assert.deepEqual(parseReflogList('HEAD@{0}'), []);
         assert.deepEqual(parseReflogList(row('HEAD@{0}', '', 'commit: x', '2026-10-12T09:00:00+08:00')), []);
     });
+
+    it('derives each step\'s before-position from the next entry', () => {
+        // Newest first: the reset at @{0} moved HEAD from @{1}'s hash to its own.
+        const raw = [
+            row('HEAD@{0}', '1111111122222222', 'reset: moving to HEAD~1', '2026-10-12T09:00:00+08:00'),
+            row('HEAD@{1}', '3333333344444444', 'commit: fix login', '2026-10-11T09:00:00+08:00')
+        ].join('\n');
+        const out = parseReflogList(raw);
+        assert.equal(out[0].oldHash, '3333333344444444', 'a step started where the older entry sits');
+        assert.equal(out[1].oldHash, undefined, 'the oldest entry has no predecessor');
+    });
+
+    it('gives every row but the last an oldHash across blank-line noise', () => {
+        const raw = [
+            row('main@{0}', 'aaaaaaaabbbbbbbb', 'commit: one', '2026-10-12T09:00:00+08:00'),
+            '',
+            row('main@{1}', 'ccccccccdddddddd', 'reset: moving to x', '2026-10-11T09:00:00+08:00'),
+            row('main@{2}', 'eeeeeeeeffffffff', 'commit: two', '2026-10-10T09:00:00+08:00')
+        ].join('\n');
+        const out = parseReflogList(raw);
+        assert.deepEqual(out.map(e => e.oldHash), ['ccccccccdddddddd', 'eeeeeeeeffffffff', undefined]);
+    });
 });
 
 describe('parseGitConfigRemoteNames', () => {

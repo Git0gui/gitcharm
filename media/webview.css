@@ -909,6 +909,8 @@ body.tag-sync-open #resizer-right { z-index: 2100; }
 .witem.cur .bname { color: var(--vscode-textLink-foreground, #4da3ff); font-weight: 600; }
 .witem.cur > svg { color: var(--vscode-textLink-foreground, #4da3ff); }
 .witem > svg { flex: none; opacity: .75; }
+.witem.missing .bname, .witem.missing > svg { opacity: .5; }
+.witem.missing .sdate { color: var(--vscode-editorWarning-foreground, #cca700); }
 .witem .sdate {
     flex: none;
     margin-left: auto;

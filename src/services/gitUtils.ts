@@ -637,6 +637,13 @@ export interface ReflogEntry {
     message: string;
     /** ISO 8601 author date of the record. */
     date: string;
+    /**
+     * Where the ref sat *before* this step — the hash of the next (older)
+     * entry. Set by the parser for every row but the oldest one. This pair
+     * (`oldHash..hash`) is what "what did this step change" needs, and it
+     * costs no subprocess: the value is already sitting in the next line.
+     */
+    oldHash?: string;
 }
 
 /**
@@ -667,6 +674,13 @@ export function parseReflogList(raw: string): ReflogEntry[] {
             message: split > 0 ? subject.substring(split + 2).trim() : '',
             date: (parts[3] ?? '').trim()
         });
+    }
+    // A step's "before" position is the next entry's hash: reflog rows are
+    // newest-first, so row i moved the ref from entries[i+1].hash to
+    // entries[i].hash. The oldest row has no predecessor, so it stays without
+    // an oldHash — the webview hides the "affected commits" entry for it.
+    for (let i = 0; i + 1 < entries.length; i++) {
+        entries[i].oldHash = entries[i + 1].hash;
     }
     return entries;
 }
@@ -1348,6 +1362,8 @@ export interface WorktreeEntry {
     lockReason?: string;
     /** The folder is gone; `git worktree prune` would drop this entry. */
     prunable: boolean;
+    /** Set by GitService: the folder is gone (prunable, or missing on disk). */
+    missing?: boolean;
     /** Set by GitService: the worktree this panel is showing. */
     isCurrent?: boolean;
 }
@@ -1411,6 +1427,18 @@ export function parseWorktreeList(raw: string): WorktreeEntry[] {
     }
     flush();
     return entries;
+}
+
+/**
+ * Mark worktrees whose folder is gone. `prunable` is git's own verdict from
+ * `worktree list`; the exists check also catches a locked registration, which
+ * git deliberately never marks prunable even when its folder is missing.
+ */
+export function applyWorktreeLiveness(entries: WorktreeEntry[], exists: (target: string) => boolean): WorktreeEntry[] {
+    return entries.map(entry => ({
+        ...entry,
+        missing: entry.prunable || !exists(entry.path)
+    }));
 }
 
 /**

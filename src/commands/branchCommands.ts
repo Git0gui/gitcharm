@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { GitService } from '../services/gitService';
 import type { PushPreview } from '../services/gitService';
-import { classifyGitNetworkFailure, formatGitError, matchesBranchPattern, redactUrlCredentials, remoteUrlToWebBase } from '../services/gitUtils';
+import { classifyGitNetworkFailure, formatGitError, matchesBranchPattern, matchRemoteBranch, redactUrlCredentials, remoteUrlToWebBase, repositoryKey } from '../services/gitUtils';
 import { credentialHelperCommand, resolveAuthProvider } from '../services/authPrompt';
 import { isVSCodeSessionEnabled, signIn } from '../services/vscodeAuth';
 import { logger } from '../services/logger';
@@ -129,6 +130,83 @@ export function registerBranchCommands(
         return Array.isArray(configured) ? configured : [];
     };
 
+    /**
+     * A branch checked out in a linked worktree cannot be checked out here too;
+     * git refuses. Offer the useful way out — jump to that worktree — instead
+     * of only reporting the refusal. Shared by the pre-check and the error
+     * fallback, so both paths word and behave the same.
+     */
+    const promptWorktreeOccupied = async (name: string, worktreePath: string): Promise<void> => {
+        const openLabel = t('branch.openWorktree');
+        const choice = await graphView.showDialog(
+            t('checkout.worktreeOccupied', { name, path: worktreePath }),
+            [openLabel, t('common.cancel')],
+            'warn'
+        );
+        if (choice === openLabel) {
+            await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(worktreePath), true);
+        }
+    };
+
+    /**
+     * A branch with no upstream is the one update failure updateBranch cannot
+     * self-recover from. If the repository has remotes, let the user pick a
+     * remote branch to bind (a same-name twin goes first so Enter picks the
+     * expected one) and retry the update; if there is no remote at all, point
+     * at push — uploading the local branch is what creates a twin to bind.
+     * Returns true when handled (bound+retried, or pointed at push), false
+     * when the branch already had an upstream so the caller reports as-is.
+     */
+    const promptUpstreamBinding = async (branchName: string, asCurrent: boolean): Promise<boolean> => {
+        const upstream = await gitService.getUpstream(branchName).catch(() => undefined);
+        if (upstream) {return false;}
+        const remotes = gitService.getRemoteNames();
+        // No remote, or remotes configured but nothing fetched yet: either way
+        // there is no remote branch to bind — push is the remedy.
+        const remoteBranches = remotes.length > 0 ? await gitService.getRemoteBranches().catch(() => []) : [];
+        if (remotes.length === 0 || remoteBranches.length === 0) {
+            const pushLabel = t('branch.upstreamMissingPush');
+            const choice = await graphView.showDialog(
+                t('branch.upstreamMissingNoRemote', { name: branchName }),
+                [pushLabel, t('common.cancel')],
+                'warn'
+            );
+            if (choice === pushLabel) {
+                await vscode.commands.executeCommand('idea-git.pushBranch', { name: branchName });
+            }
+            return true;
+        }
+        const counterpart = matchRemoteBranch(remoteBranches, branchName);
+        const ordered = counterpart
+            ? [counterpart.ref, ...remoteBranches.filter(ref => ref !== counterpart.ref)]
+            : remoteBranches;
+        const picked = await vscode.window.showQuickPick(ordered, {
+            placeHolder: t('branch.upstreamPickPlaceholder', { name: branchName })
+        });
+        if (!picked) {return true;}
+        try {
+            await gitService.setUpstreamBranch(branchName, picked);
+        } catch (bindError) {
+            vscode.window.showErrorMessage(t('branch.upstreamBindFailed', { error: formatGitError(bindError) }));
+            return true;
+        }
+        // Retry with the upstream now in place. A second failure is reported
+        // plainly — the binding problem is solved, so this is a real error.
+        try {
+            const result = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: t('branch.updating', { name: branchName }),
+                cancellable: false
+            }, () => gitService.updateBranch(branchName, asCurrent));
+            const first = (result || '').split('\n')[0];
+            vscode.window.showInformationMessage(t('branch.updated', { name: branchName, detail: first ? `: ${first}` : '' }));
+            graphView.refresh();
+        } catch (retryError) {
+            showNetworkError(t('branch.updateFailed', { error: formatGitError(retryError) }));
+        }
+        return true;
+    };
+
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.createBranch', async () => {
             const branchName = await vscode.window.showInputBox({
@@ -166,6 +244,34 @@ export function registerBranchCommands(
             if (!branchName) {
                 vscode.window.showErrorMessage(t('common.noBranchSelected'));
                 return false;
+            }
+
+            // Occupancy pre-check: a linked worktree holds its branch
+            // exclusively, so asking first turns git's refusal into a jump
+            // offer. With no linked worktrees (the common case) the pure file
+            // check below skips the query entirely — zero added spawns.
+            const localName = branchName.startsWith('origin/') ? branchName.substring('origin/'.length) : branchName;
+            if (gitService.hasLinkedWorktrees()) {
+                const occupiedPath = await gitService.getBranchWorktreePath(localName).catch(() => undefined);
+                const ownRoot = gitService.repositoryPath;
+                if (occupiedPath && (!ownRoot || repositoryKey(occupiedPath) !== repositoryKey(ownRoot))) {
+                    if (fs.existsSync(occupiedPath)) {
+                        await promptWorktreeOccupied(localName, occupiedPath);
+                    } else {
+                        // The registration outlived its folder; pruning it is
+                        // the precondition for checking the branch out here.
+                        const pruneLabel = t('worktree.pruneBtn');
+                        const choice = await graphView.showDialog(
+                            t('checkout.worktreeOccupiedMissing', { name: localName, path: occupiedPath }),
+                            [pruneLabel, t('common.cancel')],
+                            'warn'
+                        );
+                        if (choice === pruneLabel) {
+                            await vscode.commands.executeCommand('idea-git.pruneWorktree');
+                        }
+                    }
+                    return false;
+                }
             }
 
             return await vscode.window.withProgress({
@@ -229,6 +335,14 @@ export function registerBranchCommands(
                     return true;
                 } catch (error: any) {
                     const errMsg = formatGitError(error);
+                    // The pre-check above can lose a race (another window took
+                    // the branch a second ago). Read the original stderr — the
+                    // friendly message is capped and could clip the path.
+                    const usedPath = extractWorktreePath(combineErrorText(error));
+                    if (usedPath) {
+                        await promptWorktreeOccupied(branchName, usedPath);
+                        return false;
+                    }
                     vscode.window.showErrorMessage(t('branch.switchFailed', { error: errMsg }));
                     return false;
                 }
@@ -716,13 +830,15 @@ export function registerBranchCommands(
                 return;
             }
 
+            // `asCurrent` is set only by "check out and update", which just
+            // switched HEAD itself; asking the pull path explicitly avoids a
+            // stale cached HEAD from the optional Git API. Declared before the
+            // try so the failure path can hand it to the upstream guidance
+            // retry.
+            const asCurrent = branchNode?.asCurrent === true;
             try {
                 // The panel's 更新 entry lands here, and updateBranch fetches/pulls over
                 // the network — same rule as push/pull/fetch: never wait silently.
-                // `asCurrent` is set only by "check out and update", which just
-                // switched HEAD itself; asking the pull path explicitly avoids a
-                // stale cached HEAD from the optional Git API.
-                const asCurrent = branchNode?.asCurrent === true;
                 const result = await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
                     title: t('branch.updating', { name: branchName }),
@@ -769,7 +885,14 @@ export function registerBranchCommands(
                 );
 
                 if (!handled) {
-                    showNetworkError(t('branch.updateFailed', { error: formatGitError(error) }));
+                    // A branch with no upstream and no same-name remote twin
+                    // is the one failure updateBranch cannot self-recover
+                    // from; offer to bind a remote branch and retry before
+                    // falling back to the plain error.
+                    const guided = await promptUpstreamBinding(branchName, asCurrent);
+                    if (!guided) {
+                        showNetworkError(t('branch.updateFailed', { error: formatGitError(error) }));
+                    }
                 }
             }
         }),

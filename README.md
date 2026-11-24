@@ -22,11 +22,11 @@
 
 ## What's New
 
-### Faster history, cleaner branch actions (0.3.1)
+### Worktrees, guided updates, better reflog rescue (0.3.2)
 
-- **No redundant history reloads.** When the repository has not changed, GitCharm no longer re-reads and repaints the entire commit list — reopening the panel or double-clicking the branch already on screen stays instant. One action no longer fires several competing refreshes.
-- **"Check out and Update" in the branch menu.** One step switches to another local branch and brings it up to date. It appears only when that branch has a remote counterpart, and it never updates anything unless the checkout succeeded. The former "Pull" entry is now called "Update".
-- **External changes show up promptly.** A change made in a terminal or another tool is no longer masked by the panel's own refresh.
+- **Worktree awareness.** Worktrees created outside GitCharm show up automatically. When a branch is occupied by a worktree, checkout tells you where and offers to jump there; a worktree whose folder was deleted can have its stale registration cleaned up in one step.
+- **Updates guide local-only branches.** If updating a branch fails because it has no remote counterpart, GitCharm offers to bind an existing remote branch and retries automatically. With no remote branches at all, it points you to upload the local branch first.
+- **More from the reflog.** Right-click a reset, rebase or cherry-pick entry to see exactly which commits that step affected, with a longer window that keeps older rescue points in reach. Failed reads are reported as failures instead of looking like an empty history.
 
 ## Overview
 
@@ -79,7 +79,7 @@ GitCharm provides a three-panel Git log view:
 - **Reflog**: open the operation log for the selected branch or `HEAD` in one dialog — switch between the two scopes without closing it; any row can be diffed, branched from or reset to, so work a `reset --hard` hid is recoverable
 - **Tags**: create lightweight or annotated tags on a commit, and a **Manage Tags** dialog that lists local and remote tags in one table (remote only / local only / pointing elsewhere / in sync, "Differences only" on by default) with per-row fetch, push, overwrite local, delete local and delete remote — in-sync rows included. Pushing reads the remote first: a tag it already has at the same commit is skipped, one it has at a different commit is never overwritten by a batch, and a tag whose commit is not on that remote's branches is not sent at all. Deleting asks whether the remote goes too (the remote half runs first, so a network failure leaves your local tags untouched). Annotated tags are compared through their peeled commit, so they stay correct after `git gc` and their badges sit on the right commit
 - **Stashes**: a third section in the branch tree listing the stack, a toolbar button to stash the current changes (optionally including untracked files), and apply / pop / drop per row — changes made with `git stash` in a terminal are picked up automatically; click a stash to list its files (untracked included) in the right pane and preview any file's diff before applying
-- **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes
+- **Worktrees**: every checkout of the repository is listed at the bottom of the branch tree — double-click one to open it in a new window, right-click to remove it, and check out any non-current local branch in a new worktree; removal is validated against git's registry and asks once more before force-deleting uncommitted changes. Worktrees added or removed elsewhere (terminal, another window) show up on their own, and a worktree whose folder was deleted is marked missing and offers to prune its registration instead of opening; checking out a branch that another worktree already holds offers to jump there rather than failing
 - **Files**: compare file with another branch, compare with the local working copy, show the current file against its last commit (editor / Explorer right-click), pick a single file from a commit, jump to the file in your working tree (entries for files that no longer exist there are greyed out), **open the file exactly as it stood in that commit — read-only and scrolled to the first line the commit touched**, which is how you read code the working tree no longer has, open the file's cross-branch history in the editor's Timeline, view diff introduced by a single commit
 - **Blame**: inline annotation of last author & date per line, full commit info on hover, and clicking an annotation re-roots the commit list on that commit — its children above, its ancestors below, the commit itself selected in the middle. With word wrap on, the annotation sits at the end of each line so wrapped continuations stay aligned; with it off it stays in a fixed left column
 - **Line history**: select lines and press `Alt+H` for a panel listing every commit that rewrote them — each revision's text previewed, the diff scoped to those lines (whole file with one click), uncommitted edits pinned on top, and one click to re-root the commit list on that commit or open the native diff
@@ -220,11 +220,11 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 提交历史更快，分支操作更顺（0.3.1）
+### 工作树感知、更新引导、操作记录更好用（0.3.2）
 
-- **不再重复加载提交历史**：仓库数据没变时，不再重新读取并整屏重绘提交列表 —— 重新打开面板、双击当前所在分支都立刻可见；一次操作也不会再同时触发好几条刷新。
-- **分支右键新增「检出并更新」**：一步切到另一个本地分支并同步到最新；只在分支有对应远程分支时出现，检出没成功绝不会去动别的分支。原「拉取」更名为「更新」。
-- **外部变更及时上屏**：在终端或其它工具里改动仓库后，面板能及时感知并更新，不再被自身刷新的误判遮盖。
+- **工作树都能看见**：其他位置创建的工作树也会自动检测；分支被某个工作树占用时，检出会提示并可直接跳转到该工作树；目录已被删除的工作树可一键清理登记。
+- **本地分支更新有引导**：分支更新失败且没有对应远程分支时，会引导选择远程分支绑定并自动重试；仓库没有任何远程分支时，则提示先上传本地分支。
+- **操作记录能挖得更深**：在重置、变基、拣选记录上右键，可直接查看「这一步影响的提交」；记录窗口扩大，更早的救援点也能找回。读取失败会明确提示，不再看起来像「没有记录」。
 
 ## 概览
 
@@ -277,7 +277,7 @@ GitCharm 提供一个三栏式的 Git 日志面板：
 - **Reflog（操作记录）**：工具栏一键看提交列表当前所选分支的操作记录（该分支自己的 movements；没选中分支时是 `HEAD`——只有 `HEAD` 记录 `checkout` 与 `reset`，正是把工作"藏起来"的两个操作）；对话框里任意一行都能查看差异、新建分支或回退过去——被 `reset --hard` 藏掉的提交还能捞回来
 - **标签**：在提交上新建轻量或附注标签；「标签管理」把本地与远端列进同一张表（仅远端 / 仅本地 / 指向不同 / 已同步，默认「只看差异」），逐行拉取、推送、覆盖本地、删本地、删远端——已同步的行同样可处理。推送前先读远端：已有且指向同一提交的跳过，指向不同的不会被批量覆盖，所在提交还没在目标远端分支上的根本不推。删除会问是否连远端一起删（先删远端，网络那半失败时本地原样不动）。附注标签按剥开后的提交比对，`git gc` 之后依然正确、徽章贴在对的提交上
 - **贮藏（Stash）**：分支树第三分区列出贮藏栈，工具栏一键贮藏当前改动（可选择一并收走未跟踪文件），行上可应用 / 弹出 / 删除；在终端里 `git stash` 也会自动跟上；单击贮藏即可在第三栏列出其文件（含未跟踪文件），应用或弹出前先预览差异
-- **工作树（Worktree）**：分支树底部列出同一仓库的所有检出，双击在新窗口打开、右键移除；非当前本地分支可一键检出到新工作树。移除前按 git 登记校验，工作树含未提交改动时需再次确认才强制删除
+- **工作树（Worktree）**：分支树底部列出同一仓库的所有检出，双击在新窗口打开、右键移除；非当前本地分支可一键检出到新工作树。移除前按 git 登记校验，工作树含未提交改动时需再次确认才强制删除。在终端或其他窗口新增/移除的工作树会自动出现在列表里；工作树目录已被删除时标记为「目录已丢失」，右键提供清理登记而非打开；检出某分支若已被别的工作树占用，会提示并可直接跳转到该工作树，而不是直接报错
 - **文件**：与其他分支对比此文件、与当前本地文件对比、查看当前文件与最后一次提交的差异（编辑器 / 资源管理器右键）、从提交中挑选单个文件、跳转到工作区中的该文件（工作区已不存在的文件菜单项灰显）、**按那次提交的版本只读打开这个文件并停在本次改动的第一行**（工作区里早已删掉的代码也能读）、跨分支查看该文件的全部历史提交（打开编辑器的时间线）、查看单次提交引入的差异
 - **Blame**：行内注解每行的最后修改者与日期，悬停查看完整提交信息，点击把提交列表改根到那条提交——上面是它之后的提交、下面是导致它的提交，选中行落在中间，两个方向都能滚动。开启自动换行时注解显示在行尾，折行的续行不会错位；关闭换行时保持左侧固定列
 - **行级历史**：选中若干行后按 `Alt+H`，面板列出改写这些行的全部提交——每行预览该提交时的内容，下方差异默认只看选中行（可一键切整文件），未提交的改动钉在最上面，还能一键把提交列表改根到那条提交或交给原生对比

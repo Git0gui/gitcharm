@@ -23,7 +23,7 @@ import { RefsReader } from './refsReader';
 import { RecentBranchReader, RECENT_BRANCH_LIMIT } from './branchMarks';
 import { GitAskpass } from './askpass';
 import { PersistedBranchCache } from './persistedBranchCache';
-import { resolveCommonDir, resolveGitDir } from './gitPaths';
+import { hasLinkedWorktrees, linkedWorktreeStamp, resolveCommonDir, resolveGitDir } from './gitPaths';
 import { readWindowsSystemProxy } from './systemProxy';
 import { REFS_SNAPSHOT_ARGS, RefsSnapshot, parseRefsSnapshot } from './refsSnapshot';
 import { logger } from './logger';
@@ -43,6 +43,7 @@ import {
     parseStashList,
     stashRef,
     parseWorktreeList,
+    applyWorktreeLiveness,
     parsePathFilter,
     parseReflogList,
     findStaleLock,
@@ -1662,10 +1663,17 @@ export class GitService {
      * `checkout`, `reset` or a botched rebase. Read with `log -g`, which is the
      * plumbing form of `reflog show` and lets us pick the fields: selector,
      * target hash, subject and date, NUL-separated because a subject carries
-     * colons and free-form message text. A rev with no reflog exits non-zero,
-     * and an empty history is a far better answer than an error toast.
+     * colons and free-form message text. The default window is 500 entries:
+     * `log -g` walks the same on-disk file either way, so a deeper window costs
+     * the same one subprocess while covering the rescue cases (multi-round
+     * rebases, a reset many steps back) that 100 used to cut off.
+     *
+     * An empty reflog (a brand-new repository, or a scope that never moved) is
+     * an honest `[]`. A failed *read* — corrupt logs, permissions, a vanished
+     * rev — returns `null` so the callers can say "failed" instead of
+     * misreporting it as "nothing happened".
      */
-    async getReflog(rev?: string, limit = 100): Promise<ReflogEntry[]> {
+    async getReflog(rev?: string, limit = 500): Promise<ReflogEntry[] | null> {
         const target = rev ? assertRef(rev, t('label.reflog')) : 'HEAD';
         try {
             const output = await this.executeGitArgs([
@@ -1674,8 +1682,32 @@ export class GitService {
             return parseReflogList(output);
         } catch (error) {
             logger.debug('[GitCharm] Reflog unavailable:', error);
-            return [];
+            return null;
         }
+    }
+
+    /**
+     * The commits one reflog step touched: `oldHash..newHash`, where the webview
+     * takes both ends from the parsed entries (a step's "before" is the next
+     * entry's hash). For a `reset` row this is exactly the set the reset dropped;
+     * for a rebase it is what the rewrite moved. Same shape as
+     * {@link compareBranches} — same log format, same parser — so the rows drop
+     * straight into the compare dialog.
+     */
+    async getReflogImpact(oldHash: string, newHash: string): Promise<GitCommit[]> {
+        assertHash(oldHash);
+        assertHash(newHash);
+        const output = (await this.executeGitArgs([
+            'log', `${oldHash}..${newHash}`, '--format=%H|%h|%an|%ae|%ai|%ar|%s|%P'
+        ])).trim();
+        if (!output) {return [];}
+        const commits: GitCommit[] = [];
+        for (const line of output.split('\n')) {
+            if (!line.trim()) {continue;}
+            const commit = parseLogLine(line);
+            if (commit) {commits.push(commit);}
+        }
+        return commits;
     }
 
     /**
@@ -1923,6 +1955,20 @@ export class GitService {
             }
             throw error;
         }
+    }
+
+    /**
+     * Bind a local branch to an existing remote-tracking ref. Used by the
+     * update flow when a branch has no upstream and no same-name remote twin:
+     * the user picks which remote branch to track, and the retry then has an
+     * upstream to pull from. `--set-upstream-to` accepts a short ref
+     * (`origin/main`) and refuses anything that is not a known remote ref, so
+     * a hostile or mistyped value cannot point a branch at an arbitrary place.
+     */
+    async setUpstreamBranch(branchName: string, remoteRef: string): Promise<void> {
+        assertRef(branchName);
+        assertRef(remoteRef, t('label.remote'));
+        await this._execMutate(['branch', `--set-upstream-to=${remoteRef}`, branchName]);
     }
 
     /**
@@ -2179,7 +2225,8 @@ export class GitService {
     /**
      * Every worktree registered for this repository, main first. `isCurrent`
      * marks the one this panel is looking at; the tree uses it to keep the row
-     * from offering to open or remove itself.
+     * from offering to open or remove itself. `missing` marks a registration
+     * whose folder is gone, so the tree can offer pruning instead of opening.
      */
     async getWorktrees(): Promise<WorktreeEntry[]> {
         const signature = this._worktreeSignature();
@@ -2188,7 +2235,7 @@ export class GitService {
             this._worktreeCache = { signature, entries: parseWorktreeList(raw) };
         }
         const current = this._repositoryPath;
-        const entries = this._worktreeCache.entries;
+        const entries = applyWorktreeLiveness(this._worktreeCache.entries, target => fs.existsSync(target));
         return entries.map(entry => ({
             ...entry,
             isCurrent: !!current && repositoryKey(entry.path) === repositoryKey(current)
@@ -2196,29 +2243,40 @@ export class GitService {
     }
 
     /**
-     * Filesystem stamp for the registered-worktree set: each registration's HEAD
-     * and lock file plus the main HEAD. `git worktree list` is a spawn, and the
-     * panel asks for it on every show and branch context menu; any worktree
-     * add/remove or checkout elsewhere moves this stamp, so a match is enough.
+     * The stamp `getWorktrees()` caches under. Public so the panel's poll can
+     * notice worktrees added, removed or deleted elsewhere without spawning
+     * `git worktree list` on every tick: this is a handful of small file reads.
+     */
+    getWorktreeSignature(): string {
+        return this._worktreeSignature();
+    }
+
+    /**
+     * Pure file check for the common case. Checkout uses it to skip the
+     * occupancy query (and its possible spawn) when no linked worktree exists.
+     */
+    hasLinkedWorktrees(): boolean {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        return !!gitDir && hasLinkedWorktrees(resolveCommonDir(gitDir));
+    }
+
+    /**
+     * Filesystem stamp for the registered-worktree set: the main HEAD plus each
+     * registration's HEAD, lock file and folder liveness. `git worktree list`
+     * is a spawn, and the panel asks for it on every show and branch context
+     * menu; any worktree add/remove or checkout elsewhere moves this stamp, so
+     * a match is enough. The liveness flag is what notices a folder deleted by
+     * hand — that touches none of git's own files.
      */
     private _worktreeSignature(): string {
         const repoPath = this._repositoryPath;
         const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
         if (!gitDir) {return '';}
-        const stamp = (file: string): string => {
-            try {return fs.statSync(file).mtimeMs.toFixed(3);} catch {return '-';}
-        };
-        const parts = [`main:${stamp(path.join(gitDir, 'HEAD'))}`];
-        const worktreesDir = path.join(resolveCommonDir(gitDir), 'worktrees');
-        try {
-            for (const name of fs.readdirSync(worktreesDir).sort()) {
-                const dir = path.join(worktreesDir, name);
-                parts.push(`${name}:${stamp(path.join(dir, 'HEAD'))}:${stamp(path.join(dir, 'locked'))}`);
-            }
-        } catch {
-            // No linked worktrees registered.
-        }
-        return parts.join('|');
+        let mainStamp = '-';
+        try {mainStamp = fs.statSync(path.join(gitDir, 'HEAD')).mtimeMs.toFixed(3);} catch { /* unreadable HEAD */ }
+        const linked = linkedWorktreeStamp(path.join(resolveCommonDir(gitDir), 'worktrees'));
+        return `main:${mainStamp}|${linked}`;
     }
 
     /**
@@ -2254,6 +2312,15 @@ export class GitService {
         if (!known) {throw new Error(t('worktree.notRegistered', { path: target }));}
         if (known.isCurrent) {throw new Error(t('worktree.removeCurrent'));}
         await this._execMutate(['worktree', 'remove', ...(force ? ['--force'] : []), target], { timeoutMs: 0 });
+        this._worktreeCache = null;
+    }
+
+    /**
+     * Drop registrations whose folder is gone. `--expire now` makes a folder
+     * deleted a second ago prunable too; branches and commits are untouched.
+     */
+    async pruneWorktrees(): Promise<void> {
+        await this._execMutate(['worktree', 'prune', '--expire', 'now'], { timeoutMs: 30000 });
         this._worktreeCache = null;
     }
 

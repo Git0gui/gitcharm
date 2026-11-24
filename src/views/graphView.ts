@@ -157,7 +157,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private _loadingMoreAbove = false;
     /** Startup prefetch still running; a first load waits for it instead of re-spawning. */
     private _prefetchTask: Promise<void> | undefined;
-    private _pendingReflog: { scope: string; entries: ReflogEntry[] } | undefined;
+    private _pendingReflog: { scope: string; entries: ReflogEntry[] | null } | undefined;
     private _filters: LogFilters = {};
     private _loaded = 0;
     private _hasMore = false;
@@ -188,6 +188,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     // Contents of refs/stash ('' when the repo has none); a change means a stash
     // was created, applied or dropped outside this extension.
     private _lastStashSignature: string | undefined;
+    private _lastWorktreeSignature: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
     /** When the current webview was (re)resolved; its own load covers that show. */
@@ -499,7 +500,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
      * only exists once it has been shown — hence the same pending/flush dance as
      * revealCommit for a webview that has not reported `ready` yet.
      */
-    showReflog(scope: string, entries: ReflogEntry[]): void {
+    showReflog(scope: string, entries: ReflogEntry[] | null): void {
         void vscode.commands.executeCommand('idea-git.mainView.focus');
         if (!this._view || !this._webviewReady) {
             this._pendingReflog = { scope, entries };
@@ -616,6 +617,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private async _postWorktrees(): Promise<void> {
         if (!this._view) {return;}
         try {
+            this._lastWorktreeSignature = this._gitService.getWorktreeSignature();
             this._post({ command: 'setWorktrees', worktrees: await this._gitService.getWorktrees() });
         } catch (error) {
             // The branch list already reports repository failures; repeating the
@@ -1115,12 +1117,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     /**
      * Show a read-only branch compare dialog: commits the selected branch has
      * that the current branch lacks, per-commit files, and an aggregate
-     * "全部差异" row (tip-to-tip diff).
+     * "全部差异" row (tip-to-tip diff). The reflog's "affected commits" view
+     * reuses the whole dialog with `title` set: then `branchName`/`currentBranch`
+     * carry the step's two hashes (new/old), which the tip-to-tip diff and the
+     * per-commit file rows use exactly like branch tips.
      */
     showCompareDialog(
         branchName: string,
         currentBranch: string,
-        commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }>
+        commits: Array<{ hash: string; shortHash: string; message: string; author: string; date: string }>,
+        title?: string
     ): void {
         const view = this._view;
         if (!view) {return;}
@@ -1170,7 +1176,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
             if (!view.visible) {close();}
         }));
         subscriptions.push(view.onDidDispose(close));
-        this._post({ command: 'showCompareDialog', branchName, currentBranch, commits });
+        this._post({ command: 'showCompareDialog', branchName, currentBranch, commits, title });
     }
 
     /**
@@ -1490,7 +1496,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     // The dialog's toggle. Unlike the initial open, an empty scope
                     // still has to reach the webview: the dialog is already on
                     // screen and must say "nothing here" in place instead of
-                    // vanishing, which would look like the toggle closed it.
+                    // vanishing, which would look like the toggle closed it. A
+                    // failed read passes through as `null` for the same reason —
+                    // in place, but saying "failed" rather than "nothing".
                     const scope = message.scope;
                     if (!scope) { break; }
                     await this._withCancellableGitQuery(
@@ -2069,6 +2077,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 logger.info('[GitCharm] Stash stack changed externally');
                 void this._postStashes();
             }
+
+            // Worktrees added or removed elsewhere move no ref in this
+            // worktree; a folder deleted by hand moves no git file at all.
+            // The stamp covers both, and only a difference costs a spawn.
+            if (this._gitService.getWorktreeSignature() !== this._lastWorktreeSignature) {
+                logger.info('[GitCharm] Worktree set changed externally');
+                void this._postWorktrees();
+            }
         } catch (err) {
             // Ignore errors during branch check
         }
@@ -2381,6 +2397,33 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     await vscode.commands.executeCommand('idea-git.showReflog', scope ? { name: scope } : undefined);
                     return;
                 }
+                case 'reflogLost': {
+                    // A reflog row's "what did this step change": the webview
+                    // sends both ends (hash = after, oldHash = before), taken
+                    // from the parsed entries — no rev-parse round trip. The
+                    // result reuses the compare dialog, so the same read-only
+                    // browse (per-commit files, aggregate diff) serves a
+                    // rescue the same way it serves a branch comparison.
+                    if (!message.hash || !message.oldHash) {return;}
+                    try {
+                        const commits = await this._gitService.getReflogImpact(message.oldHash, message.hash);
+                        if (commits.length === 0) {
+                            // An empty range is an answer (e.g. a reset that
+                            // moved nothing): a toast, not a bare dialog.
+                            vscode.window.showInformationMessage(t('reflog.impactEmpty'));
+                            return;
+                        }
+                        this.showCompareDialog(
+                            message.hash,
+                            message.oldHash,
+                            commits.map(c => ({ hash: c.hash, shortHash: c.shortHash, message: c.message, author: c.author, date: c.date })),
+                            t('reflog.impactTitle', { n: commits.length })
+                        );
+                    } catch (error) {
+                        vscode.window.showErrorMessage(t('reflog.impactFailed', { error: formatGitError(error) }));
+                    }
+                    return;
+                }
                 case 'stashApply':
                 case 'stashPop':
                 case 'stashDrop': {
@@ -2403,6 +2446,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     return;
                 case 'worktreeRemove':
                     await vscode.commands.executeCommand('idea-git.removeWorktree', { path: message.worktreePath });
+                    return;
+                case 'worktreePrune':
+                    await vscode.commands.executeCommand('idea-git.pruneWorktree');
                     return;
                 case 'reset':
                     this._assertHistoryScope();
