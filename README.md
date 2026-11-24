@@ -22,11 +22,11 @@
 
 ## What's New
 
-### Faster history, cleaner branch actions (0.3.1)
+### Worktrees, guided updates, better reflog rescue (0.3.2)
 
-- **No redundant history reloads.** When the repository has not changed, GitCharm no longer re-reads and repaints the entire commit list — reopening the panel or double-clicking the branch already on screen stays instant. One action no longer fires several competing refreshes.
-- **"Check out and Update" in the branch menu.** One step switches to another local branch and brings it up to date. It appears only when that branch has a remote counterpart, and it never updates anything unless the checkout succeeded. The former "Pull" entry is now called "Update".
-- **External changes show up promptly.** A change made in a terminal or another tool is no longer masked by the panel's own refresh.
+- **Worktree awareness.** Worktrees created outside GitCharm show up automatically. When a branch is occupied by a worktree, checkout tells you where and offers to jump there; a worktree whose folder was deleted can have its stale registration cleaned up in one step.
+- **Updates guide local-only branches.** If updating a branch fails because it has no remote counterpart, GitCharm offers to bind an existing remote branch and retries automatically. With no remote branches at all, it points you to upload the local branch first.
+- **More from the reflog.** Right-click a reset, rebase or cherry-pick entry to see exactly which commits that step affected, with a longer window that keeps older rescue points in reach. Failed reads are reported as failures instead of looking like an empty history.
 
 ## Overview
 
@@ -220,11 +220,11 @@ TypeScript · VSCode Extension API · Git CLI · Webview (Canvas rendering)
 
 ## 新增功能
 
-### 提交历史更快，分支操作更顺（0.3.1）
+### 工作树感知、更新引导、操作记录更好用（0.3.2）
 
-- **不再重复加载提交历史**：仓库数据没变时，不再重新读取并整屏重绘提交列表 —— 重新打开面板、双击当前所在分支都立刻可见；一次操作也不会再同时触发好几条刷新。
-- **分支右键新增「检出并更新」**：一步切到另一个本地分支并同步到最新；只在分支有对应远程分支时出现，检出没成功绝不会去动别的分支。原「拉取」更名为「更新」。
-- **外部变更及时上屏**：在终端或其它工具里改动仓库后，面板能及时感知并更新，不再被自身刷新的误判遮盖。
+- **工作树都能看见**：其他位置创建的工作树也会自动检测；分支被某个工作树占用时，检出会提示并可直接跳转到该工作树；目录已被删除的工作树可一键清理登记。
+- **本地分支更新有引导**：分支更新失败且没有对应远程分支时，会引导选择远程分支绑定并自动重试；仓库没有任何远程分支时，则提示先上传本地分支。
+- **操作记录能挖得更深**：在重置、变基、拣选记录上右键，可直接查看「这一步影响的提交」；记录窗口扩大，更早的救援点也能找回。读取失败会明确提示，不再看起来像「没有记录」。
 
 ## 概览
 
