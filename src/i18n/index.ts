@@ -131,6 +131,10 @@ const zh: Record<string, string> = {
     'branch.updateFailed': '更新失败: {error}',
     'branch.updatedToUpstream': '已将 "{name}" 更新到 {upstream}',
     'branch.updateConflictTitle': '更新 "{name}"',
+    'branch.upstreamMissingNoRemote': '本地分支 "{name}" 尚未推送到任何远程分支，无法更新。可先上传（推送）该分支，之后即可正常更新。',
+    'branch.upstreamMissingPush': '上传分支',
+    'branch.upstreamPickPlaceholder': '选择要与 "{name}" 绑定的远程分支',
+    'branch.upstreamBindFailed': '绑定远程分支失败: {error}',
 
     // checkout blocked by in-progress operation
     'checkout.opInProgress': '当前有未完成的{op}操作（{count} 个冲突文件待解决）。\n\n请先解决冲突并继续或终止{op}，再切换分支。',
@@ -916,6 +920,10 @@ const en: Record<string, string> = {
     'branch.updateFailed': 'Update failed: {error}',
     'branch.updatedToUpstream': 'Updated "{name}" to {upstream}',
     'branch.updateConflictTitle': 'Update "{name}"',
+    'branch.upstreamMissingNoRemote': 'Local branch "{name}" has not been pushed to any remote branch, so it cannot be updated. Upload (push) the branch first, then update will work.',
+    'branch.upstreamMissingPush': 'Upload branch',
+    'branch.upstreamPickPlaceholder': 'Pick the remote branch to bind to "{name}"',
+    'branch.upstreamBindFailed': 'Failed to bind remote branch: {error}',
 
     // checkout blocked by in-progress operation
     'checkout.opInProgress': 'There is an unfinished {op} ({count} conflicting files to resolve).\n\nResolve the conflicts and continue or abort the {op} before switching branches.',

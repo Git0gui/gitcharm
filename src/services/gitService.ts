@@ -1927,6 +1927,20 @@ export class GitService {
     }
 
     /**
+     * Bind a local branch to an existing remote-tracking ref. Used by the
+     * update flow when a branch has no upstream and no same-name remote twin:
+     * the user picks which remote branch to track, and the retry then has an
+     * upstream to pull from. `--set-upstream-to` accepts a short ref
+     * (`origin/main`) and refuses anything that is not a known remote ref, so
+     * a hostile or mistyped value cannot point a branch at an arbitrary place.
+     */
+    async setUpstreamBranch(branchName: string, remoteRef: string): Promise<void> {
+        assertRef(branchName);
+        assertRef(remoteRef, t('label.remote'));
+        await this._execMutate(['branch', `--set-upstream-to=${remoteRef}`, branchName]);
+    }
+
+    /**
      * Merge a branch into the current branch
      */
     async mergeBranch(branchName: string): Promise<string> {
