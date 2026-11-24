@@ -117,9 +117,11 @@ describe('check out and update: action wiring', () => {
         assert.match(checkout, /return await vscode\.window\.withProgress/);
         assert.match(checkout, /async \(\): Promise<boolean>/);
         assert.doesNotMatch(checkout, /return;/, 'no bare early return may leak undefined');
-        // Four failure exits: no branch, dialog cancelled, conflict resolved
-        // (but not retried), and a thrown git error.
-        assert.equal((checkout.match(/return false;/g) || []).length, 4);
+        // Six failure exits: no branch, a worktree already holding the branch
+        // (live jump offer or a missing-folder prune offer), dialog cancelled,
+        // conflict resolved (but not retried), a thrown git error that names a
+        // worktree, and a thrown git error without one.
+        assert.equal((checkout.match(/return false;/g) || []).length, 6);
         assert.match(checkout, /graphView\.refresh\(\);\s*\n\s*return true;/);
     });
 

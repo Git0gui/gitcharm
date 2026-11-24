@@ -23,7 +23,7 @@ import { RefsReader } from './refsReader';
 import { RecentBranchReader, RECENT_BRANCH_LIMIT } from './branchMarks';
 import { GitAskpass } from './askpass';
 import { PersistedBranchCache } from './persistedBranchCache';
-import { resolveCommonDir, resolveGitDir } from './gitPaths';
+import { hasLinkedWorktrees, linkedWorktreeStamp, resolveCommonDir, resolveGitDir } from './gitPaths';
 import { readWindowsSystemProxy } from './systemProxy';
 import { REFS_SNAPSHOT_ARGS, RefsSnapshot, parseRefsSnapshot } from './refsSnapshot';
 import { logger } from './logger';
@@ -43,6 +43,7 @@ import {
     parseStashList,
     stashRef,
     parseWorktreeList,
+    applyWorktreeLiveness,
     parsePathFilter,
     parseReflogList,
     findStaleLock,
@@ -2179,7 +2180,8 @@ export class GitService {
     /**
      * Every worktree registered for this repository, main first. `isCurrent`
      * marks the one this panel is looking at; the tree uses it to keep the row
-     * from offering to open or remove itself.
+     * from offering to open or remove itself. `missing` marks a registration
+     * whose folder is gone, so the tree can offer pruning instead of opening.
      */
     async getWorktrees(): Promise<WorktreeEntry[]> {
         const signature = this._worktreeSignature();
@@ -2188,7 +2190,7 @@ export class GitService {
             this._worktreeCache = { signature, entries: parseWorktreeList(raw) };
         }
         const current = this._repositoryPath;
-        const entries = this._worktreeCache.entries;
+        const entries = applyWorktreeLiveness(this._worktreeCache.entries, target => fs.existsSync(target));
         return entries.map(entry => ({
             ...entry,
             isCurrent: !!current && repositoryKey(entry.path) === repositoryKey(current)
@@ -2196,29 +2198,40 @@ export class GitService {
     }
 
     /**
-     * Filesystem stamp for the registered-worktree set: each registration's HEAD
-     * and lock file plus the main HEAD. `git worktree list` is a spawn, and the
-     * panel asks for it on every show and branch context menu; any worktree
-     * add/remove or checkout elsewhere moves this stamp, so a match is enough.
+     * The stamp `getWorktrees()` caches under. Public so the panel's poll can
+     * notice worktrees added, removed or deleted elsewhere without spawning
+     * `git worktree list` on every tick: this is a handful of small file reads.
+     */
+    getWorktreeSignature(): string {
+        return this._worktreeSignature();
+    }
+
+    /**
+     * Pure file check for the common case. Checkout uses it to skip the
+     * occupancy query (and its possible spawn) when no linked worktree exists.
+     */
+    hasLinkedWorktrees(): boolean {
+        const repoPath = this._repositoryPath;
+        const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
+        return !!gitDir && hasLinkedWorktrees(resolveCommonDir(gitDir));
+    }
+
+    /**
+     * Filesystem stamp for the registered-worktree set: the main HEAD plus each
+     * registration's HEAD, lock file and folder liveness. `git worktree list`
+     * is a spawn, and the panel asks for it on every show and branch context
+     * menu; any worktree add/remove or checkout elsewhere moves this stamp, so
+     * a match is enough. The liveness flag is what notices a folder deleted by
+     * hand — that touches none of git's own files.
      */
     private _worktreeSignature(): string {
         const repoPath = this._repositoryPath;
         const gitDir = repoPath ? resolveGitDir(repoPath) : undefined;
         if (!gitDir) {return '';}
-        const stamp = (file: string): string => {
-            try {return fs.statSync(file).mtimeMs.toFixed(3);} catch {return '-';}
-        };
-        const parts = [`main:${stamp(path.join(gitDir, 'HEAD'))}`];
-        const worktreesDir = path.join(resolveCommonDir(gitDir), 'worktrees');
-        try {
-            for (const name of fs.readdirSync(worktreesDir).sort()) {
-                const dir = path.join(worktreesDir, name);
-                parts.push(`${name}:${stamp(path.join(dir, 'HEAD'))}:${stamp(path.join(dir, 'locked'))}`);
-            }
-        } catch {
-            // No linked worktrees registered.
-        }
-        return parts.join('|');
+        let mainStamp = '-';
+        try {mainStamp = fs.statSync(path.join(gitDir, 'HEAD')).mtimeMs.toFixed(3);} catch { /* unreadable HEAD */ }
+        const linked = linkedWorktreeStamp(path.join(resolveCommonDir(gitDir), 'worktrees'));
+        return `main:${mainStamp}|${linked}`;
     }
 
     /**
@@ -2254,6 +2267,15 @@ export class GitService {
         if (!known) {throw new Error(t('worktree.notRegistered', { path: target }));}
         if (known.isCurrent) {throw new Error(t('worktree.removeCurrent'));}
         await this._execMutate(['worktree', 'remove', ...(force ? ['--force'] : []), target], { timeoutMs: 0 });
+        this._worktreeCache = null;
+    }
+
+    /**
+     * Drop registrations whose folder is gone. `--expire now` makes a folder
+     * deleted a second ago prunable too; branches and commits are untouched.
+     */
+    async pruneWorktrees(): Promise<void> {
+        await this._execMutate(['worktree', 'prune', '--expire', 'now'], { timeoutMs: 30000 });
         this._worktreeCache = null;
     }
 

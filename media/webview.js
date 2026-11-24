@@ -768,18 +768,25 @@ function renderTree() {
     function worktreeItem(entry) {
         var name = entry.path.split(/[\\/]/).filter(Boolean).pop() || entry.path;
         var branch = entry.branch || T('w.worktreeDetached');
+        var missing = !!entry.missing;
         var tip = entry.path + '\n' + branch;
         if (entry.head) {tip += '\n' + entry.head.substring(0, 7);}
+        if (missing) {tip += '\n' + T('w.worktreeMissingHint');}
         if (entry.isCurrent) {tip += '\n' + T('w.worktreeCurrent');}
-        else {tip += '\n' + T('w.worktreeOpenHint');}
+        else if (!missing) {tip += '\n' + T('w.worktreeOpenHint');}
         if (entry.lockReason) {tip += '\n' + entry.lockReason;}
-        var cls = 'witem' + (entry.isCurrent ? ' cur' : '') + (entry.main ? ' main' : '');
+        var cls = 'witem' + (entry.isCurrent ? ' cur' : '') + (entry.main ? ' main' : '') + (missing ? ' missing' : '');
+        // A missing folder is a state to fix, not a branch to browse: the row
+        // badge says so instead of pretending it is still a usable checkout.
+        var badge = entry.isCurrent ? T('w.worktreeCurrent') : (missing ? T('w.worktreeMissing') : branch);
         return '<div class="' + cls + '" data-worktree="' + esc(entry.path) + '" data-title="' + esc(tip) + '" style="padding-left:20px">' +
             I_WORKTREE + '<span class="bname">' + esc(name) + '</span>' +
-            '<span class="sdate">' + esc(entry.isCurrent ? T('w.worktreeCurrent') : branch) + '</span></div>';
+            '<span class="sdate">' + esc(badge) + '</span></div>';
     }
     function worktreeSection() {
-        var visible = state.worktrees.filter(function (w) { return !w.prunable; });
+        // Missing folders stay listed: hiding them would leave a stale
+        // registration that blocks the branch, with no way to clean it up.
+        var visible = state.worktrees;
         if (visible.length <= 1) {return '';}
         var s = header('worktree', T('w.worktreeSection'), visible.length);
         if (!state.collapsedSec['worktree']) {
@@ -2641,10 +2648,17 @@ document.getElementById('btree').addEventListener('contextmenu', function (e) {
         if (window._hideTooltip) window._hideTooltip();
 
         var worktreePath = worktreeRow.getAttribute('data-worktree');
-        // Git refuses to remove the main worktree, so that row only offers to open.
-        var worktreeMenu = [['worktreeOpen', T('menu.worktreeOpen')]];
-        if (!worktreeRow.classList.contains('main')) {
-            worktreeMenu.push(['worktreeRemove', T('menu.worktreeRemove')]);
+        var worktreeMenu;
+        if (worktreeRow.classList.contains('missing')) {
+            // The folder is gone: opening is pointless, only the stale
+            // registration can (and should) be cleaned up.
+            worktreeMenu = [['worktreePrune', T('menu.worktreePrune')]];
+        } else {
+            // Git refuses to remove the main worktree, so that row only offers to open.
+            worktreeMenu = [['worktreeOpen', T('menu.worktreeOpen')]];
+            if (!worktreeRow.classList.contains('main')) {
+                worktreeMenu.push(['worktreeRemove', T('menu.worktreeRemove')]);
+            }
         }
         showMenu(e.clientX, e.clientY, worktreeMenu, function (action) {
             vscode.postMessage({ command: 'action', action: action, worktreePath: worktreePath });

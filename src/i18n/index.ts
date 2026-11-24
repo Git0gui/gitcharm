@@ -112,6 +112,11 @@ const zh: Record<string, string> = {
     'worktree.pathMissing': '工作树目录不存在: {path}',
     'worktree.pickFromTree': '请从左侧的工作树列表中选择要操作的工作树。',
     'worktree.loadFailed': '读取工作树列表失败: {error}',
+    'worktree.pathMissingPrune': '工作树目录已被删除: {path}。可以清理它的登记，不影响任何分支与提交。',
+    'worktree.pruneConfirm': '清理所有目录已丢失的工作树登记？这只会移除 Git 的登记信息，不影响任何分支与提交。',
+    'worktree.pruneBtn': '清理登记',
+    'worktree.pruned': '已清理目录丢失的工作树登记',
+    'worktree.pruneFailed': '清理工作树登记失败: {error}',
     'branch.renaming': '正在重命名分支 "{old}" → "{new}"...',
     'branch.renamed': '已重命名分支: {old} -> {new}',
     'branch.renameFailed': '重命名分支失败: {error}',
@@ -129,6 +134,8 @@ const zh: Record<string, string> = {
 
     // checkout blocked by in-progress operation
     'checkout.opInProgress': '当前有未完成的{op}操作（{count} 个冲突文件待解决）。\n\n请先解决冲突并继续或终止{op}，再切换分支。',
+    'checkout.worktreeOccupied': '分支 "{name}" 已在工作树 "{path}" 中检出，不能同时检出到当前工作区。可以直接跳转到该工作树。',
+    'checkout.worktreeOccupiedMissing': '分支 "{name}" 登记在目录已丢失的工作树 "{path}" 中，需要先清理该登记才能在此检出。',
     'checkout.resolveBtn': '去解决冲突',
 
     // merge
@@ -676,6 +683,8 @@ const zh: Record<string, string> = {
     'w.worktreeCurrent': '当前',
     'w.worktreeDetached': '分离头指针',
     'w.worktreeOpenHint': '双击在新窗口打开',
+    'w.worktreeMissing': '目录已丢失',
+    'w.worktreeMissingHint': '工作树目录已被删除，右键可清理登记',
     'w.resumeCherryPick': '继续挑拣 {count} 个提交（冲突在 {hash}）',
     'w.noMatch': '没有匹配的提交',
     'filter.clearAll': '清除全部筛选',
@@ -747,6 +756,7 @@ const zh: Record<string, string> = {
     'menu.worktreeAdd': '检出到新工作树…',
     'menu.worktreeOpen': '在新窗口打开',
     'menu.worktreeRemove': '移除工作树',
+    'menu.worktreePrune': '清理工作树登记',
 
     // push dialog
     'pushDlg.allCommits': '全部提交',
@@ -887,6 +897,11 @@ const en: Record<string, string> = {
     'worktree.pathMissing': 'The worktree folder does not exist: {path}',
     'worktree.pickFromTree': 'Pick a worktree from the list on the left.',
     'worktree.loadFailed': 'Failed to read the worktree list: {error}',
+    'worktree.pathMissingPrune': 'The worktree folder was deleted: {path}. You can prune its registration; no branch or commit is affected.',
+    'worktree.pruneConfirm': 'Prune the registrations of all worktrees whose folder is gone? This only removes git\'s registration records; no branch or commit is affected.',
+    'worktree.pruneBtn': 'Prune',
+    'worktree.pruned': 'Pruned the registrations of missing worktrees',
+    'worktree.pruneFailed': 'Failed to prune worktree registrations: {error}',
     'branch.renaming': 'Renaming branch "{old}" → "{new}"...',
     'branch.renamed': 'Renamed branch: {old} -> {new}',
     'branch.renameFailed': 'Failed to rename branch: {error}',
@@ -904,6 +919,8 @@ const en: Record<string, string> = {
 
     // checkout blocked by in-progress operation
     'checkout.opInProgress': 'There is an unfinished {op} ({count} conflicting files to resolve).\n\nResolve the conflicts and continue or abort the {op} before switching branches.',
+    'checkout.worktreeOccupied': 'Branch "{name}" is already checked out in worktree "{path}" and cannot be checked out here too. You can jump to that worktree instead.',
+    'checkout.worktreeOccupiedMissing': 'Branch "{name}" is registered to worktree "{path}" whose folder is gone. Prune that registration before checking the branch out here.',
     'checkout.resolveBtn': 'Resolve Conflicts',
 
     // merge
@@ -1451,6 +1468,8 @@ const en: Record<string, string> = {
     'w.worktreeCurrent': 'current',
     'w.worktreeDetached': 'detached HEAD',
     'w.worktreeOpenHint': 'Double-click to open in a new window',
+    'w.worktreeMissing': 'Folder missing',
+    'w.worktreeMissingHint': 'The worktree folder was deleted; right-click to prune its registration',
     'w.noMatch': 'No matching commits',
     'filter.clearAll': 'Clear all filters',
     'filter.searchAllBranches': 'Search all branches',
@@ -1522,6 +1541,7 @@ const en: Record<string, string> = {
     'menu.worktreeAdd': 'Check Out in New Worktree…',
     'menu.worktreeOpen': 'Open in New Window',
     'menu.worktreeRemove': 'Remove Worktree',
+    'menu.worktreePrune': 'Prune Worktree Registration',
 
     // push dialog
     'pushDlg.allCommits': 'All Commits',

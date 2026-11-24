@@ -105,9 +105,19 @@ export function registerWorktreeCommands(
                 return;
             }
             if (!fs.existsSync(target)) {
-                vscode.window.showErrorMessage(t('worktree.pathMissing', { path: target }));
-                // The row outlived its folder; let the tree drop it right away.
-                graphView.refreshWorktrees();
+                // The row outlived its folder. Offer the remedy right here:
+                // pruning only drops git's stale registration, never a branch.
+                const pruneLabel = t('worktree.pruneBtn');
+                const choice = await graphView.showDialog(
+                    t('worktree.pathMissingPrune', { path: target }),
+                    [pruneLabel, t('common.cancel')],
+                    'warn'
+                );
+                if (choice === pruneLabel) {
+                    await vscode.commands.executeCommand('idea-git.pruneWorktree');
+                } else {
+                    graphView.refreshWorktrees();
+                }
                 return;
             }
             await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(target), true);
@@ -188,6 +198,23 @@ export function registerWorktreeCommands(
             if (!removed) {return;}
             graphView.refreshWorktrees();
             vscode.window.showInformationMessage(t('worktree.removed', { path: entry.path }));
+        }),
+
+        vscode.commands.registerCommand('idea-git.pruneWorktree', async () => {
+            const pruneLabel = t('worktree.pruneBtn');
+            const choice = await graphView.showDialog(
+                t('worktree.pruneConfirm'),
+                [pruneLabel, t('common.cancel')],
+                'warn'
+            );
+            if (choice !== pruneLabel) {return;}
+            try {
+                await gitService.pruneWorktrees();
+                graphView.refreshWorktrees();
+                vscode.window.showInformationMessage(t('worktree.pruned'));
+            } catch (error) {
+                vscode.window.showErrorMessage(t('worktree.pruneFailed', { error: formatGitError(error) }));
+            }
         })
     );
 }

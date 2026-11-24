@@ -1348,6 +1348,8 @@ export interface WorktreeEntry {
     lockReason?: string;
     /** The folder is gone; `git worktree prune` would drop this entry. */
     prunable: boolean;
+    /** Set by GitService: the folder is gone (prunable, or missing on disk). */
+    missing?: boolean;
     /** Set by GitService: the worktree this panel is showing. */
     isCurrent?: boolean;
 }
@@ -1411,6 +1413,18 @@ export function parseWorktreeList(raw: string): WorktreeEntry[] {
     }
     flush();
     return entries;
+}
+
+/**
+ * Mark worktrees whose folder is gone. `prunable` is git's own verdict from
+ * `worktree list`; the exists check also catches a locked registration, which
+ * git deliberately never marks prunable even when its folder is missing.
+ */
+export function applyWorktreeLiveness(entries: WorktreeEntry[], exists: (target: string) => boolean): WorktreeEntry[] {
+    return entries.map(entry => ({
+        ...entry,
+        missing: entry.prunable || !exists(entry.path)
+    }));
 }
 
 /**

@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { GitService } from '../services/gitService';
 import type { PushPreview } from '../services/gitService';
-import { classifyGitNetworkFailure, formatGitError, matchesBranchPattern, redactUrlCredentials, remoteUrlToWebBase } from '../services/gitUtils';
+import { classifyGitNetworkFailure, formatGitError, matchesBranchPattern, redactUrlCredentials, remoteUrlToWebBase, repositoryKey } from '../services/gitUtils';
 import { credentialHelperCommand, resolveAuthProvider } from '../services/authPrompt';
 import { isVSCodeSessionEnabled, signIn } from '../services/vscodeAuth';
 import { logger } from '../services/logger';
@@ -129,6 +130,24 @@ export function registerBranchCommands(
         return Array.isArray(configured) ? configured : [];
     };
 
+    /**
+     * A branch checked out in a linked worktree cannot be checked out here too;
+     * git refuses. Offer the useful way out — jump to that worktree — instead
+     * of only reporting the refusal. Shared by the pre-check and the error
+     * fallback, so both paths word and behave the same.
+     */
+    const promptWorktreeOccupied = async (name: string, worktreePath: string): Promise<void> => {
+        const openLabel = t('branch.openWorktree');
+        const choice = await graphView.showDialog(
+            t('checkout.worktreeOccupied', { name, path: worktreePath }),
+            [openLabel, t('common.cancel')],
+            'warn'
+        );
+        if (choice === openLabel) {
+            await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(worktreePath), true);
+        }
+    };
+
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.createBranch', async () => {
             const branchName = await vscode.window.showInputBox({
@@ -166,6 +185,34 @@ export function registerBranchCommands(
             if (!branchName) {
                 vscode.window.showErrorMessage(t('common.noBranchSelected'));
                 return false;
+            }
+
+            // Occupancy pre-check: a linked worktree holds its branch
+            // exclusively, so asking first turns git's refusal into a jump
+            // offer. With no linked worktrees (the common case) the pure file
+            // check below skips the query entirely — zero added spawns.
+            const localName = branchName.startsWith('origin/') ? branchName.substring('origin/'.length) : branchName;
+            if (gitService.hasLinkedWorktrees()) {
+                const occupiedPath = await gitService.getBranchWorktreePath(localName).catch(() => undefined);
+                const ownRoot = gitService.repositoryPath;
+                if (occupiedPath && (!ownRoot || repositoryKey(occupiedPath) !== repositoryKey(ownRoot))) {
+                    if (fs.existsSync(occupiedPath)) {
+                        await promptWorktreeOccupied(localName, occupiedPath);
+                    } else {
+                        // The registration outlived its folder; pruning it is
+                        // the precondition for checking the branch out here.
+                        const pruneLabel = t('worktree.pruneBtn');
+                        const choice = await graphView.showDialog(
+                            t('checkout.worktreeOccupiedMissing', { name: localName, path: occupiedPath }),
+                            [pruneLabel, t('common.cancel')],
+                            'warn'
+                        );
+                        if (choice === pruneLabel) {
+                            await vscode.commands.executeCommand('idea-git.pruneWorktree');
+                        }
+                    }
+                    return false;
+                }
             }
 
             return await vscode.window.withProgress({
@@ -229,6 +276,14 @@ export function registerBranchCommands(
                     return true;
                 } catch (error: any) {
                     const errMsg = formatGitError(error);
+                    // The pre-check above can lose a race (another window took
+                    // the branch a second ago). Read the original stderr — the
+                    // friendly message is capped and could clip the path.
+                    const usedPath = extractWorktreePath(combineErrorText(error));
+                    if (usedPath) {
+                        await promptWorktreeOccupied(branchName, usedPath);
+                        return false;
+                    }
                     vscode.window.showErrorMessage(t('branch.switchFailed', { error: errMsg }));
                     return false;
                 }

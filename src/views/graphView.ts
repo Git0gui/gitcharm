@@ -188,6 +188,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     // Contents of refs/stash ('' when the repo has none); a change means a stash
     // was created, applied or dropped outside this extension.
     private _lastStashSignature: string | undefined;
+    private _lastWorktreeSignature: string | undefined;
     private _skipBranchCheckUntil: number = 0; // Timestamp until which to skip branch checks
     private _webviewReady = false;
     /** When the current webview was (re)resolved; its own load covers that show. */
@@ -616,6 +617,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private async _postWorktrees(): Promise<void> {
         if (!this._view) {return;}
         try {
+            this._lastWorktreeSignature = this._gitService.getWorktreeSignature();
             this._post({ command: 'setWorktrees', worktrees: await this._gitService.getWorktrees() });
         } catch (error) {
             // The branch list already reports repository failures; repeating the
@@ -2069,6 +2071,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                 logger.info('[GitCharm] Stash stack changed externally');
                 void this._postStashes();
             }
+
+            // Worktrees added or removed elsewhere move no ref in this
+            // worktree; a folder deleted by hand moves no git file at all.
+            // The stamp covers both, and only a difference costs a spawn.
+            if (this._gitService.getWorktreeSignature() !== this._lastWorktreeSignature) {
+                logger.info('[GitCharm] Worktree set changed externally');
+                void this._postWorktrees();
+            }
         } catch (err) {
             // Ignore errors during branch check
         }
@@ -2403,6 +2413,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
                     return;
                 case 'worktreeRemove':
                     await vscode.commands.executeCommand('idea-git.removeWorktree', { path: message.worktreePath });
+                    return;
+                case 'worktreePrune':
+                    await vscode.commands.executeCommand('idea-git.pruneWorktree');
                     return;
                 case 'reset':
                     this._assertHistoryScope();

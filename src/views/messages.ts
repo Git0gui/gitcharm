@@ -334,7 +334,7 @@ export type WebviewAction =
     | 'newTag' | 'deleteTag' | 'deleteTags' | 'pushTag' | 'pushAllTags' | 'pickPushTags' | 'remoteTags'
     | 'toggleFavorite'
     | 'stashSave' | 'stashApply' | 'stashPop' | 'stashDrop'
-    | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove'
+    | 'worktreeAdd' | 'worktreeOpen' | 'worktreeRemove' | 'worktreePrune'
     | 'reflog'
     | 'fileDiff' | 'fileJumpToSource' | 'fileOpenRevision' | 'fileCompareLocal' | 'fileCherryPick' | 'resumeCherryPick';
 

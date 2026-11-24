@@ -46,3 +46,45 @@ export function resolveCommonDir(gitDir: string): string {
         return gitDir;
     }
 }
+
+/**
+ * Whether any linked worktree is registered for this repository. Pure file
+ * check: callers on interactive paths (checkout) use it to skip the
+ * `git worktree list` spawn entirely in the common single-worktree case.
+ */
+export function hasLinkedWorktrees(commonDir: string): boolean {
+    try {
+        return fs.readdirSync(path.join(commonDir, 'worktrees')).length > 0;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Stamp for the linked-worktree registrations: each registration's HEAD and
+ * lock mtime plus whether its target folder still exists. Deleting a worktree
+ * folder in Explorer touches none of git's own files, so without the liveness
+ * flag a signature match would keep serving the pre-delete list forever.
+ */
+export function linkedWorktreeStamp(worktreesDir: string): string {
+    const stamp = (file: string): string => {
+        try {return fs.statSync(file).mtimeMs.toFixed(3);} catch {return '-';}
+    };
+    let names: string[];
+    try {
+        names = fs.readdirSync(worktreesDir).sort();
+    } catch {
+        return '';
+    }
+    const parts: string[] = [];
+    for (const name of names) {
+        const dir = path.join(worktreesDir, name);
+        let alive = '0';
+        try {
+            const target = fs.readFileSync(path.join(dir, 'gitdir'), 'utf8').trim();
+            alive = target && fs.existsSync(target) ? '1' : '0';
+        } catch { /* an unreadable registration counts as not alive */ }
+        parts.push(`${name}:${stamp(path.join(dir, 'HEAD'))}:${stamp(path.join(dir, 'locked'))}:${alive}`);
+    }
+    return parts.join('|');
+}
