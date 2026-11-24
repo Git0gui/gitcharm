@@ -4201,13 +4201,15 @@ window.addEventListener('message', function (ev) {
     } else if (m.command === 'pushFilesResponse') {
         window._handlePushFiles(m.hash, m.files || []);
     } else if (m.command === 'showCompareDialog') {
-        showCompareDialog(m.branchName, m.currentBranch, m.commits || []);
+        showCompareDialog(m.branchName, m.currentBranch, m.commits || [], m.title);
     } else if (m.command === 'compareFilesResponse') {
         window._handleCompareFiles(m.hash, m.files || []);
     } else if (m.command === 'showFileHistory') {
         showFileHistoryDialog(m.filePath, m.history || []);
     } else if (m.command === 'showReflog') {
-        showReflogDialog(m.scope, m.entries || []);
+        // entries === null is a failed read, not an empty scope: the dialog
+        // must say "failed" in place instead of pretending nothing happened.
+        showReflogDialog(m.scope, m.entries === null ? null : (m.entries || []));
     } else if (m.command === 'multiCommitsResponse') {
         // Rapid clicks fire one request each; an older response can land after a
         // newer one. Apply it only if it still matches the live selection.
@@ -4875,7 +4877,13 @@ window._handlePushFiles = function (hash, files) {
 /* ---- branch compare dialog (read-only) ---- */
 var compareState = { commits: [], selectedHash: null, filesCache: {}, branchName: '', currentBranch: '', visibleCount: 20, fileViewMode: 'tree', collapsedDirs: {} };
 
-function showCompareDialog(branchName, currentBranch, commits) {
+/**
+ * Read-only commit+files dialog. Normally a branch comparison (the two ref
+ * names go into the header); the reflog's "affected commits" view passes
+ * `title` instead, because its two endpoints are hashes that would render as
+ * bare hex in the branch header.
+ */
+function showCompareDialog(branchName, currentBranch, commits, title) {
     compareState = { commits: commits, selectedHash: '__all__', filesCache: {}, branchName: branchName, currentBranch: currentBranch, visibleCount: 20, fileViewMode: state.fileViewMode || 'tree', collapsedDirs: {} };
     var overlay = document.createElement('div');
     overlay.className = 'push-dialog-overlay';
@@ -4901,7 +4909,11 @@ function showCompareDialog(branchName, currentBranch, commits) {
     var subtitle = commits.length > 0
         ? T('compare.unique', { n: commits.length, branch: esc(branchName) })
         : T('compare.sameCommits');
-    var headerText = T('compare.title') + esc(currentBranch) + ' <span class="push-arrow">⇄</span> ' + esc(branchName) +
+    // A custom title (reflog impact view) already names its range and count;
+    // the branch header below is what the plain comparison keeps.
+    var headerText = title
+        ? esc(title)
+        : T('compare.title') + esc(currentBranch) + ' <span class="push-arrow">⇄</span> ' + esc(branchName) +
         ' <span class="push-compare-sub">' + subtitle + '</span>';
 
     overlay.innerHTML = '<div class="push-dialog-box">' +
@@ -5098,11 +5110,16 @@ function reflogBranchScope() {
     return state.selectedBranch || state.current || '';
 }
 
-function reflogRow(entry) {
+/**
+ * The row index of an entry, stored on its DOM row so the context menu can
+ * recover the entry (and its oldHash) without guessing among rows that share
+ * a hash — a commit checked out twice appears at several positions.
+ */
+function reflogRow(entry, idx) {
     var tip = entry.shortHash + '\n' +
         entry.action + (entry.message ? ': ' + entry.message : '') + '\n' +
         fmtDateTime(entry.date) + ' (' + fmtRelativeTime(entry.date) + ')';
-    return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-title="' + esc(tip) + '">' +
+    return '<div class="push-commit-row reflog-row" data-hash="' + esc(entry.hash) + '" data-idx="' + idx + '" data-title="' + esc(tip) + '">' +
         '<span class="push-commit-hash">' + esc(entry.shortHash) + '</span>' +
         '<span class="push-commit-msg">' + esc(entry.message || entry.action) + '</span>' +
         '<span class="push-commit-author">' + esc(entry.action) + '</span>' +
@@ -5134,8 +5151,14 @@ function fillReflogDialog(overlay, scope, entries) {
     if (sub) { sub.textContent = scope; }
     var scroll = overlay.querySelector('#reflog-scroll');
     scroll.classList.remove('reflog-busy');
-    // An empty scope is an answer, not a reason to close: the dialog stays and
-    // says so, otherwise the toggle would look like it dismissed the window.
+    // A failed read keeps the dialog open with a failure notice — closing or
+    // blanking would look like the toggle dismissed the window or the scope
+    // is empty when neither is true. An empty scope is the same deal: it is an
+    // answer, not a reason to close.
+    if (entries === null) {
+        scroll.innerHTML = '<div class="reflog-empty">' + T('reflog.failedScope') + '</div>';
+        return;
+    }
     if (entries.length === 0) {
         scroll.innerHTML = '<div class="reflog-empty">' + T('reflog.emptyScope') + '</div>';
         return;
@@ -5195,7 +5218,11 @@ function showReflogDialog(scope, entries) {
             var next = Math.min(reflogState.visibleCount + 20, list.length);
             var container = more.parentElement;
             var frag = document.createElement('div');
-            frag.innerHTML = list.slice(reflogState.visibleCount, next).map(reflogRow).join('');
+            // The slice's own indices restart at 0; offset them so every row
+            // keeps its position in reflogState.entries.
+            frag.innerHTML = list.slice(reflogState.visibleCount, next).map(function (entry, i) {
+                return reflogRow(entry, reflogState.visibleCount + i);
+            }).join('');
             while (frag.firstChild) { container.parentNode.insertBefore(frag.firstChild, container); }
             reflogState.visibleCount = next;
             if (next < list.length) {
@@ -5222,18 +5249,40 @@ function showReflogDialog(scope, entries) {
         e.preventDefault();
         if (window._hideTooltip) window._hideTooltip();
         var hash = picked.getAttribute('data-hash');
+        // A rewrite step (reset/rebase/cherry-pick) carries both ends of the
+        // move: this row's hash is where it landed, the next-older entry's
+        // hash (oldHash, derived by the parser) is where it started. The
+        // commits in between are exactly what the step dropped or rewrote —
+        // offered as one menu entry. Rows without an oldHash (the oldest
+        // entry, or steps that merely observe, like checkout) offer nothing
+        // extra: their before-range is either unknown or meaningless.
+        var entry = reflogState.entries[picked.getAttribute('data-idx')];
+        var isRewrite = entry && entry.oldHash && (
+            entry.action === 'reset' ||
+            entry.action.indexOf('rebase') === 0 ||
+            entry.action === 'cherry-pick'
+        );
         // Every entry is a way out of a mistake, in the order the user needs them:
         // first find out what happened, then either keep it or undo it.
         var items = [
-            ['showDiff', T('reflog.menu.checkWhat')],
+            ['showDiff', T('reflog.menu.checkWhat')]
+        ];
+        if (isRewrite) {
+            items.push(['reflogLost', T('reflog.menu.affected')]);
+        }
+        items.push(
             ['cherryPick', T('reflog.menu.pickBack')],
             ['newBranchFrom', T('reflog.menu.keepOnBranch')],
             ['reset', T('reflog.menu.undoToHere')],
             ['copy', T('menu.copyHash')]
-        ];
+        );
         showMenu(e.clientX, e.clientY, items, function (action) {
             if (action === 'copy') {
                 navigator.clipboard.writeText(hash);
+                return;
+            }
+            if (action === 'reflogLost') {
+                vscode.postMessage({ command: 'action', action: 'reflogLost', hash: hash, oldHash: entry.oldHash });
                 return;
             }
             vscode.postMessage({ command: 'action', action: action, hash: hash });

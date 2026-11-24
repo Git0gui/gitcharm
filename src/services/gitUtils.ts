@@ -637,6 +637,13 @@ export interface ReflogEntry {
     message: string;
     /** ISO 8601 author date of the record. */
     date: string;
+    /**
+     * Where the ref sat *before* this step — the hash of the next (older)
+     * entry. Set by the parser for every row but the oldest one. This pair
+     * (`oldHash..hash`) is what "what did this step change" needs, and it
+     * costs no subprocess: the value is already sitting in the next line.
+     */
+    oldHash?: string;
 }
 
 /**
@@ -667,6 +674,13 @@ export function parseReflogList(raw: string): ReflogEntry[] {
             message: split > 0 ? subject.substring(split + 2).trim() : '',
             date: (parts[3] ?? '').trim()
         });
+    }
+    // A step's "before" position is the next entry's hash: reflog rows are
+    // newest-first, so row i moved the ref from entries[i+1].hash to
+    // entries[i].hash. The oldest row has no predecessor, so it stays without
+    // an oldHash — the webview hides the "affected commits" entry for it.
+    for (let i = 0; i + 1 < entries.length; i++) {
+        entries[i].oldHash = entries[i + 1].hash;
     }
     return entries;
 }

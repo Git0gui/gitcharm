@@ -22,7 +22,14 @@ export function registerReflogCommands(
     ctx.subscriptions.push(
         vscode.commands.registerCommand('idea-git.showReflog', async (node?: { name?: string }) => {
             const scope: string = node?.name || 'HEAD';
-            const entries: ReflogEntry[] = await gitService.getReflog(scope);
+            const entries: ReflogEntry[] | null = await gitService.getReflog(scope);
+            if (entries === null) {
+                // A failed read is not "nothing happened": say so instead of an
+                // empty-looking dialog that sends the user hunting for commits
+                // the panel could not even try to list.
+                vscode.window.showErrorMessage(t('reflog.failed'));
+                return;
+            }
             if (entries.length === 0) {
                 // A brand-new or reflog-garbage-collected repository has nothing to
                 // list; say so instead of opening an empty dialog over the panel.

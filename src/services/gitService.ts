@@ -1663,10 +1663,17 @@ export class GitService {
      * `checkout`, `reset` or a botched rebase. Read with `log -g`, which is the
      * plumbing form of `reflog show` and lets us pick the fields: selector,
      * target hash, subject and date, NUL-separated because a subject carries
-     * colons and free-form message text. A rev with no reflog exits non-zero,
-     * and an empty history is a far better answer than an error toast.
+     * colons and free-form message text. The default window is 500 entries:
+     * `log -g` walks the same on-disk file either way, so a deeper window costs
+     * the same one subprocess while covering the rescue cases (multi-round
+     * rebases, a reset many steps back) that 100 used to cut off.
+     *
+     * An empty reflog (a brand-new repository, or a scope that never moved) is
+     * an honest `[]`. A failed *read* — corrupt logs, permissions, a vanished
+     * rev — returns `null` so the callers can say "failed" instead of
+     * misreporting it as "nothing happened".
      */
-    async getReflog(rev?: string, limit = 100): Promise<ReflogEntry[]> {
+    async getReflog(rev?: string, limit = 500): Promise<ReflogEntry[] | null> {
         const target = rev ? assertRef(rev, t('label.reflog')) : 'HEAD';
         try {
             const output = await this.executeGitArgs([
@@ -1675,8 +1682,32 @@ export class GitService {
             return parseReflogList(output);
         } catch (error) {
             logger.debug('[GitCharm] Reflog unavailable:', error);
-            return [];
+            return null;
         }
+    }
+
+    /**
+     * The commits one reflog step touched: `oldHash..newHash`, where the webview
+     * takes both ends from the parsed entries (a step's "before" is the next
+     * entry's hash). For a `reset` row this is exactly the set the reset dropped;
+     * for a rebase it is what the rewrite moved. Same shape as
+     * {@link compareBranches} — same log format, same parser — so the rows drop
+     * straight into the compare dialog.
+     */
+    async getReflogImpact(oldHash: string, newHash: string): Promise<GitCommit[]> {
+        assertHash(oldHash);
+        assertHash(newHash);
+        const output = (await this.executeGitArgs([
+            'log', `${oldHash}..${newHash}`, '--format=%H|%h|%an|%ae|%ai|%ar|%s|%P'
+        ])).trim();
+        if (!output) {return [];}
+        const commits: GitCommit[] = [];
+        for (const line of output.split('\n')) {
+            if (!line.trim()) {continue;}
+            const commit = parseLogLine(line);
+            if (commit) {commits.push(commit);}
+        }
+        return commits;
     }
 
     /**
